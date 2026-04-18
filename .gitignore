@@ -1,0 +1,33 @@
+build/
+.vs/
+.vscode/
+out/
+android/.gradle/
+android/.kotlin/
+android/**/build/
+android/**/.cxx/
+reference/
+
+*.user
+*.suo
+*.log
+*.tmp
+*.pdb
+*.obj
+
+CMakeUserPresets.json
+
+# Local research / test artifacts
+tmp-*
+tmp_*
+manifest_*.zip
+downloaded_file.bin
+cloud-test/
+tmp-cloud-upload-web/
+
+# Bundled dependency caches / local vendor builds
+.deps/*.zip
+.deps/zstd-msvc/
+.deps/zstd-msvc-build/
+.deps/zstd-msvc-nmake/
+.deps/zstd-v1.5.7-win64/

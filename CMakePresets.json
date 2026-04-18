@@ -1,0 +1,72 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 22,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-msvc-debug",
+      "displayName": "Windows MSVC Debug",
+      "generator": "NMake Makefiles",
+      "binaryDir": "${sourceDir}/build/windows-msvc-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CAUTH_BUILD_CLI": "ON",
+        "CAUTH_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "default",
+      "displayName": "Default Debug",
+      "inherits": "windows-msvc-debug"
+    },
+    {
+      "name": "android-arm64-core",
+      "displayName": "Android arm64-v8a Core",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/android-arm64-core",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_TOOLCHAIN_FILE": "$env{ANDROID_HOME}/ndk/28.2.13676358/build/cmake/android.toolchain.cmake",
+        "ANDROID_ABI": "arm64-v8a",
+        "ANDROID_PLATFORM": "android-24",
+        "CMAKE_MAKE_PROGRAM": "$env{ANDROID_HOME}/cmake/3.22.1/bin/ninja.exe",
+        "CMAKE_TRY_COMPILE_TARGET_TYPE": "STATIC_LIBRARY",
+        "CAUTH_BUILD_CLI": "OFF",
+        "CAUTH_BUILD_TESTS": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-msvc-debug",
+      "configurePreset": "windows-msvc-debug"
+    },
+    {
+      "name": "default",
+      "configurePreset": "default"
+    },
+    {
+      "name": "android-arm64-core",
+      "configurePreset": "android-arm64-core"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-msvc-debug",
+      "configurePreset": "windows-msvc-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "default",
+      "configurePreset": "default",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

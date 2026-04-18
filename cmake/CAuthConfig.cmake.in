@@ -1,0 +1,57 @@
+@PACKAGE_INIT@
+
+set(_cauth_config_dir "${CMAKE_CURRENT_LIST_DIR}")
+
+foreach(_cauth_targets_file
+    CAuthCoreTargets.cmake
+    CAuthSteamAuthTargets.cmake
+    CAuthSteamDepotTargets.cmake
+    CAuthSteamCloudTargets.cmake
+)
+    if(EXISTS "${_cauth_config_dir}/${_cauth_targets_file}")
+        include("${_cauth_config_dir}/${_cauth_targets_file}")
+    endif()
+endforeach()
+
+set(CAuth_core_FOUND FALSE)
+if(TARGET cauth::core)
+    set(CAuth_core_FOUND TRUE)
+endif()
+
+set(CAuth_steam_auth_FOUND FALSE)
+if(TARGET cauth::steam_auth)
+    set(CAuth_steam_auth_FOUND TRUE)
+endif()
+
+set(CAuth_steam_depot_FOUND FALSE)
+if(TARGET cauth::steam_depot)
+    set(CAuth_steam_depot_FOUND TRUE)
+endif()
+
+set(CAuth_steam_cloud_FOUND FALSE)
+if(TARGET cauth::steam_cloud)
+    set(CAuth_steam_cloud_FOUND TRUE)
+endif()
+
+if(CAuth_steam_auth_FOUND AND NOT CAuth_core_FOUND)
+    set(CAuth_steam_auth_FOUND FALSE)
+    if(NOT CAuth_NOT_FOUND_MESSAGE)
+        set(CAuth_NOT_FOUND_MESSAGE "CAuth steam_auth requires the core component to be installed.")
+    endif()
+endif()
+
+if(CAuth_steam_depot_FOUND AND NOT CAuth_steam_auth_FOUND)
+    set(CAuth_steam_depot_FOUND FALSE)
+    if(NOT CAuth_NOT_FOUND_MESSAGE)
+        set(CAuth_NOT_FOUND_MESSAGE "CAuth steam_depot requires the steam_auth component to be installed.")
+    endif()
+endif()
+
+if(CAuth_steam_cloud_FOUND AND NOT CAuth_steam_auth_FOUND)
+    set(CAuth_steam_cloud_FOUND FALSE)
+    if(NOT CAuth_NOT_FOUND_MESSAGE)
+        set(CAuth_NOT_FOUND_MESSAGE "CAuth steam_cloud requires the steam_auth component to be installed.")
+    endif()
+endif()
+
+check_required_components(CAuth)

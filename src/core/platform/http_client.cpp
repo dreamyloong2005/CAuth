@@ -1,0 +1,327 @@
+#include "core/platform/http_client.hpp"
+
+#ifdef __ANDROID__
+#include "core/runtime/android/bridge.hpp"
+#endif
+
+#include <algorithm>
+#include <cctype>
+#include <cwctype>
+#include <cstring>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <type_traits>
+
+#ifdef _WIN32
+#include <Windows.h>
+#include <winhttp.h>
+#endif
+
+namespace cauth::core::platform {
+namespace {
+
+#ifdef _WIN32
+struct WinHttpHandleDeleter {
+    void operator()(HINTERNET handle) const noexcept {
+        if (handle != nullptr) {
+            WinHttpCloseHandle(handle);
+        }
+    }
+};
+
+using WinHttpHandle = std::unique_ptr<std::remove_pointer_t<HINTERNET>, WinHttpHandleDeleter>;
+
+std::wstring widen_ascii(std::string_view value) {
+    return std::wstring{value.begin(), value.end()};
+}
+
+std::string narrow_ascii(std::wstring_view value) {
+    std::string narrowed;
+    narrowed.reserve(value.size());
+    for (const auto ch : value) {
+        narrowed.push_back(static_cast<char>(ch & 0xff));
+    }
+    return narrowed;
+}
+#endif
+
+struct ParsedUrl {
+    bool secure = false;
+    std::string host;
+    std::uint16_t port = 0;
+    std::string path_and_query;
+};
+
+#ifdef _WIN32
+std::optional<ParsedUrl> parse_url(std::string_view url) {
+    ParsedUrl parsed;
+    std::string_view remainder;
+    if (url.rfind("https://", 0) == 0) {
+        parsed.secure = true;
+        remainder = url.substr(8);
+        parsed.port = 443;
+    } else if (url.rfind("http://", 0) == 0) {
+        remainder = url.substr(7);
+        parsed.port = 80;
+    } else {
+        return std::nullopt;
+    }
+
+    const auto slash = remainder.find('/');
+    const auto authority = slash == std::string_view::npos ? remainder : remainder.substr(0, slash);
+    parsed.path_and_query = slash == std::string_view::npos ? "/" : std::string{remainder.substr(slash)};
+    if (authority.empty()) {
+        return std::nullopt;
+    }
+
+    const auto colon = authority.rfind(':');
+    if (colon != std::string_view::npos) {
+        parsed.host = std::string{authority.substr(0, colon)};
+        unsigned long port = 0;
+        for (const auto ch : authority.substr(colon + 1)) {
+            if (!std::isdigit(static_cast<unsigned char>(ch))) {
+                return std::nullopt;
+            }
+            port = (port * 10UL) + static_cast<unsigned long>(ch - '0');
+            if (port > 65535UL) {
+                return std::nullopt;
+            }
+        }
+        if (parsed.host.empty() || port == 0) {
+            return std::nullopt;
+        }
+        parsed.port = static_cast<std::uint16_t>(port);
+        return parsed;
+    }
+
+    parsed.host = std::string{authority};
+    return parsed.host.empty() ? std::nullopt : std::optional<ParsedUrl>{parsed};
+}
+#endif
+
+#ifdef _WIN32
+std::vector<HttpHeader> parse_raw_headers(const std::wstring& raw_headers) {
+    std::vector<HttpHeader> headers;
+    std::size_t offset = 0;
+    while (offset < raw_headers.size()) {
+        auto line_end = raw_headers.find(L"\r\n", offset);
+        if (line_end == std::wstring::npos) {
+            line_end = raw_headers.size();
+        }
+
+        const std::wstring_view line{raw_headers.data() + offset, line_end - offset};
+        offset = line_end + (line_end < raw_headers.size() ? 2U : 0U);
+        if (line.empty() || line.rfind(L"HTTP/", 0) == 0) {
+            continue;
+        }
+
+        const auto colon = line.find(L':');
+        if (colon == std::wstring::npos) {
+            continue;
+        }
+
+        auto value_start = colon + 1;
+        while (value_start < line.size() &&
+               ::iswspace(static_cast<wint_t>(line[value_start])) != 0) {
+            ++value_start;
+        }
+
+        headers.push_back(
+            {narrow_ascii(line.substr(0, colon)), narrow_ascii(line.substr(value_start))});
+    }
+    return headers;
+}
+
+HttpResponse winhttp_request(const HttpRequest& request) {
+    const auto parsed = parse_url(request.url);
+    if (!parsed.has_value()) {
+        return {false, "invalid URL", 0, {}};
+    }
+
+    WinHttpHandle session{WinHttpOpen(L"CAuth/0.1", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                      WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)};
+    if (!session) {
+        return {false, "WinHttpOpen failed", 0, {}};
+    }
+
+    WinHttpHandle connection{
+        WinHttpConnect(session.get(), widen_ascii(parsed->host).c_str(), parsed->port, 0)};
+    if (!connection) {
+        return {false, "WinHttpConnect failed", 0, {}};
+    }
+
+    const wchar_t* verb = L"GET";
+    switch (request.method) {
+    case HttpMethod::Post:
+        verb = L"POST";
+        break;
+    case HttpMethod::Put:
+        verb = L"PUT";
+        break;
+    case HttpMethod::Get:
+    default:
+        verb = L"GET";
+        break;
+    }
+    WinHttpHandle http_request{WinHttpOpenRequest(
+        connection.get(), verb, widen_ascii(parsed->path_and_query).c_str(), nullptr,
+        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, parsed->secure ? WINHTTP_FLAG_SECURE : 0)};
+    if (!http_request) {
+        return {false, "WinHttpOpenRequest failed", 0, {}};
+    }
+
+    const auto connect_timeout = request.connect_timeout_ms <= 0 ? 0 : request.connect_timeout_ms;
+    const auto read_timeout = request.read_timeout_ms <= 0 ? 0 : request.read_timeout_ms;
+    WinHttpSetTimeouts(http_request.get(), connect_timeout, connect_timeout, read_timeout,
+                       read_timeout);
+
+    std::wstring headers;
+    if (!request.content_type.empty()) {
+        headers = widen_ascii("Content-Type: " + request.content_type + "\r\n");
+    }
+    for (const auto& header : request.headers) {
+        headers += widen_ascii(header.name);
+        headers += L": ";
+        headers += widen_ascii(header.value);
+        headers += L"\r\n";
+    }
+
+    auto* optional_body = request.body.empty()
+                              ? WINHTTP_NO_REQUEST_DATA
+                              : const_cast<std::uint8_t*>(request.body.data());
+    const auto body_size = static_cast<DWORD>(request.body.size());
+    if (WinHttpSendRequest(http_request.get(),
+                           headers.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.c_str(),
+                           headers.empty() ? 0 : static_cast<DWORD>(headers.size()),
+                           optional_body, body_size, body_size, 0) == FALSE ||
+        WinHttpReceiveResponse(http_request.get(), nullptr) == FALSE) {
+        return {false, "WinHTTP request failed", 0, {}, {}};
+    }
+
+    DWORD status_code = 0;
+    DWORD status_code_size = sizeof(status_code);
+    if (WinHttpQueryHeaders(http_request.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &status_code, &status_code_size,
+                            WINHTTP_NO_HEADER_INDEX) == FALSE) {
+        return {false, "WinHttpQueryHeaders failed", 0, {}, {}};
+    }
+
+    DWORD raw_headers_size = 0;
+    (void)WinHttpQueryHeaders(http_request.get(), WINHTTP_QUERY_RAW_HEADERS_CRLF,
+                              WINHTTP_HEADER_NAME_BY_INDEX, WINHTTP_NO_OUTPUT_BUFFER,
+                              &raw_headers_size, WINHTTP_NO_HEADER_INDEX);
+    std::vector<wchar_t> raw_headers_buffer(raw_headers_size / sizeof(wchar_t), L'\0');
+    if (raw_headers_size > 0 &&
+        WinHttpQueryHeaders(http_request.get(), WINHTTP_QUERY_RAW_HEADERS_CRLF,
+                            WINHTTP_HEADER_NAME_BY_INDEX, raw_headers_buffer.data(),
+                            &raw_headers_size, WINHTTP_NO_HEADER_INDEX) == FALSE) {
+        return {false, "WinHttpQueryHeaders raw headers failed", status_code, {}, {}};
+    }
+    const std::wstring raw_headers =
+        raw_headers_buffer.empty() ? std::wstring{} : std::wstring{raw_headers_buffer.data()};
+    auto response_headers = parse_raw_headers(raw_headers);
+
+    std::vector<std::uint8_t> body;
+    while (true) {
+        DWORD available = 0;
+        if (WinHttpQueryDataAvailable(http_request.get(), &available) == FALSE) {
+            return {false, "WinHttpQueryDataAvailable failed", status_code, {}, response_headers};
+        }
+        if (available == 0) {
+            break;
+        }
+
+        const auto offset = body.size();
+        body.resize(offset + available);
+        DWORD read = 0;
+        if (WinHttpReadData(http_request.get(), body.data() + offset, available, &read) == FALSE) {
+            return {false, "WinHttpReadData failed", status_code, {}, response_headers};
+        }
+        body.resize(offset + read);
+    }
+
+    if (status_code < 200 || status_code >= 300) {
+        return {false,
+                "HTTP " + std::to_string(status_code),
+                status_code,
+                std::move(body),
+                std::move(response_headers)};
+    }
+    return {true, "", status_code, std::move(body), std::move(response_headers)};
+}
+#endif
+
+} // namespace
+
+HttpResponse perform_platform_http_request(const HttpRequest& request) {
+    if (request.url.empty()) {
+        return {false, "URL is required", 0, {}};
+    }
+
+#ifdef _WIN32
+    return winhttp_request(request);
+#elif defined(__ANDROID__)
+    const auto response = cauth::core::runtime::android_bridge_http_request(
+        request.method == HttpMethod::Post
+            ? "POST"
+            : request.method == HttpMethod::Put ? "PUT" : "GET",
+        request.url,
+        request.body,
+        request.content_type,
+        request.headers,
+        request.connect_timeout_ms,
+        request.read_timeout_ms);
+    return {response.ok,
+            response.error_message,
+            response.status_code,
+            std::move(response.body),
+            {}};
+#else
+    (void)request;
+    return {false, "Platform HTTP client is not implemented on this platform yet", 0, {}, {}};
+#endif
+}
+
+bool is_platform_http_client_available() {
+#ifdef _WIN32
+    return true;
+#elif defined(__ANDROID__)
+    return cauth::core::runtime::is_android_platform_bridge_available();
+#else
+    return false;
+#endif
+}
+
+std::optional<std::string> http_body_as_string(const HttpResponse& response) {
+    if (!response.ok) {
+        return std::nullopt;
+    }
+    return std::string{response.body.begin(), response.body.end()};
+}
+
+std::vector<std::string> http_header_values(const HttpResponse& response, std::string_view name) {
+    std::vector<std::string> values;
+    for (const auto& header : response.headers) {
+        if (header.name.size() != name.size()) {
+            continue;
+        }
+
+        bool equal = true;
+        for (std::size_t index = 0; index < name.size(); ++index) {
+            if (std::tolower(static_cast<unsigned char>(header.name[index])) !=
+                std::tolower(static_cast<unsigned char>(name[index]))) {
+                equal = false;
+                break;
+            }
+        }
+
+        if (equal) {
+            values.push_back(header.value);
+        }
+    }
+    return values;
+}
+
+} // namespace cauth::core::platform

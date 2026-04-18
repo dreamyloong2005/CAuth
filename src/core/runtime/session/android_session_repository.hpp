@@ -1,0 +1,35 @@
+#ifndef CAUTH_CORE_RUNTIME_SESSION_ANDROID_SESSION_REPOSITORY_HPP
+#define CAUTH_CORE_RUNTIME_SESSION_ANDROID_SESSION_REPOSITORY_HPP
+
+#include "core/session/session_repository.hpp"
+
+#include <cstdint>
+#include <optional>
+#include <vector>
+
+namespace cauth::core::runtime {
+
+class AndroidSecureStorageBridge {
+  public:
+    virtual ~AndroidSecureStorageBridge() = default;
+
+    virtual void save_bytes(std::vector<std::uint8_t> bytes) = 0;
+    virtual std::optional<std::vector<std::uint8_t>> load_bytes() const = 0;
+    virtual void clear_bytes() = 0;
+};
+
+class AndroidSessionRepository final : public session::SessionRepository {
+  public:
+    explicit AndroidSessionRepository(AndroidSecureStorageBridge& bridge);
+
+    void save_auth_session(const session::AuthSession& session) override;
+    std::optional<session::AuthSession> load_auth_session() const override;
+    void clear_auth_session() override;
+
+  private:
+    AndroidSecureStorageBridge* bridge_;
+};
+
+} // namespace cauth::core::runtime
+
+#endif
