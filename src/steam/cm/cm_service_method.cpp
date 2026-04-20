@@ -20,11 +20,6 @@ void append_tag(std::vector<std::uint8_t>& out, int field_number, int wire_type)
     append_varint(out, static_cast<std::uint64_t>((field_number << 3) | wire_type));
 }
 
-void append_varint_field(std::vector<std::uint8_t>& out, int field_number, std::uint64_t value) {
-    append_tag(out, field_number, 0);
-    append_varint(out, value);
-}
-
 void append_fixed64_field(std::vector<std::uint8_t>& out, int field_number, std::uint64_t value) {
     append_tag(out, field_number, 1);
     for (int shift = 0; shift < 64; shift += 8) {

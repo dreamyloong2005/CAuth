@@ -140,13 +140,12 @@ bool is_steam_record(const cauth_session_record_t& record) {
 }
 
 jobject make_saved_account(JNIEnv* env,
-                           const cauth_session_record_t& session,
-                           bool active) {
+                           const cauth_session_record_t& session) {
     jclass cls = ensure_saved_account_snapshot_class(env);
     if (cls == nullptr) {
         return nullptr;
     }
-    jmethodID ctor = env->GetMethodID(cls, "<init>", "(ZJLjava/lang/String;ZZJ)V");
+    jmethodID ctor = env->GetMethodID(cls, "<init>", "(JLjava/lang/String;ZZJ)V");
     if (ctor == nullptr) {
         return nullptr;
     }
@@ -154,7 +153,7 @@ jobject make_saved_account(JNIEnv* env,
                                ? nullptr
                                : env->NewStringUTF(session.account_name);
     jobject instance = env->NewObject(
-        cls, ctor, static_cast<jboolean>(active), static_cast<jlong>(parse_steam_id(session.subject_id)),
+        cls, ctor, static_cast<jlong>(parse_steam_id(session.subject_id)),
         account_name, static_cast<jboolean>(session.has_refresh_token != 0),
         static_cast<jboolean>(session.has_access_token != 0),
         static_cast<jlong>(session.created_at_unix_seconds));
@@ -271,9 +270,13 @@ extern "C" JNIEXPORT jobject JNICALL
 Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeGetSavedSession(
     JNIEnv* env,
     jclass,
-    jlong handle) {
+    jlong handle,
+    jlong steam_id) {
     cauth_saved_session_t session{};
-    const cauth_result_t result = cauth_auth_get_saved_session(client_from_handle(handle), &session);
+    const cauth_result_t result = cauth_auth_get_saved_session(
+        client_from_handle(handle),
+        static_cast<unsigned long long>(steam_id),
+        &session);
     if (result != CAUTH_OK) {
         throw_result_exception(env, "Failed to load saved session", result);
         return nullptr;
@@ -285,8 +288,11 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeClearSavedSession(
     JNIEnv* env,
     jclass,
-    jlong handle) {
-    const cauth_result_t result = cauth_auth_clear_saved_session(client_from_handle(handle));
+    jlong handle,
+    jlong steam_id) {
+    const cauth_result_t result = cauth_auth_clear_saved_session(
+        client_from_handle(handle),
+        static_cast<unsigned long long>(steam_id));
     if (result != CAUTH_OK) {
         throw_result_exception(env, "Failed to clear saved session", result);
     }
@@ -325,8 +331,7 @@ Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeListSavedAccounts(
     for (jsize output_index = 0; output_index < static_cast<jsize>(steam_indexes.size());
          ++output_index) {
         const auto source_index = steam_indexes[static_cast<std::size_t>(output_index)];
-        const bool active = session_list.active_index == static_cast<long long>(source_index);
-        jobject item = make_saved_account(env, session_list.sessions[source_index], active);
+        jobject item = make_saved_account(env, session_list.sessions[source_index]);
         if (item == nullptr) {
             return nullptr;
         }
@@ -334,20 +339,6 @@ Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeListSavedAccounts(
         env->DeleteLocalRef(item);
     }
     return array;
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeUseSavedAccount(
-    JNIEnv* env,
-    jclass,
-    jlong handle,
-    jlong steam_id) {
-    const auto steam_id_text = std::to_string(static_cast<unsigned long long>(steam_id));
-    const cauth_result_t result =
-        cauth_session_set_active(client_from_handle(handle), "steam", steam_id_text.c_str());
-    if (result != CAUTH_OK) {
-        throw_result_exception(env, "Failed to switch saved account", result);
-    }
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -407,9 +398,13 @@ extern "C" JNIEXPORT jobject JNICALL
 Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeCmLogon(
     JNIEnv* env,
     jclass,
-    jlong handle) {
+    jlong handle,
+    jlong steam_id) {
     cauth_cm_logon_result_t result{};
-    const cauth_result_t native_result = cauth_cm_logon(client_from_handle(handle), &result);
+    const cauth_result_t native_result = cauth_cm_logon(
+        client_from_handle(handle),
+        static_cast<unsigned long long>(steam_id),
+        &result);
     if (native_result != CAUTH_OK) {
         throw_result_exception(env, "CM logon failed", native_result);
         return nullptr;

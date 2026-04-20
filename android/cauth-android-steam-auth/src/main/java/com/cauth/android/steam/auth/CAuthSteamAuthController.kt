@@ -11,6 +11,7 @@ data class CAuthSteamAuthState(
     val accountName: String = "",
     val password: String = "",
     val guardCode: String = "",
+    val steamId: String = "",
     val deviceName: String = "ComposeDemo",
     val loginPlatform: LoginPlatform = LoginPlatform.SteamClient,
     val statusText: String = "Ready",
@@ -37,6 +38,7 @@ class CAuthSteamAuthController(
     fun setAccountName(value: String) = _state.update { it.copy(accountName = value.trim()) }
     fun setPassword(value: String) = _state.update { it.copy(password = value) }
     fun setGuardCode(value: String) = _state.update { it.copy(guardCode = value.filterNot { ch -> ch.isWhitespace() }) }
+    fun setSteamId(value: String) = _state.update { it.copy(steamId = value.filter { ch -> ch.isDigit() }) }
     fun setDeviceName(value: String) = _state.update { it.copy(deviceName = value.trim()) }
     fun setLoginPlatform(value: LoginPlatform) = _state.update { it.copy(loginPlatform = value) }
 
@@ -62,6 +64,7 @@ class CAuthSteamAuthController(
                         statusText = "${result.status}: ${result.message}",
                         busy = false,
                         loginResult = result,
+                        steamId = if (result.steamId != 0L) result.steamId.toString() else it.steamId,
                     )
                 }
                 appendTrace("Login returned status=${result.status} steamId=${result.steamId} message=${result.message}")
@@ -78,11 +81,12 @@ class CAuthSteamAuthController(
     }
 
     fun loadSavedSession() {
-        appendTrace("Saved Session clicked")
+        val steamId = _state.value.steamId.toLongOrNull() ?: 0L
+        appendTrace("Saved Session clicked steamId=$steamId")
         _state.update { it.copy(statusText = "Loading saved session...", busy = true) }
         scope.launch {
             appendTrace("Saved Session coroutine started")
-            runCatching { api.getSavedSession() }
+            runCatching { api.getSavedSession(steamId) }
                 .onSuccess { session ->
                     _state.update {
                         it.copy(
@@ -123,7 +127,7 @@ class CAuthSteamAuthController(
                             savedAccounts = accounts,
                         )
                     }
-                    appendTrace("Saved Accounts returned count=${accounts.size} active=${accounts.firstOrNull { account -> account.active }?.steamId ?: 0}")
+                    appendTrace("Saved Accounts returned count=${accounts.size}")
                 }
                 .onFailure { failure ->
                     _state.update {
@@ -137,34 +141,18 @@ class CAuthSteamAuthController(
         }
     }
 
-    fun useSavedAccount(steamId: Long) {
-        appendTrace("Use Saved Account clicked steamId=$steamId")
-        _state.update { it.copy(statusText = "Switching active account...", busy = true) }
-        scope.launch {
-            runCatching { api.useSavedAccount(steamId) }
-                .onSuccess {
-                    _state.update { it.copy(statusText = "Active account switched", busy = false) }
-                    appendTrace("Use Saved Account completed steamId=$steamId")
-                    loadSavedAccounts()
-                }
-                .onFailure { failure ->
-                    _state.update {
-                        it.copy(
-                            statusText = failure.message ?: "Account switch failed",
-                            busy = false,
-                        )
-                    }
-                    appendTrace("Use Saved Account failed: ${failure::class.simpleName}: ${failure.message ?: "(no message)"}")
-                }
-        }
+    fun selectSavedAccount(steamId: Long) {
+        appendTrace("Select Saved Account clicked steamId=$steamId")
+        _state.update { it.copy(steamId = steamId.toString(), statusText = "SteamID selected") }
     }
 
     fun clearSavedSession() {
-        appendTrace("Clear Session clicked")
+        val steamId = _state.value.steamId.toLongOrNull() ?: 0L
+        appendTrace("Clear Session clicked steamId=$steamId")
         _state.update { it.copy(statusText = "Clearing saved session...", busy = true) }
         scope.launch {
             appendTrace("Clear Session coroutine started")
-            runCatching { api.clearSavedSession() }
+            runCatching { api.clearSavedSession(steamId) }
                 .onSuccess {
                     _state.update {
                         it.copy(
@@ -217,11 +205,12 @@ class CAuthSteamAuthController(
     }
 
     fun logonCm() {
-        appendTrace("CM Logon clicked")
+        val steamId = _state.value.steamId.toLongOrNull() ?: 0L
+        appendTrace("CM Logon clicked steamId=$steamId")
         _state.update { it.copy(statusText = "CM logon in progress...", busy = true) }
         scope.launch {
             appendTrace("CM Logon coroutine started")
-            runCatching { api.logonCm() }
+            runCatching { api.logonCm(steamId) }
                 .onSuccess { result ->
                     _state.update {
                         it.copy(

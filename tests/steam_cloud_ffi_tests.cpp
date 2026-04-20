@@ -4,6 +4,8 @@
 #include <iostream>
 
 int main() {
+    constexpr unsigned long long kSteamId = 76561198000000000ULL;
+
     if (cauth_steam_cloud_pull(nullptr, nullptr, nullptr) != CAUTH_ERROR_INVALID_ARGUMENT) {
         std::cerr << "steam cloud pull should reject null arguments\n";
         return 1;
@@ -28,6 +30,7 @@ int main() {
 
     cauth_steam_cloud_request_t request{};
     request.app_id = 440;
+    request.steam_id = kSteamId;
     request.access_token = "token";
     request.local_root = "D:/saves";
     request.remote_root = "remote";
@@ -37,6 +40,7 @@ int main() {
 
     cauth_steam_cloud_request_t invalid_list_request{};
     invalid_list_request.app_id = 440;
+    invalid_list_request.steam_id = kSteamId;
     cauth_steam_cloud_file_list_t list_result{};
     if (cauth_steam_cloud_list_remote_files(client, &invalid_list_request, 10, 0, 1, &list_result) !=
         CAUTH_OK) {
@@ -53,6 +57,7 @@ int main() {
     cauth_steam_cloud_result_t result{};
     cauth_steam_cloud_request_t invalid_pull_request{};
     invalid_pull_request.app_id = 440;
+    invalid_pull_request.steam_id = kSteamId;
     invalid_pull_request.access_token = "token";
     if (cauth_steam_cloud_pull(client, &invalid_pull_request, &result) != CAUTH_OK) {
         std::cerr << "steam cloud pull should return structured validation failure\n";
@@ -99,6 +104,7 @@ int main() {
     cauth_steam_cloud_verify_report_t verify_report{};
     cauth_steam_cloud_request_t invalid_verify_request{};
     invalid_verify_request.app_id = 440;
+    invalid_verify_request.steam_id = kSteamId;
     invalid_verify_request.access_token = "token";
     if (cauth_steam_cloud_verify_local_files(client, &invalid_verify_request, 1, &verify_report) !=
         CAUTH_OK) {

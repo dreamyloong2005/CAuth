@@ -60,11 +60,13 @@ void set_current_thread_depot_download_hooks(DepotDownloadProgressHook progress_
                                              void* user_data);
 void clear_current_thread_depot_download_hooks();
 
-std::optional<cauth::core::depot::AppInfo> fetch_app_info_from_cm(std::uint32_t app_id,
+std::optional<cauth::core::depot::AppInfo> fetch_app_info_from_cm(std::uint64_t steam_id,
+                                                                  std::uint32_t app_id,
                                                                   std::uint32_t max_count,
                                                                   std::ostream& out,
                                                                   std::ostream& err);
 std::optional<cauth::core::depot::DepotDecryptionKeyResponse> fetch_depot_key_from_cm(
+    std::uint64_t steam_id,
     std::uint32_t app_id,
     std::uint32_t depot_id,
     std::uint32_t max_count,
@@ -72,30 +74,36 @@ std::optional<cauth::core::depot::DepotDecryptionKeyResponse> fetch_depot_key_fr
     std::ostream& err);
 std::optional<cauth::core::depot::ManifestRequestCodeResponse>
 fetch_manifest_request_code_from_cm(
+    std::uint64_t steam_id,
     const cauth::core::depot::ManifestRequestCodeRequest& request,
     std::uint32_t max_count,
     std::ostream& out,
     std::ostream& err);
-int print_branches(std::uint32_t app_id,
+int print_branches(std::uint64_t steam_id,
+                   std::uint32_t app_id,
                    std::uint32_t max_count,
                    std::ostream& out,
                    std::ostream& err);
-int print_manifests(std::uint32_t app_id,
+int print_manifests(std::uint64_t steam_id,
+                    std::uint32_t app_id,
                     std::string_view branch,
                     std::uint32_t max_count,
                     std::ostream& out,
                     std::ostream& err);
-int print_preflight(std::uint32_t app_id,
+int print_preflight(std::uint64_t steam_id,
+                    std::uint32_t app_id,
                     std::string_view branch,
                     std::uint32_t max_count,
                     std::ostream& out,
                     std::ostream& err);
-int print_depot_key(std::uint32_t app_id,
+int print_depot_key(std::uint64_t steam_id,
+                    std::uint32_t app_id,
                     std::uint32_t depot_id,
                     std::uint32_t max_count,
                     std::ostream& out,
                     std::ostream& err);
-int print_manifest_request_code(std::uint32_t app_id,
+int print_manifest_request_code(std::uint64_t steam_id,
+                                std::uint32_t app_id,
                                 std::uint32_t depot_id,
                                 std::uint64_t manifest_gid,
                                 std::string_view branch,

@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 
 data class CAuthSteamDepotState(
     val appIdText: String = "",
+    val steamIdText: String = "",
     val branch: String = "public",
     val maxCountText: String = "20",
     val depotIdText: String = "",
@@ -54,6 +55,7 @@ class CAuthSteamDepotController(
     private var downloadPollingJob: Job? = null
 
     fun setAppIdText(value: String) = _state.update { it.copy(appIdText = sanitizeCompact(value)) }
+    fun setSteamIdText(value: String) = _state.update { it.copy(steamIdText = sanitizeCompact(value)) }
     fun setBranch(value: String) = _state.update { it.copy(branch = sanitizeTrimmed(value)) }
     fun setMaxCountText(value: String) = _state.update { it.copy(maxCountText = sanitizeCompact(value)) }
     fun setDepotIdText(value: String) = _state.update { it.copy(depotIdText = sanitizeCompact(value)) }
@@ -135,8 +137,8 @@ class CAuthSteamDepotController(
     }
 
     fun fetchBranches() {
-        runAction("Fetch Branches") { appId, maxCount, _ ->
-            val result = api.fetchBranches(appId = appId, maxCount = maxCount)
+        runAction("Fetch Branches") { steamId, appId, maxCount, _ ->
+            val result = api.fetchBranches(steamId = steamId, appId = appId, maxCount = maxCount)
             _state.update {
                 it.copy(
                     statusText = when {
@@ -153,8 +155,9 @@ class CAuthSteamDepotController(
     }
 
     fun fetchManifests() {
-        runAction("Fetch Manifests") { appId, maxCount, branch ->
+        runAction("Fetch Manifests") { steamId, appId, maxCount, branch ->
             val result = api.fetchManifests(
+                steamId = steamId,
                 appId = appId,
                 branch = branch,
                 maxCount = maxCount,
@@ -176,8 +179,9 @@ class CAuthSteamDepotController(
 
     fun fetchPreflight() {
         _state.update { it.copy(preflight = null) }
-        runAction("Fetch Preflight") { appId, maxCount, branch ->
+        runAction("Fetch Preflight") { steamId, appId, maxCount, branch ->
             val result = api.fetchPreflight(
+                steamId = steamId,
                 appId = appId,
                 branch = branch,
                 maxCount = maxCount,
@@ -199,9 +203,14 @@ class CAuthSteamDepotController(
 
     fun fetchDepotKey() {
         _state.update { it.copy(depotKey = null, depotKeyHex = "") }
-        runAction("Fetch Depot Key") { appId, maxCount, _ ->
+        runAction("Fetch Depot Key") { steamId, appId, maxCount, _ ->
             val depotId = requirePositiveInt(_state.value.depotIdText, "Depot ID")
-            val result = api.fetchDepotKey(appId = appId, depotId = depotId, maxCount = maxCount)
+            val result = api.fetchDepotKey(
+                steamId = steamId,
+                appId = appId,
+                depotId = depotId,
+                maxCount = maxCount,
+            )
             _state.update {
                 it.copy(
                     statusText = if (result.present && result.keyHex.isNotBlank()) {
@@ -222,10 +231,11 @@ class CAuthSteamDepotController(
 
     fun fetchManifestRequestCode() {
         _state.update { it.copy(manifestRequestCode = null, requestCodeText = "") }
-        runAction("Fetch Manifest Code") { appId, maxCount, branch ->
+        runAction("Fetch Manifest Code") { steamId, appId, maxCount, branch ->
             val depotId = requirePositiveInt(_state.value.depotIdText, "Depot ID")
             val manifestGid = requirePositiveLong(_state.value.manifestGidText, "Manifest GID")
             val result = api.fetchManifestRequestCode(
+                steamId = steamId,
                 appId = appId,
                 depotId = depotId,
                 manifestGid = manifestGid,
@@ -622,7 +632,7 @@ class CAuthSteamDepotController(
 
     private fun runAction(
         label: String,
-        action: suspend (appId: Int, maxCount: Int, branch: String) -> Unit,
+        action: suspend (steamId: Long, appId: Int, maxCount: Int, branch: String) -> Unit,
     ) {
         val snapshot = _state.value
         val appId = snapshot.appIdText.toIntOrNull()
@@ -631,15 +641,21 @@ class CAuthSteamDepotController(
             appendTrace("$label blocked: invalid app id='${snapshot.appIdText}'")
             return
         }
+        val steamId = snapshot.steamIdText.toLongOrNull()
+        if (steamId == null || steamId <= 0L) {
+            _state.update { it.copy(statusText = "SteamID is required") }
+            appendTrace("$label blocked: invalid steam id='${snapshot.steamIdText}'")
+            return
+        }
 
         val maxCount = snapshot.maxCountText.toIntOrNull()?.coerceIn(1, 100) ?: 5
         val branch = snapshot.branch.ifBlank { "public" }
 
-        appendTrace("$label clicked appId=$appId branch=$branch maxCount=$maxCount")
+        appendTrace("$label clicked steamId=$steamId appId=$appId branch=$branch maxCount=$maxCount")
         _state.update { it.copy(statusText = "$label in progress...", busy = true) }
         scope.launch {
             runCatching {
-                action(appId, maxCount, branch)
+                action(steamId, appId, maxCount, branch)
             }.onFailure { failure ->
                 _state.update {
                     it.copy(

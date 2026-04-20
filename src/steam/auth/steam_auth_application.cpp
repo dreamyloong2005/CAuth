@@ -189,21 +189,26 @@ int run_login(cauth::core::session::SessionRepository& store,
 }
 
 int print_status(cauth::core::session::SessionRepository& store, std::ostream& out) {
-    const auto session = store.load_auth_session();
-    if (!session.has_value()) {
-        out << "Steam auth: not signed in\n";
+    const auto accounts = saved_steam_account_views(store.list_auth_sessions());
+    if (accounts.empty()) {
+        out << "Steam auth: no saved accounts\n";
         return 0;
     }
-    out << "Steam auth: signed in as " << cauth::core::session::redacted_account_label(*session) << '\n';
+    out << "Steam auth: saved accounts=" << accounts.size() << '\n';
     return 0;
 }
 
 int print_whoami(cauth::core::session::SessionRepository& store,
+                 std::string_view steam_id_value,
                  std::ostream& out,
                  std::ostream& err) {
-    const auto session = store.load_auth_session();
+    if (steam_id_value.empty()) {
+        err << "Steam auth whoami requires --steam-id <id>\n";
+        return 2;
+    }
+    const auto session = store.load_auth_session(kSteamAuthProvider, steam_id_value);
     if (!session.has_value()) {
-        err << "Steam auth: not signed in\n";
+        err << "Steam auth: account not found " << steam_id_value << '\n';
         return 1;
     }
     out << "Steam account: " << cauth::core::session::redacted_account_label(*session) << '\n';
@@ -239,14 +244,11 @@ int print_whoami(cauth::core::session::SessionRepository& store,
 int print_saved_accounts(cauth::core::session::SessionRepository& store,
                          std::ostream& out) {
     const auto views = saved_steam_account_views(store.list_auth_sessions());
-    const auto active = store.active_auth_session_key();
 
     out << "Steam auth accounts:\n";
     for (const auto& view : views) {
         const auto& session = view.representative;
-        const bool is_active = active.has_value() &&
-                               cauth::core::session::matches_session(session, *active);
-        out << "  " << (is_active ? "* " : "- ")
+        out << "  - "
             << cauth::core::session::redacted_account_label(session)
             << " steam_id=" << steam_id(session)
             << " session_types=";
@@ -257,22 +259,6 @@ int print_saved_accounts(cauth::core::session::SessionRepository& store,
     if (views.empty()) {
         out << "  (none)\n";
     }
-    return 0;
-}
-
-int use_saved_account(cauth::core::session::SessionRepository& store,
-                      std::string_view steam_id_value,
-                      std::ostream& out,
-                      std::ostream& err) {
-    if (steam_id_value.empty()) {
-        err << "Steam auth account switch requires --steam-id <id>\n";
-        return 2;
-    }
-    if (!store.set_active_auth_session(kSteamAuthProvider, steam_id_value)) {
-        err << "Steam auth account not found: " << steam_id_value << '\n';
-        return 1;
-    }
-    out << "Steam auth: active account set to " << steam_id_value << '\n';
     return 0;
 }
 
@@ -292,11 +278,16 @@ SteamLoginPlatformType steam_login_platform_type_for_refresh_token(
 }
 
 int refresh_saved_access_token_from_store(cauth::core::session::SessionRepository& store,
+                                          std::string_view steam_id_value,
                                           std::ostream& out,
                                           std::ostream& err) {
-    auto session = store.load_auth_session();
+    if (steam_id_value.empty()) {
+        err << "Steam auth refresh-access requires --steam-id <id>\n";
+        return 2;
+    }
+    auto session = store.load_auth_session(kSteamAuthProvider, steam_id_value);
     if (!session.has_value()) {
-        err << "Steam auth: not signed in\n";
+        err << "Steam auth: account not found " << steam_id_value << '\n';
         return 1;
     }
     return refresh_saved_access_token(store, *session, out, err) ? 0 : 1;
@@ -338,11 +329,16 @@ bool refresh_saved_access_token(cauth::core::session::SessionRepository& store,
 }
 
 int print_saved_web_cookies(cauth::core::session::SessionRepository& store,
+                            std::string_view steam_id_value,
                             std::ostream& out,
                             std::ostream& err) {
-    const auto session = store.load_auth_session();
+    if (steam_id_value.empty()) {
+        err << "Steam auth web-cookies requires --steam-id <id>\n";
+        return 2;
+    }
+    const auto session = store.load_auth_session(kSteamAuthProvider, steam_id_value);
     if (!session.has_value()) {
-        err << "Steam auth: not signed in\n";
+        err << "Steam auth: account not found " << steam_id_value << '\n';
         return 1;
     }
     return print_saved_web_cookies(*session, out, err);
@@ -367,11 +363,16 @@ int print_saved_web_cookies(const cauth::core::session::AuthSession& session,
 }
 
 int print_token_info(cauth::core::session::SessionRepository& store,
+                     std::string_view steam_id_value,
                      std::ostream& out,
                      std::ostream& err) {
-    const auto session = store.load_auth_session();
+    if (steam_id_value.empty()) {
+        err << "Steam auth token-info requires --steam-id <id>\n";
+        return 2;
+    }
+    const auto session = store.load_auth_session(kSteamAuthProvider, steam_id_value);
     if (!session.has_value()) {
-        err << "Steam auth: not signed in\n";
+        err << "Steam auth: account not found " << steam_id_value << '\n';
         return 1;
     }
     if (session->access_token.empty()) {
@@ -388,12 +389,6 @@ int print_token_info(cauth::core::session::SessionRepository& store,
         const auto value = find_json_scalar(*payload, key);
         if (value.has_value()) out << "  " << key << ": " << *value << '\n';
     }
-    return 0;
-}
-
-int clear_saved_session(cauth::core::session::SessionRepository& store, std::ostream& out) {
-    store.clear_auth_session();
-    out << "Steam auth: active account cleared\n";
     return 0;
 }
 

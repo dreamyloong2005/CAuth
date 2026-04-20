@@ -15,7 +15,7 @@ This file tracks the project direction after the module split. It is not a promi
 ## Current Core
 
 - Provider-neutral session model.
-- Multi-account repository with active-account pointer.
+- Multi-account repository with explicit `provider + subject_id` selection.
 - Platform-backed session repositories.
 - Runtime bridges for desktop and Android.
 - Shared transport and crypto utilities.
@@ -26,7 +26,7 @@ This file tracks the project direction after the module split. It is not a promi
 - Web-browser login path.
 - Mobile-app login entry point.
 - Steam Guard polling and continuation.
-- Saved-account list, switch, and clear flows.
+- Saved-account list, explicit lookup, and clear flows.
 - CM directory lookup, probe, logon, and auth service calls.
 - Web-cookie / finalize-login diagnostic path.
 

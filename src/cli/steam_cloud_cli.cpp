@@ -5,6 +5,7 @@
 #include "steam/cloud/steam_cloud_application.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
@@ -153,6 +154,10 @@ ParsedSyncResult parse_sync_command(int argc, char** argv) {
 
     if (result.command.request.app_id == 0) {
         std::cerr << "steam cloud " << subcommand << " requires --app-id <id>\n";
+        return result;
+    }
+    if (result.command.request.steam_id == 0) {
+        std::cerr << "steam cloud " << subcommand << " requires --steam-id <id>\n";
         return result;
     }
     if ((result.command.kind == SyncCommandKind::Verify ||

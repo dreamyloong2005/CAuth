@@ -5,6 +5,7 @@
 #include "steam/cloud/steam_cloud_application.hpp"
 
 #include <new>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -52,6 +53,7 @@ cauth::steam::cloud::SteamCloudRequest build_native_request(cauth_client_t* clie
                                                             const cauth_steam_cloud_request_t* request) {
     cauth::steam::cloud::SteamCloudRequest native_request;
     native_request.app_id = request->app_id;
+    native_request.steam_id = request->steam_id;
     native_request.access_token = nullable_string(request->access_token);
     native_request.local_root = nullable_string(request->local_root);
     native_request.remote_root = nullable_string(request->remote_root);
@@ -61,7 +63,11 @@ cauth::steam::cloud::SteamCloudRequest build_native_request(cauth_client_t* clie
     native_request.backend = cauth::steam::cloud::SteamCloudBackend::Auto;
     if (native_request.access_token.empty() || native_request.refresh_token.empty() ||
         native_request.steam_id == 0) {
-        const auto session = client->session_repository->load_auth_session();
+        const auto session = native_request.steam_id == 0
+                                 ? std::nullopt
+                                 : client->session_repository->load_auth_session(
+                                       "steam",
+                                       std::to_string(native_request.steam_id));
         if (session.has_value()) {
             if (native_request.access_token.empty()) {
                 native_request.access_token = session->access_token;
@@ -71,10 +77,6 @@ cauth::steam::cloud::SteamCloudRequest build_native_request(cauth_client_t* clie
             }
             if (native_request.session_type.empty()) {
                 native_request.session_type = session->session_type;
-            }
-            if (native_request.steam_id == 0) {
-                native_request.steam_id =
-                    cauth::core::session::parse_numeric_subject_id(*session).value_or(0);
             }
         }
     }
@@ -103,7 +105,8 @@ cauth_result_t run_sync_operation(
     const cauth_steam_cloud_request_t* request,
     cauth_steam_cloud_result_t* out_result,
     cauth::steam::cloud::SteamCloudResult (*fn)(const cauth::steam::cloud::SteamCloudRequest&)) {
-    if (client == nullptr || request == nullptr || out_result == nullptr || request->app_id == 0) {
+    if (client == nullptr || request == nullptr || out_result == nullptr ||
+        request->app_id == 0 || request->steam_id == 0) {
         return CAUTH_ERROR_INVALID_ARGUMENT;
     }
 
@@ -154,8 +157,8 @@ cauth_result_t cauth_steam_cloud_list_remote_files(
     unsigned int start_index,
     int extended_details,
     cauth_steam_cloud_file_list_t* out_response) {
-    if (client == nullptr || request == nullptr || out_response == nullptr || request->app_id == 0 ||
-        count == 0) {
+    if (client == nullptr || request == nullptr || out_response == nullptr ||
+        request->app_id == 0 || request->steam_id == 0 || count == 0) {
         return CAUTH_ERROR_INVALID_ARGUMENT;
     }
 
@@ -242,7 +245,8 @@ cauth_result_t cauth_steam_cloud_verify_local_files(
     const cauth_steam_cloud_request_t* request,
     int include_extra_local,
     cauth_steam_cloud_verify_report_t* out_result) {
-    if (client == nullptr || request == nullptr || out_result == nullptr || request->app_id == 0) {
+    if (client == nullptr || request == nullptr || out_result == nullptr ||
+        request->app_id == 0 || request->steam_id == 0) {
         return CAUTH_ERROR_INVALID_ARGUMENT;
     }
 

@@ -4,6 +4,7 @@
 #include "steam/depot/steam_depot_application.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
@@ -31,6 +32,7 @@ enum class DepotCommandKind {
 
 struct ParsedDepotCommand {
     DepotCommandKind kind = DepotCommandKind::Branches;
+    std::uint64_t steam_id = 0;
     std::uint32_t app_id = 0;
     std::uint32_t depot_id = 0;
     std::uint32_t max_count = 5;
@@ -100,6 +102,10 @@ ParsedDepotResult parse_depot_command(int argc, char** argv) {
         const std::string_view arg = argv[index];
         if (arg == "--app-id" && index + 1 < argc) {
             result.command.app_id = static_cast<std::uint32_t>(std::max(0, std::atoi(argv[++index])));
+            continue;
+        }
+        if (arg == "--steam-id" && index + 1 < argc) {
+            result.command.steam_id = parse_u64_arg(argv[++index]);
             continue;
         }
         if (arg == "--max-count" && index + 1 < argc) {
@@ -218,6 +224,16 @@ ParsedDepotResult parse_depot_command(int argc, char** argv) {
         std::cerr << "steam depot " << subcommand << " requires --app-id <id>\n";
         return result;
     }
+    const auto requires_steam_id =
+        result.command.kind == DepotCommandKind::Branches ||
+        result.command.kind == DepotCommandKind::Manifests ||
+        result.command.kind == DepotCommandKind::Key ||
+        result.command.kind == DepotCommandKind::Preflight ||
+        result.command.kind == DepotCommandKind::ManifestCode;
+    if (requires_steam_id && result.command.steam_id == 0) {
+        std::cerr << "steam depot " << subcommand << " requires --steam-id <id>\n";
+        return result;
+    }
     if ((result.command.kind == DepotCommandKind::ManifestInfo ||
          result.command.kind == DepotCommandKind::FileList ||
          result.command.kind == DepotCommandKind::VerifyLocal ||
@@ -286,22 +302,24 @@ int run_steam_depot(int argc, char** argv) {
 
     const auto& request = parsed.command;
     if (request.kind == DepotCommandKind::Branches) {
-        return cauth::steam::depot::print_branches(request.app_id, request.max_count, std::cout, std::cerr);
+        return cauth::steam::depot::print_branches(
+            request.steam_id, request.app_id, request.max_count, std::cout, std::cerr);
     }
     if (request.kind == DepotCommandKind::Manifests) {
         return cauth::steam::depot::print_manifests(
-            request.app_id, request.branch, request.max_count, std::cout, std::cerr);
+            request.steam_id, request.app_id, request.branch, request.max_count, std::cout, std::cerr);
     }
     if (request.kind == DepotCommandKind::Preflight) {
         return cauth::steam::depot::print_preflight(
-            request.app_id, request.branch, request.max_count, std::cout, std::cerr);
+            request.steam_id, request.app_id, request.branch, request.max_count, std::cout, std::cerr);
     }
     if (request.kind == DepotCommandKind::Key) {
         return cauth::steam::depot::print_depot_key(
-            request.app_id, request.depot_id, request.max_count, std::cout, std::cerr);
+            request.steam_id, request.app_id, request.depot_id, request.max_count, std::cout, std::cerr);
     }
     if (request.kind == DepotCommandKind::ManifestCode) {
         return cauth::steam::depot::print_manifest_request_code(
+            request.steam_id,
             request.app_id,
             request.depot_id,
             request.manifest_gid,

@@ -11,6 +11,7 @@ import kotlinx.coroutines.launch
 
 data class CAuthSteamCloudState(
     val appIdText: String = "",
+    val steamIdText: String = "",
     val localRoot: String = "",
     val remoteRoot: String = "",
     val accessToken: String = "",
@@ -39,6 +40,7 @@ class CAuthSteamCloudController(
     private var transferPollingJob: Job? = null
 
     fun setAppIdText(value: String) = _state.update { it.copy(appIdText = sanitizeCompact(value)) }
+    fun setSteamIdText(value: String) = _state.update { it.copy(steamIdText = sanitizeCompact(value)) }
     fun setLocalRoot(value: String) = _state.update { it.copy(localRoot = sanitizeTrimmed(value)) }
     fun setRemoteRoot(value: String) = _state.update { it.copy(remoteRoot = sanitizeTrimmed(value)) }
     fun setAccessToken(value: String) = _state.update { it.copy(accessToken = sanitizeCompact(value)) }
@@ -122,9 +124,16 @@ class CAuthSteamCloudController(
             appendTrace("$label blocked: invalid app id='${snapshot.appIdText}'")
             return
         }
+        val steamId = snapshot.steamIdText.toLongOrNull()
+        if (steamId == null || steamId <= 0L) {
+            _state.update { it.copy(statusText = "SteamID is required") }
+            appendTrace("$label blocked: invalid steam id='${snapshot.steamIdText}'")
+            return
+        }
 
         val request = SteamCloudRequest(
             appId = appId,
+            steamId = steamId,
             accessToken = snapshot.accessToken.ifBlank { null },
             localRoot = snapshot.localRoot.ifBlank { null },
             remoteRoot = snapshot.remoteRoot.ifBlank { null },
@@ -136,7 +145,7 @@ class CAuthSteamCloudController(
         val startIndex = snapshot.startIndexText.toIntOrNull()?.coerceAtLeast(0) ?: 0
 
         appendTrace(
-            "$label clicked appId=$appId localRoot=${request.localRoot ?: "(none)"} " +
+            "$label clicked steamId=$steamId appId=$appId localRoot=${request.localRoot ?: "(none)"} " +
                 "remoteRoot=${request.remoteRoot ?: "(none)"} dryRun=${request.dryRun}",
         )
         _state.update { it.copy(statusText = "$label in progress...", busy = true) }
@@ -166,9 +175,16 @@ class CAuthSteamCloudController(
             appendTrace("$label blocked: invalid app id='${snapshot.appIdText}'")
             return
         }
+        val steamId = snapshot.steamIdText.toLongOrNull()
+        if (steamId == null || steamId <= 0L) {
+            _state.update { it.copy(statusText = "SteamID is required") }
+            appendTrace("$label blocked: invalid steam id='${snapshot.steamIdText}'")
+            return
+        }
 
         val request = SteamCloudRequest(
             appId = appId,
+            steamId = steamId,
             accessToken = snapshot.accessToken.ifBlank { null },
             localRoot = snapshot.localRoot.ifBlank { null },
             remoteRoot = snapshot.remoteRoot.ifBlank { null },
@@ -178,7 +194,7 @@ class CAuthSteamCloudController(
         )
 
         appendTrace(
-            "$label clicked appId=$appId localRoot=${request.localRoot ?: "(none)"} " +
+            "$label clicked steamId=$steamId appId=$appId localRoot=${request.localRoot ?: "(none)"} " +
                 "remoteRoot=${request.remoteRoot ?: "(none)"} dryRun=${request.dryRun}",
         )
         transferPollingJob?.cancel()

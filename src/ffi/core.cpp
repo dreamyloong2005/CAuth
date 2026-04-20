@@ -123,15 +123,18 @@ const char* cauth_result_message(cauth_result_t result) {
 }
 
 cauth_result_t cauth_session_get_saved(cauth_client_t* client,
+                                       const char* provider,
+                                       const char* subject_id,
                                        cauth_session_record_t* out_session) {
-    if (client == nullptr || out_session == nullptr) {
+    if (client == nullptr || provider == nullptr || subject_id == nullptr ||
+        out_session == nullptr) {
         return CAUTH_ERROR_INVALID_ARGUMENT;
     }
 
     clear_session_record(*out_session);
 
     try {
-        const auto session = client->session_repository->load_auth_session();
+        const auto session = client->session_repository->load_auth_session(provider, subject_id);
         if (!session.has_value()) {
             g_last_saved_provider.clear();
             g_last_saved_subject_id.clear();
@@ -170,12 +173,10 @@ cauth_result_t cauth_session_list_saved(cauth_client_t* client,
 
     out_sessions->sessions = nullptr;
     out_sessions->count = 0;
-    out_sessions->active_index = -1;
 
     try {
         const auto sessions =
             account_representatives(client->session_repository->list_auth_sessions());
-        const auto active = client->session_repository->active_auth_session_key();
 
         g_last_session_list_storage.clear();
         g_last_session_list_records.clear();
@@ -201,51 +202,12 @@ cauth_result_t cauth_session_list_saved(cauth_client_t* client,
             record.has_access_token = session.access_token.empty() ? 0 : 1;
             record.created_at_unix_seconds = created_at_seconds(session);
 
-            if (active.has_value() &&
-                cauth::core::session::matches_session(session, *active)) {
-                out_sessions->active_index =
-                    static_cast<long long>(g_last_session_list_records.size());
-            }
             g_last_session_list_records.push_back(record);
         }
 
         out_sessions->sessions = g_last_session_list_records.data();
         out_sessions->count =
             static_cast<unsigned long long>(g_last_session_list_records.size());
-        return CAUTH_OK;
-    } catch (...) {
-        return CAUTH_ERROR_INTERNAL;
-    }
-}
-
-cauth_result_t cauth_session_set_active(cauth_client_t* client,
-                                        const char* provider,
-                                        const char* subject_id) {
-    if (client == nullptr || provider == nullptr || subject_id == nullptr) {
-        return CAUTH_ERROR_INVALID_ARGUMENT;
-    }
-
-    try {
-        return client->session_repository->set_active_auth_session(provider, subject_id)
-                   ? CAUTH_OK
-                   : CAUTH_ERROR_INVALID_ARGUMENT;
-    } catch (...) {
-        return CAUTH_ERROR_INTERNAL;
-    }
-}
-
-cauth_result_t cauth_session_clear_saved(cauth_client_t* client) {
-    if (client == nullptr) {
-        return CAUTH_ERROR_INVALID_ARGUMENT;
-    }
-
-    try {
-        client->session_repository->clear_auth_session();
-        g_last_saved_provider.clear();
-        g_last_saved_subject_id.clear();
-        g_last_saved_account_name.clear();
-        g_last_saved_refresh_token.clear();
-        g_last_saved_access_token.clear();
         return CAUTH_OK;
     } catch (...) {
         return CAUTH_ERROR_INTERNAL;

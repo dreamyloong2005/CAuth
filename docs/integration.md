@@ -22,11 +22,11 @@ Use the smallest set that matches your product:
 - `cauth_core`
   - secure storage/session substrate only
   - reusable auth/session infrastructure for future providers
-  - multi-account repository and active-account pointer
+  - multi-account repository keyed by `provider + subject_id`
 - `cauth_core + cauth_steam_auth`
   - Steam login
   - saved session restore
-  - saved account list / switch / clear
+  - saved account list / explicit lookup / clear
   - Steam Guard continuation
   - CM probe/logon/auth flows
 - `cauth_core + cauth_steam_auth + cauth_steam_depot`
@@ -165,26 +165,26 @@ other foreign-function integration.
 
 ## Account Selection
 
-CAuth separates saved accounts from the active account pointer. Product code should make account
-selection explicit:
+CAuth has no global account selector. Product code owns account selection and passes the selected
+subject into operations:
 
 1. authenticate through `steam_auth`
 2. list saved accounts
-3. let the user choose the active account when more than one exists
-4. run depot or cloud work after the active account is correct
+3. let the user choose an account when more than one exists
+4. run depot or cloud work with that account's SteamID
 
 Desktop CLI equivalents:
 
 ```powershell
 .\build\windows-msvc-debug\cauth.exe steam auth accounts
-.\build\windows-msvc-debug\cauth.exe steam auth use --steam-id 7656119...
+.\build\windows-msvc-debug\cauth.exe steam auth whoami --steam-id 7656119...
 ```
 
 Android API equivalents:
 
 ```kotlin
 val accounts = client.steamAuth().listSavedAccounts()
-client.steamAuth().useSavedAccount(steamId)
+val session = client.steamAuth().getSavedSession(steamId)
 ```
 
 See [accounts.md](accounts.md) for the repository model and cleanup commands.
@@ -197,18 +197,18 @@ After integrating, verify each layer independently.
 
 ```powershell
 .\build\windows-msvc-debug\cauth.exe steam auth status
-.\build\windows-msvc-debug\cauth.exe steam auth whoami
 .\build\windows-msvc-debug\cauth.exe steam auth accounts
+.\build\windows-msvc-debug\cauth.exe steam auth whoami --steam-id 7656119...
 .\build\windows-msvc-debug\cauth.exe steam auth cm probe --max-count 5
 ```
 
 ### Depot
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam depot branches --app-id 2868840 --max-count 10
-.\build\windows-msvc-debug\cauth.exe steam depot manifests --app-id 2868840 --branch public --max-count 10
-.\build\windows-msvc-debug\cauth.exe steam depot preflight --app-id 2868840 --branch public --max-count 10
-.\build\windows-msvc-debug\cauth.exe steam depot key --app-id 2868840 --depot-id 2868843 --max-count 10
+.\build\windows-msvc-debug\cauth.exe steam depot branches --steam-id 7656119... --app-id 2868840 --max-count 10
+.\build\windows-msvc-debug\cauth.exe steam depot manifests --steam-id 7656119... --app-id 2868840 --branch public --max-count 10
+.\build\windows-msvc-debug\cauth.exe steam depot preflight --steam-id 7656119... --app-id 2868840 --branch public --max-count 10
+.\build\windows-msvc-debug\cauth.exe steam depot key --steam-id 7656119... --app-id 2868840 --depot-id 2868843 --max-count 10
 ```
 
 If you already have a manifest and depot key:
@@ -221,10 +221,10 @@ If you already have a manifest and depot key:
 ### Cloud
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam cloud list --app-id 2868840 --remote-root savegames
-.\build\windows-msvc-debug\cauth.exe steam cloud verify --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames
-.\build\windows-msvc-debug\cauth.exe steam cloud pull --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --dry-run
-.\build\windows-msvc-debug\cauth.exe steam cloud push --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --dry-run
+.\build\windows-msvc-debug\cauth.exe steam cloud list --steam-id 7656119... --app-id 2868840 --remote-root savegames
+.\build\windows-msvc-debug\cauth.exe steam cloud verify --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames
+.\build\windows-msvc-debug\cauth.exe steam cloud pull --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --dry-run
+.\build\windows-msvc-debug\cauth.exe steam cloud push --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --dry-run
 ```
 
 ## Android Integration
@@ -321,11 +321,12 @@ suspend fun inspect(client: CAuthClient) {
     val depot = client.steamDepot()
     val cloud = client.steamCloud()
 
-    val session = auth.getSavedSession()
+    val steamId = 76561198000000000L
+    val session = auth.getSavedSession(steamId)
     val accounts = auth.listSavedAccounts()
-    val branches = depot.fetchBranches(appId = 2868840)
+    val branches = depot.fetchBranches(steamId = steamId, appId = 2868840)
     val files = cloud.listRemoteFiles(
-        SteamCloudRequest(appId = 2868840, remoteRoot = "savegames"),
+        SteamCloudRequest(appId = 2868840, steamId = steamId, remoteRoot = "savegames"),
         count = 20,
     )
 }
@@ -337,7 +338,7 @@ When integrating into your own product, keep the rollout narrow:
 
 1. `core`
 2. `steam_auth`
-3. saved-account selection and active-account restore
+3. saved-account selection and explicit subject-id persistence in your product
 4. `steam_depot` or `steam_cloud`
 5. your own host-side orchestration and UI polish
 

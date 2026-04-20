@@ -22,6 +22,7 @@ typedef enum cauth_steam_cloud_conflict_policy {
 
 typedef struct cauth_steam_cloud_request {
     unsigned int app_id;
+    unsigned long long steam_id;
     const char* access_token;
     const char* local_root;
     const char* remote_root;

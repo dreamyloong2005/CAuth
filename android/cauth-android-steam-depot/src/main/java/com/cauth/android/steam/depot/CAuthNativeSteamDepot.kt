@@ -9,6 +9,7 @@ internal object CAuthNativeSteamDepot {
     @JvmStatic
     external fun nativeFetchDepotBranches(
         handle: Long,
+        steamId: Long,
         appId: Int,
         maxCount: Int,
     ): AppBranchListSnapshot
@@ -16,6 +17,7 @@ internal object CAuthNativeSteamDepot {
     @JvmStatic
     external fun nativeFetchDepotManifests(
         handle: Long,
+        steamId: Long,
         appId: Int,
         branch: String?,
         maxCount: Int,
@@ -24,6 +26,7 @@ internal object CAuthNativeSteamDepot {
     @JvmStatic
     external fun nativeFetchDepotPreflight(
         handle: Long,
+        steamId: Long,
         appId: Int,
         branch: String?,
         maxCount: Int,
@@ -32,6 +35,7 @@ internal object CAuthNativeSteamDepot {
     @JvmStatic
     external fun nativeFetchDepotKey(
         handle: Long,
+        steamId: Long,
         appId: Int,
         depotId: Int,
         maxCount: Int,
@@ -40,6 +44,7 @@ internal object CAuthNativeSteamDepot {
     @JvmStatic
     external fun nativeFetchManifestRequestCode(
         handle: Long,
+        steamId: Long,
         appId: Int,
         depotId: Int,
         manifestGid: Long,

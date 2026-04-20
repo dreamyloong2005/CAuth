@@ -4,10 +4,13 @@
 #include "steam/cm/cm_message.hpp"
 #include "steam/cm/cm_session.hpp"
 #include "steam/cm/websocket_transport.hpp"
+#include "steam/auth/steam_session_identity.hpp"
 #include "steam/depot/app_info.hpp"
 #include "steam/depot/pics.hpp"
 
 #include <utility>
+#include <optional>
+#include <string>
 
 namespace cauth::steam::auth {
 namespace {
@@ -25,6 +28,7 @@ std::optional<cauth::core::cm::CmServerListResult> load_servers(
 }
 
 int run_logon_or_app_info(const cauth::core::cm::CmServerQuery& query,
+                          std::uint64_t steam_id,
                           std::optional<std::uint32_t> app_id,
                           bool debug_app_info,
                           std::ostream& out,
@@ -33,9 +37,11 @@ int run_logon_or_app_info(const cauth::core::cm::CmServerQuery& query,
     if (!result.has_value()) return 1;
 
     const auto store = cauth::core::platform::make_platform_session_repository();
-    auto session = store->load_auth_session();
+    auto session = steam_id == 0
+                       ? std::nullopt
+                       : store->load_auth_session(kSteamAuthProvider, std::to_string(steam_id));
     if (!session.has_value()) {
-        err << "Steam auth: not signed in\n";
+        err << "Steam auth: account not found; pass --steam-id <id>\n";
         return 1;
     }
     if (session->refresh_token.empty()) {
@@ -237,17 +243,19 @@ int run_cm_probe(const cauth::core::cm::CmServerQuery& query,
 }
 
 int run_cm_logon(const cauth::core::cm::CmServerQuery& query,
+                 std::uint64_t steam_id,
                  std::ostream& out,
                  std::ostream& err) {
-    return run_logon_or_app_info(query, std::nullopt, false, out, err);
+    return run_logon_or_app_info(query, steam_id, std::nullopt, false, out, err);
 }
 
 int run_cm_app_info(const cauth::core::cm::CmServerQuery& query,
+                    std::uint64_t steam_id,
                     std::uint32_t app_id,
                     bool debug_app_info,
                     std::ostream& out,
                     std::ostream& err) {
-    return run_logon_or_app_info(query, app_id, debug_app_info, out, err);
+    return run_logon_or_app_info(query, steam_id, app_id, debug_app_info, out, err);
 }
 
 } // namespace cauth::steam::auth

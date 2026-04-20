@@ -25,6 +25,7 @@ enum class SteamCloudConflictPolicy(val nativeValue: Int) {
 
 data class SteamCloudRequest(
     val appId: Int,
+    val steamId: Long,
     val accessToken: String? = null,
     val localRoot: String? = null,
     val remoteRoot: String? = null,

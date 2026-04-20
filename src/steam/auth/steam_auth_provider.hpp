@@ -5,6 +5,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace cauth::steam::auth {
 
@@ -18,14 +19,14 @@ class SteamAuthProvider {
   public:
     virtual ~SteamAuthProvider() = default;
 
-    virtual SteamAuthSessionLoadResult load_auth_session() const = 0;
+    virtual SteamAuthSessionLoadResult load_auth_session(std::string_view subject_id) const = 0;
 };
 
 class StoredSteamAuthProvider final : public SteamAuthProvider {
   public:
     explicit StoredSteamAuthProvider(cauth::core::session::SessionRepository& repository);
 
-    SteamAuthSessionLoadResult load_auth_session() const override;
+    SteamAuthSessionLoadResult load_auth_session(std::string_view subject_id) const override;
 
   private:
     cauth::core::session::SessionRepository* repository_;

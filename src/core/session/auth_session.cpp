@@ -94,13 +94,6 @@ std::optional<std::uint64_t> parse_numeric_subject_id(const AuthSession& session
     return value;
 }
 
-std::optional<AuthSession> active_auth_session(const AuthSessionRepositoryState& state) {
-    if (!state.active.has_value()) {
-        return std::nullopt;
-    }
-    return find_auth_session(state, *state.active);
-}
-
 std::optional<AuthSession> find_auth_session(const AuthSessionRepositoryState& state,
                                              const AuthSessionKey& key) {
     std::optional<AuthSession> selected;
@@ -115,14 +108,11 @@ std::optional<AuthSession> find_auth_session(const AuthSessionRepositoryState& s
     return selected;
 }
 
-void upsert_auth_session(AuthSessionRepositoryState& state,
-                         const AuthSession& session,
-                         bool make_active) {
+void upsert_auth_session(AuthSessionRepositoryState& state, const AuthSession& session) {
     if (!is_valid(session)) {
         return;
     }
 
-    const auto key = session_key(session);
     const auto found = std::find_if(
         state.sessions.begin(),
         state.sessions.end(),
@@ -132,19 +122,6 @@ void upsert_auth_session(AuthSessionRepositoryState& state,
     } else {
         *found = session;
     }
-
-    if (make_active) {
-        state.active = key;
-    }
-}
-
-bool set_active_auth_session(AuthSessionRepositoryState& state, const AuthSessionKey& key) {
-    auto session = find_auth_session(state, key);
-    if (!is_valid(key) || !session.has_value()) {
-        return false;
-    }
-    state.active = key;
-    return true;
 }
 
 bool remove_auth_session(AuthSessionRepositoryState& state, const AuthSessionKey& key) {
@@ -159,10 +136,6 @@ bool remove_auth_session(AuthSessionRepositoryState& state, const AuthSessionKey
         return false;
     }
 
-    if (state.active.has_value() && state.active->provider == key.provider &&
-        state.active->subject_id == key.subject_id) {
-        state.active.reset();
-    }
     normalize_auth_session_repository_state(state);
     return true;
 }
@@ -170,11 +143,7 @@ bool remove_auth_session(AuthSessionRepositoryState& state, const AuthSessionKey
 void normalize_auth_session_repository_state(AuthSessionRepositoryState& state) {
     AuthSessionRepositoryState normalized;
     for (const auto& session : state.sessions) {
-        upsert_auth_session(normalized, session, false);
-    }
-
-    if (state.active.has_value() && find_auth_session(normalized, *state.active).has_value()) {
-        normalized.active = state.active;
+        upsert_auth_session(normalized, session);
     }
 
     state = std::move(normalized);

@@ -74,6 +74,13 @@ fun CAuthSteamAuthForm(
             singleLine = true,
         )
         OutlinedTextField(
+            value = state.steamId,
+            onValueChange = controller::setSteamId,
+            label = { Text("SteamID for saved operations") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+        OutlinedTextField(
             value = state.deviceName,
             onValueChange = controller::setDeviceName,
             label = { Text("Device name") },
@@ -267,11 +274,11 @@ fun CAuthSteamAuthResults(
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         Text(
-                            "${if (account.active) "*" else "-"} ${account.accountName ?: "(none)"} steamId=${account.steamId}",
+                            "${account.accountName ?: "(none)"} steamId=${account.steamId}",
                             style = MaterialTheme.typography.bodySmall,
                         )
-                        Button(onClick = { controller.useSavedAccount(account.steamId) }) {
-                            Text("Use")
+                        Button(onClick = { controller.selectSavedAccount(account.steamId) }) {
+                            Text("Select")
                         }
                     }
                 }

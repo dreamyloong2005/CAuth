@@ -49,7 +49,7 @@ int main() {
         auto argv = make_argv(args);
         const auto exit_code = cauth::cli::run_cli(static_cast<int>(argv.size()), argv.data(), out, err);
         if (expect_true(exit_code == 0, "version command should succeed") != 0) return 1;
-        if (expect_true(contains(out.str(), "CAuth 0.2.0"), "version output should include semantic version") != 0) return 1;
+        if (expect_true(contains(out.str(), "CAuth 0.3.0"), "version output should include semantic version") != 0) return 1;
         if (expect_true(err.str().empty(), "version command should not write stderr") != 0) return 1;
     }
 
@@ -139,7 +139,8 @@ int main() {
         std::ostringstream captured_err;
         ScopedStreamRedirect redirect_out(std::cout, captured_out.rdbuf());
         ScopedStreamRedirect redirect_err(std::cerr, captured_err.rdbuf());
-        std::vector<std::string> args = {"cauth", "steam", "depot", "key", "--app-id", "440"};
+        std::vector<std::string> args = {
+            "cauth", "steam", "depot", "key", "--steam-id", "76561198000000000", "--app-id", "440"};
         auto argv = make_argv(args);
         const auto exit_code = cauth::cli::run_steam_depot(static_cast<int>(argv.size()) - 1, argv.data() + 1);
         if (expect_true(exit_code == 2, "depot key without depot-id should be rejected") != 0) return 1;
@@ -187,7 +188,8 @@ int main() {
         std::ostringstream captured_err;
         ScopedStreamRedirect redirect_out(std::cout, captured_out.rdbuf());
         ScopedStreamRedirect redirect_err(std::cerr, captured_err.rdbuf());
-        std::vector<std::string> args = {"cauth", "steam", "cloud", "verify", "--app-id", "440"};
+        std::vector<std::string> args = {
+            "cauth", "steam", "cloud", "verify", "--steam-id", "76561198000000000", "--app-id", "440"};
         auto argv = make_argv(args);
         const auto exit_code = cauth::cli::run_steam_cloud(static_cast<int>(argv.size()) - 1, argv.data() + 1);
         if (expect_true(exit_code == 2, "steam cloud verify without local-root should be rejected") != 0) return 1;
@@ -199,7 +201,8 @@ int main() {
         std::ostringstream captured_err;
         ScopedStreamRedirect redirect_out(std::cout, captured_out.rdbuf());
         ScopedStreamRedirect redirect_err(std::cerr, captured_err.rdbuf());
-        std::vector<std::string> args = {"cauth", "steam", "cloud", "pull", "--app-id", "440"};
+        std::vector<std::string> args = {
+            "cauth", "steam", "cloud", "pull", "--steam-id", "76561198000000000", "--app-id", "440"};
         auto argv = make_argv(args);
         const auto exit_code = cauth::cli::run_steam_cloud(static_cast<int>(argv.size()) - 1, argv.data() + 1);
         if (expect_true(exit_code == 2, "steam cloud pull without local-root should be rejected") != 0) return 1;

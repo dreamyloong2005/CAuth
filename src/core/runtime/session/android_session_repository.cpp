@@ -17,18 +17,6 @@ void AndroidSessionRepository::save_auth_session(const session::AuthSession& ses
     save_repository_state(state);
 }
 
-std::optional<session::AuthSession> AndroidSessionRepository::load_auth_session() const {
-    return session::active_auth_session(load_repository_state());
-}
-
-void AndroidSessionRepository::clear_auth_session() {
-    auto state = load_repository_state();
-    if (state.active.has_value()) {
-        session::remove_auth_session(state, *state.active);
-        save_repository_state(state);
-    }
-}
-
 std::vector<session::AuthSession> AndroidSessionRepository::list_auth_sessions() const {
     return load_repository_state().sessions;
 }
@@ -38,22 +26,6 @@ std::optional<session::AuthSession> AndroidSessionRepository::load_auth_session(
     return session::find_auth_session(
         load_repository_state(),
         session::AuthSessionKey{std::string(provider), std::string(subject_id)});
-}
-
-std::optional<session::AuthSessionKey> AndroidSessionRepository::active_auth_session_key() const {
-    return load_repository_state().active;
-}
-
-bool AndroidSessionRepository::set_active_auth_session(std::string_view provider,
-                                                       std::string_view subject_id) {
-    auto state = load_repository_state();
-    const auto changed = session::set_active_auth_session(
-        state,
-        session::AuthSessionKey{std::string(provider), std::string(subject_id)});
-    if (changed) {
-        save_repository_state(state);
-    }
-    return changed;
 }
 
 void AndroidSessionRepository::clear_auth_session(std::string_view provider,

@@ -74,7 +74,7 @@ path like:
 .\build\windows-msvc-debug\cauth.exe steam auth status
 ```
 
-`--version` should print the current native version, for example `CAuth 0.2.0`. If `doctor` and
+`--version` should print the current native version, for example `CAuth 0.3.0`. If `doctor` and
 `--version` work, the desktop toolchain is in decent shape.
 
 ## Steam auth quick test
@@ -95,17 +95,13 @@ Then verify the saved session:
 
 ```powershell
 .\build\windows-msvc-debug\cauth.exe steam auth status
-.\build\windows-msvc-debug\cauth.exe steam auth whoami
 .\build\windows-msvc-debug\cauth.exe steam auth accounts
-.\build\windows-msvc-debug\cauth.exe steam auth token-info
+.\build\windows-msvc-debug\cauth.exe steam auth whoami --steam-id 7656119...
+.\build\windows-msvc-debug\cauth.exe steam auth token-info --steam-id 7656119...
 ```
 
-If you sign in with more than one Steam account, choose the active account before running depot or
-cloud commands:
-
-```powershell
-.\build\windows-msvc-debug\cauth.exe steam auth use --steam-id 7656119...
-```
+Depot, cloud, and authenticated CM commands do not use hidden global account state. Pass the
+desired SteamID with `--steam-id <id>`.
 
 ## Android example app
 
@@ -128,7 +124,7 @@ The example app is a real diagnostic console for auth, depot, and cloud, not jus
 ## Where to go next
 
 - [testing.md](testing.md) for a full validation checklist
-- [accounts.md](accounts.md) for saved accounts and active-account behavior
+- [accounts.md](accounts.md) for saved accounts and explicit subject-id behavior
 - [versioning.md](versioning.md) for release and version bump rules
 - [integration.md](integration.md) for native and Android consumption
 - [steam-depot.md](steam-depot.md) for depot workflow details

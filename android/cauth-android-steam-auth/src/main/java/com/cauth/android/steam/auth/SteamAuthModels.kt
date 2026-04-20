@@ -52,7 +52,6 @@ data class SavedSessionSnapshot(
 )
 
 data class SavedAccountSnapshot(
-    val active: Boolean,
     val steamId: Long,
     val accountName: String?,
     val hasRefreshToken: Boolean,

@@ -8,23 +8,27 @@ class CAuthSteamDepotApi(
     private val client: CAuthClient,
 ) {
     suspend fun fetchBranches(
+        steamId: Long,
         appId: Int,
         maxCount: Int = 20,
     ): AppBranchListSnapshot = withContext(Dispatchers.IO) {
         CAuthNativeSteamDepot.nativeFetchDepotBranches(
             handle = client.requireNativeHandle(),
+            steamId = steamId,
             appId = appId,
             maxCount = maxCount,
         )
     }
 
     suspend fun fetchManifests(
+        steamId: Long,
         appId: Int,
         branch: String = "public",
         maxCount: Int = 20,
     ): DepotManifestListSnapshot = withContext(Dispatchers.IO) {
         CAuthNativeSteamDepot.nativeFetchDepotManifests(
             handle = client.requireNativeHandle(),
+            steamId = steamId,
             appId = appId,
             branch = branch,
             maxCount = maxCount,
@@ -32,12 +36,14 @@ class CAuthSteamDepotApi(
     }
 
     suspend fun fetchPreflight(
+        steamId: Long,
         appId: Int,
         branch: String = "public",
         maxCount: Int = 20,
     ): DepotPreflightSnapshot = withContext(Dispatchers.IO) {
         CAuthNativeSteamDepot.nativeFetchDepotPreflight(
             handle = client.requireNativeHandle(),
+            steamId = steamId,
             appId = appId,
             branch = branch,
             maxCount = maxCount,
@@ -45,12 +51,14 @@ class CAuthSteamDepotApi(
     }
 
     suspend fun fetchDepotKey(
+        steamId: Long,
         appId: Int,
         depotId: Int,
         maxCount: Int = 20,
     ): DepotKeySnapshot = withContext(Dispatchers.IO) {
         CAuthNativeSteamDepot.nativeFetchDepotKey(
             handle = client.requireNativeHandle(),
+            steamId = steamId,
             appId = appId,
             depotId = depotId,
             maxCount = maxCount,
@@ -58,6 +66,7 @@ class CAuthSteamDepotApi(
     }
 
     suspend fun fetchManifestRequestCode(
+        steamId: Long,
         appId: Int,
         depotId: Int,
         manifestGid: Long,
@@ -67,6 +76,7 @@ class CAuthSteamDepotApi(
     ): ManifestRequestCodeSnapshot = withContext(Dispatchers.IO) {
         CAuthNativeSteamDepot.nativeFetchManifestRequestCode(
             handle = client.requireNativeHandle(),
+            steamId = steamId,
             appId = appId,
             depotId = depotId,
             manifestGid = manifestGid,

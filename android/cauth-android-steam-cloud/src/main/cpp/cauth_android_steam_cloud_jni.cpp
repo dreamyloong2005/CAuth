@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -46,6 +47,7 @@ enum class CloudTransferTaskKind : jint {
 
 struct CloudTransferRequestParams {
     unsigned int app_id = 0;
+    unsigned long long steam_id = 0;
     std::string access_token;
     std::string local_root;
     std::string remote_root;
@@ -199,11 +201,13 @@ cauth_steam_cloud_request_t make_request(const char* access_token,
                                          const char* local_root,
                                          const char* remote_root,
                                          jint app_id,
+                                         jlong steam_id,
                                          jboolean dry_run,
                                          jboolean delete_remote_orphans,
                                          jint conflict_policy) {
     cauth_steam_cloud_request_t request{};
     request.app_id = static_cast<unsigned int>(app_id);
+    request.steam_id = static_cast<unsigned long long>(steam_id);
     request.access_token = access_token;
     request.local_root = local_root;
     request.remote_root = remote_root;
@@ -215,6 +219,7 @@ cauth_steam_cloud_request_t make_request(const char* access_token,
 
 CloudTransferRequestParams make_request_params(JNIEnv* env,
                                                jint app_id,
+                                               jlong steam_id,
                                                jstring access_token,
                                                jstring local_root,
                                                jstring remote_root,
@@ -223,6 +228,7 @@ CloudTransferRequestParams make_request_params(JNIEnv* env,
                                                jint conflict_policy) {
     CloudTransferRequestParams params;
     params.app_id = static_cast<unsigned int>(app_id);
+    params.steam_id = static_cast<unsigned long long>(steam_id);
     params.access_token = copy_jstring(env, access_token);
     params.local_root = copy_jstring(env, local_root);
     params.remote_root = copy_jstring(env, remote_root);
@@ -240,6 +246,7 @@ cauth::steam::cloud::SteamCloudRequest build_native_request(cauth_client_t* clie
 
     cauth::steam::cloud::SteamCloudRequest native_request;
     native_request.app_id = params.app_id;
+    native_request.steam_id = params.steam_id;
     native_request.access_token = params.access_token;
     native_request.local_root = params.local_root;
     native_request.remote_root = params.remote_root;
@@ -248,9 +255,12 @@ cauth::steam::cloud::SteamCloudRequest build_native_request(cauth_client_t* clie
     native_request.conflict_policy = from_ffi_conflict_policy(params.conflict_policy);
     native_request.backend = cauth::steam::cloud::SteamCloudBackend::Auto;
 
-    if (native_request.access_token.empty() || native_request.refresh_token.empty() ||
-        native_request.steam_id == 0) {
-        const auto session = client->session_repository->load_auth_session();
+    if (native_request.access_token.empty() || native_request.refresh_token.empty()) {
+        const auto session = native_request.steam_id == 0
+                                 ? std::nullopt
+                                 : client->session_repository->load_auth_session(
+                                       "steam",
+                                       std::to_string(native_request.steam_id));
         if (session.has_value()) {
             if (native_request.access_token.empty()) {
                 native_request.access_token = session->access_token;
@@ -260,10 +270,6 @@ cauth::steam::cloud::SteamCloudRequest build_native_request(cauth_client_t* clie
             }
             if (native_request.session_type.empty()) {
                 native_request.session_type = session->session_type;
-            }
-            if (native_request.steam_id == 0) {
-                native_request.steam_id =
-                    cauth::core::session::parse_numeric_subject_id(*session).value_or(0);
             }
         }
     }
@@ -587,6 +593,7 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeListRemoteFiles(
     jclass,
     jlong handle,
     jint app_id,
+    jlong steam_id,
     jstring access_token,
     jstring local_root,
     jstring remote_root,
@@ -604,7 +611,7 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeListRemoteFiles(
         remote_root == nullptr ? nullptr : env->GetStringUTFChars(remote_root, nullptr);
 
     const auto request = make_request(access_token_chars, local_root_chars, remote_root_chars,
-                                      app_id, dry_run, delete_remote_orphans, conflict_policy);
+                                      app_id, steam_id, dry_run, delete_remote_orphans, conflict_policy);
     cauth_steam_cloud_file_list_t result{};
     const cauth_result_t native_result = cauth_steam_cloud_list_remote_files(
         client_from_handle(handle), &request, static_cast<unsigned int>(count),
@@ -633,6 +640,7 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativePull(
     jclass,
     jlong handle,
     jint app_id,
+    jlong steam_id,
     jstring access_token,
     jstring local_root,
     jstring remote_root,
@@ -647,7 +655,7 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativePull(
         remote_root == nullptr ? nullptr : env->GetStringUTFChars(remote_root, nullptr);
 
     const auto request = make_request(access_token_chars, local_root_chars, remote_root_chars,
-                                      app_id, dry_run, delete_remote_orphans, conflict_policy);
+                                      app_id, steam_id, dry_run, delete_remote_orphans, conflict_policy);
     cauth_steam_cloud_result_t result{};
     const cauth_result_t native_result =
         cauth_steam_cloud_pull(client_from_handle(handle), &request, &result);
@@ -675,6 +683,7 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativePush(
     jclass,
     jlong handle,
     jint app_id,
+    jlong steam_id,
     jstring access_token,
     jstring local_root,
     jstring remote_root,
@@ -689,7 +698,7 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativePush(
         remote_root == nullptr ? nullptr : env->GetStringUTFChars(remote_root, nullptr);
 
     const auto request = make_request(access_token_chars, local_root_chars, remote_root_chars,
-                                      app_id, dry_run, delete_remote_orphans, conflict_policy);
+                                      app_id, steam_id, dry_run, delete_remote_orphans, conflict_policy);
     cauth_steam_cloud_result_t result{};
     const cauth_result_t native_result =
         cauth_steam_cloud_push(client_from_handle(handle), &request, &result);
@@ -717,6 +726,7 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeVerifyLocalFiles(
     jclass,
     jlong handle,
     jint app_id,
+    jlong steam_id,
     jstring access_token,
     jstring local_root,
     jstring remote_root,
@@ -732,7 +742,7 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeVerifyLocalFiles(
         remote_root == nullptr ? nullptr : env->GetStringUTFChars(remote_root, nullptr);
 
     const auto request = make_request(access_token_chars, local_root_chars, remote_root_chars,
-                                      app_id, dry_run, delete_remote_orphans, conflict_policy);
+                                      app_id, steam_id, dry_run, delete_remote_orphans, conflict_policy);
     cauth_steam_cloud_verify_report_t result{};
     const cauth_result_t native_result = cauth_steam_cloud_verify_local_files(
         client_from_handle(handle), &request, include_extra_local ? 1 : 0, &result);
@@ -760,19 +770,20 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeStartPull(
     jclass,
     jlong handle,
     jint app_id,
+    jlong steam_id,
     jstring access_token,
     jstring local_root,
     jstring remote_root,
     jboolean dry_run,
     jboolean delete_remote_orphans,
     jint conflict_policy) {
-    if (handle == 0 || app_id <= 0) {
+    if (handle == 0 || app_id <= 0 || steam_id <= 0) {
         env->ThrowNew(env->FindClass(kIllegalStateException), "Cloud pull start failed: invalid argument");
         return 0;
     }
 
     const auto params = make_request_params(
-        env, app_id, access_token, local_root, remote_root, dry_run, delete_remote_orphans, conflict_policy);
+        env, app_id, steam_id, access_token, local_root, remote_root, dry_run, delete_remote_orphans, conflict_policy);
     const auto task = std::make_shared<CloudTransferTask>(CloudTransferTaskKind::Pull);
     const jlong task_handle = g_next_transfer_task_handle.fetch_add(1);
     {
@@ -791,19 +802,20 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeStartPush(
     jclass,
     jlong handle,
     jint app_id,
+    jlong steam_id,
     jstring access_token,
     jstring local_root,
     jstring remote_root,
     jboolean dry_run,
     jboolean delete_remote_orphans,
     jint conflict_policy) {
-    if (handle == 0 || app_id <= 0) {
+    if (handle == 0 || app_id <= 0 || steam_id <= 0) {
         env->ThrowNew(env->FindClass(kIllegalStateException), "Cloud push start failed: invalid argument");
         return 0;
     }
 
     const auto params = make_request_params(
-        env, app_id, access_token, local_root, remote_root, dry_run, delete_remote_orphans, conflict_policy);
+        env, app_id, steam_id, access_token, local_root, remote_root, dry_run, delete_remote_orphans, conflict_policy);
     const auto task = std::make_shared<CloudTransferTask>(CloudTransferTaskKind::Push);
     const jlong task_handle = g_next_transfer_task_handle.fetch_add(1);
     {

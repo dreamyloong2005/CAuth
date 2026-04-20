@@ -26,7 +26,7 @@ $cauth = ".\\build\\windows-msvc-debug\\cauth.exe"
 Expected version output for the current development line:
 
 ```text
-CAuth 0.2.0
+CAuth 0.3.0
 ```
 
 ## 2. Steam auth
@@ -51,18 +51,13 @@ Expected result:
 
 ```powershell
 & $cauth steam auth status
-& $cauth steam auth whoami
 & $cauth steam auth accounts
-& $cauth steam auth token-info
-& $cauth steam auth web-cookies
+& $cauth steam auth whoami --steam-id 7656119...
+& $cauth steam auth token-info --steam-id 7656119...
+& $cauth steam auth web-cookies --steam-id 7656119...
 ```
 
-If more than one account is saved, switch the active account before testing depot or cloud:
-
-```powershell
-& $cauth steam auth use --steam-id 7656119...
-& $cauth steam auth status
-```
+Use the same SteamID in depot, cloud, and authenticated CM commands.
 
 To remove test accounts:
 
@@ -88,8 +83,8 @@ Remove-Variable password
 ```powershell
 & $cauth steam auth cm servers --protocol websocket --max-count 10
 & $cauth steam auth cm probe --max-count 10
-& $cauth steam auth cm logon --max-count 10
-& $cauth steam auth cm app-info --app-id 2868840 --max-count 10
+& $cauth steam auth cm logon --steam-id 7656119... --max-count 10
+& $cauth steam auth cm app-info --steam-id 7656119... --app-id 2868840 --max-count 10
 ```
 
 `cm app-info` is also the quickest way to confirm that appinfo decoding and CM message handling are
@@ -103,9 +98,9 @@ Start from an app that you own and that exposes depots on your account. Example 
 ### Discover branches and manifests
 
 ```powershell
-& $cauth steam depot branches --app-id 2868840 --max-count 20
-& $cauth steam depot manifests --app-id 2868840 --branch public --max-count 20
-& $cauth steam depot preflight --app-id 2868840 --branch public --max-count 20
+& $cauth steam depot branches --steam-id 7656119... --app-id 2868840 --max-count 20
+& $cauth steam depot manifests --steam-id 7656119... --app-id 2868840 --branch public --max-count 20
+& $cauth steam depot preflight --steam-id 7656119... --app-id 2868840 --branch public --max-count 20
 ```
 
 Expected result:
@@ -121,8 +116,8 @@ Prefer a depot that matches your target platform, for example `platform=windows`
 Replace `<depot_id>` and `<manifest_gid>` with values from `preflight`.
 
 ```powershell
-& $cauth steam depot key --app-id 2868840 --depot-id <depot_id> --max-count 20
-& $cauth steam depot manifest-code --app-id 2868840 --depot-id <depot_id> --manifest-gid <manifest_gid> --branch public --max-count 20
+& $cauth steam depot key --steam-id 7656119... --app-id 2868840 --depot-id <depot_id> --max-count 20
+& $cauth steam depot manifest-code --steam-id 7656119... --app-id 2868840 --depot-id <depot_id> --manifest-gid <manifest_gid> --branch public --max-count 20
 ```
 
 ### Download and inspect the manifest
@@ -153,28 +148,29 @@ Use `--backend auto` first. If you are diagnosing auth material directly, try `-
 ### List and verify
 
 ```powershell
-& $cauth steam cloud list --app-id 2868840 --remote-root savegames --backend auto
-& $cauth steam cloud verify --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --backend auto
+& $cauth steam cloud list --steam-id 7656119... --app-id 2868840 --remote-root savegames --backend auto
+& $cauth steam cloud verify --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --backend auto
 ```
 
 ### Dry-run pull and push
 
 ```powershell
-& $cauth steam cloud pull --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --backend auto --dry-run
-& $cauth steam cloud push --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --backend auto --dry-run
+& $cauth steam cloud pull --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --backend auto --dry-run
+& $cauth steam cloud push --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --backend auto --dry-run
 ```
 
 ### Real pull or push
 
 ```powershell
-& $cauth steam cloud pull --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --backend auto
-& $cauth steam cloud push --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --backend auto
+& $cauth steam cloud pull --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --backend auto
+& $cauth steam cloud push --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --backend auto
 ```
 
 If you want an orchestrated script run, use:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\steam-cloud-acceptance.ps1 `
+    -SteamId 7656119... `
     -AppId 2868840 `
     -LocalRoot .\build\slay2-sync `
     -RemoteRoot savegames `
@@ -192,8 +188,7 @@ adb logcat -s CAuthNative CAuthCompose
 
 Recommended Android validation sequence:
 
-1. auth page: login, saved-session reload, saved-account list, active-account switch, CM probe,
-   CM logon
+1. auth page: login, saved-session reload by SteamID, saved-account list, CM probe, CM logon
 2. depot page: run the manifest workflow, fetch key + code, download manifest, inspect files,
    download one file, verify local files
 3. cloud page: list, verify, dry-run pull/push, then real transfer if needed

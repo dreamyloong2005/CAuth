@@ -58,7 +58,8 @@ bool expect_session_round_trip(cauth::core::session::SessionRepository& store) {
     const auto session = make_session();
     store.save_auth_session(session);
 
-    const auto loaded = store.load_auth_session();
+    const auto loaded =
+        store.load_auth_session(cauth::steam::auth::kSteamAuthProvider, session.subject_id);
     if (!loaded.has_value()) {
         std::cerr << "saved session was not loaded\n";
         return false;
@@ -72,8 +73,8 @@ bool expect_session_round_trip(cauth::core::session::SessionRepository& store) {
         return false;
     }
 
-    store.clear_auth_session();
-    if (store.load_auth_session().has_value()) {
+    store.clear_auth_session(cauth::steam::auth::kSteamAuthProvider, session.subject_id);
+    if (store.load_auth_session(cauth::steam::auth::kSteamAuthProvider, session.subject_id).has_value()) {
         std::cerr << "cleared store should not contain a session\n";
         return false;
     }
@@ -99,12 +100,6 @@ bool expect_multi_account_repository(cauth::core::session::SessionRepository& st
         return false;
     }
 
-    auto active = store.load_auth_session();
-    if (!active.has_value() || active->subject_id != second.subject_id) {
-        std::cerr << "last saved account should become active\n";
-        return false;
-    }
-
     const auto loaded_first =
         store.load_auth_session(cauth::steam::auth::kSteamAuthProvider, first.subject_id);
     if (!loaded_first.has_value() || loaded_first->account_name != first.account_name ||
@@ -113,32 +108,31 @@ bool expect_multi_account_repository(cauth::core::session::SessionRepository& st
         return false;
     }
 
-    if (!store.set_active_auth_session(cauth::steam::auth::kSteamAuthProvider, first.subject_id)) {
-        std::cerr << "repository should switch active account by key\n";
-        return false;
-    }
-    active = store.load_auth_session();
-    if (!active.has_value() || active->subject_id != first.subject_id) {
-        std::cerr << "repository active account did not switch\n";
+    const auto loaded_second =
+        store.load_auth_session(cauth::steam::auth::kSteamAuthProvider, second.subject_id);
+    if (!loaded_second.has_value() || loaded_second->account_name != second.account_name ||
+        loaded_second->refresh_token != second.refresh_token) {
+        std::cerr << "repository should load a second saved account by key\n";
         return false;
     }
 
     store.clear_auth_session(cauth::steam::auth::kSteamAuthProvider, first.subject_id);
-    if (store.load_auth_session().has_value()) {
-        std::cerr << "removing the active account should clear the active pointer\n";
+    if (store.load_auth_session(cauth::steam::auth::kSteamAuthProvider, first.subject_id).has_value()) {
+        std::cerr << "removing one account should remove that explicit key\n";
         return false;
     }
     if (store.list_auth_sessions().size() != 1) {
         std::cerr << "removing one account should keep the remaining account\n";
         return false;
     }
-    if (!store.set_active_auth_session(cauth::steam::auth::kSteamAuthProvider, second.subject_id)) {
-        std::cerr << "remaining account should be selectable\n";
+    if (!store.load_auth_session(cauth::steam::auth::kSteamAuthProvider, second.subject_id).has_value()) {
+        std::cerr << "remaining account should still load by explicit key\n";
         return false;
     }
 
     store.clear_all_auth_sessions();
-    if (!store.list_auth_sessions().empty() || store.load_auth_session().has_value()) {
+    if (!store.list_auth_sessions().empty() ||
+        store.load_auth_session(cauth::steam::auth::kSteamAuthProvider, second.subject_id).has_value()) {
         std::cerr << "clear_all_auth_sessions should empty the repository\n";
         return false;
     }
@@ -151,7 +145,8 @@ bool expect_multi_account_repository(cauth::core::session::SessionRepository& st
 int main() {
     cauth::core::runtime::MemorySessionRepository store;
 
-    if (store.load_auth_session().has_value()) {
+    if (store.load_auth_session(cauth::steam::auth::kSteamAuthProvider, "76561198000000000")
+            .has_value()) {
         std::cerr << "new store should not contain a session\n";
         return 1;
     }
@@ -181,18 +176,14 @@ int main() {
         cauth::core::session::encode_auth_session_repository_state(state);
     const auto decoded_state =
         cauth::core::session::decode_auth_session_repository_state(encoded_state);
-    if (!decoded_state.has_value() || decoded_state->sessions.size() != 2 ||
-        !decoded_state->active.has_value() ||
-        decoded_state->active->subject_id != second_session.subject_id) {
+    if (!decoded_state.has_value() || decoded_state->sessions.size() != 2) {
         std::cerr << "repository state codec should round-trip multiple accounts\n";
         return 1;
     }
 
     const auto legacy_state =
         cauth::core::session::decode_auth_session_repository_state(encoded);
-    if (!legacy_state.has_value() || legacy_state->sessions.size() != 1 ||
-        !legacy_state->active.has_value() ||
-        legacy_state->active->subject_id != session.subject_id) {
+    if (!legacy_state.has_value() || legacy_state->sessions.size() != 1) {
         std::cerr << "repository state codec should migrate legacy single-session data\n";
         return 1;
     }
@@ -221,7 +212,7 @@ int main() {
 #ifdef _WIN32
     const auto temp_path = std::filesystem::temp_directory_path() / "cauth_credential_store_test.dpapi";
     cauth::core::runtime::WindowsSessionRepository windows_store{temp_path};
-    windows_store.clear_auth_session();
+    windows_store.clear_all_auth_sessions();
     if (!expect_session_round_trip(windows_store)) {
         return 1;
     }

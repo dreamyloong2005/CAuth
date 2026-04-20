@@ -35,7 +35,7 @@ int main() {
     cauth::core::runtime::MemorySessionRepository store;
     cauth::steam::auth::StoredSteamAuthProvider provider{store};
 
-    const auto empty = provider.load_auth_session();
+    const auto empty = provider.load_auth_session("76561198000000000");
     if (empty.ok || empty.session.has_value()) {
         std::cerr << "missing session should not load successfully\n";
         return 1;
@@ -43,7 +43,7 @@ int main() {
 
     auto session = make_session();
     store.save_auth_session(session);
-    const auto loaded = provider.load_auth_session();
+    const auto loaded = provider.load_auth_session(session.subject_id);
     if (!loaded.ok || !loaded.session.has_value()) {
         std::cerr << "valid saved session should load successfully\n";
         return 1;
@@ -67,7 +67,7 @@ int main() {
         std::chrono::system_clock::time_point{std::chrono::seconds{200}});
     store.save_auth_session(client_session);
     store.save_auth_session(web_session);
-    const auto selected_client = provider.load_auth_session();
+    const auto selected_client = provider.load_auth_session(client_session.subject_id);
     if (!selected_client.ok || !selected_client.session.has_value() ||
         selected_client.session->refresh_token != "client-refresh") {
         std::cerr << "Steam auth provider should prefer the steam-client session slot\n";
@@ -76,7 +76,7 @@ int main() {
 
     store.clear_all_auth_sessions();
     store.save_auth_session(web_session);
-    const auto web_only = provider.load_auth_session();
+    const auto web_only = provider.load_auth_session(web_session.subject_id);
     if (web_only.ok || web_only.session.has_value()) {
         std::cerr << "Steam auth provider should reject web-only sessions for CM/depot auth\n";
         return 1;
@@ -84,7 +84,7 @@ int main() {
 
     session.subject_id = "not-a-steam-id";
     store.save_auth_session(session);
-    const auto bad_subject = provider.load_auth_session();
+    const auto bad_subject = provider.load_auth_session(session.subject_id);
     if (bad_subject.ok || bad_subject.session.has_value()) {
         std::cerr << "session without a valid Steam subject should be rejected\n";
         return 1;

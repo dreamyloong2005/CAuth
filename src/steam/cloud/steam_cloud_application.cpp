@@ -438,7 +438,12 @@ void print_verify_result_summary(const SteamCloudVerifyResult& result, std::ostr
 SteamCloudRequest with_saved_auth_session(core::session::SessionRepository& store,
                                          const SteamCloudRequest& request) {
     auto effective = request;
-    const auto session = store.load_auth_session();
+    if (effective.steam_id == 0) {
+        return effective;
+    }
+    const auto session = store.load_auth_session(
+        cauth::steam::auth::kSteamAuthProvider,
+        std::to_string(effective.steam_id));
     if (session.has_value()) {
         const bool is_web_browser_session =
             session->session_type == cauth::steam::auth::kSteamSessionTypeWebBrowser;
@@ -1198,6 +1203,10 @@ int print_remote_files(core::session::SessionRepository& store,
                        bool extended_details,
                        std::ostream& out,
                        std::ostream& err) {
+    if (request.steam_id == 0) {
+        err << "Steam cloud: --steam-id <id> is required\n";
+        return 2;
+    }
     SteamCloudRequest effective_request;
     try {
         effective_request = with_saved_auth_session(store, request);
@@ -1269,6 +1278,10 @@ int run_pull_cloud_save(core::session::SessionRepository& store,
                         const SteamCloudRequest& request,
                         std::ostream& out,
                         std::ostream& err) {
+    if (request.steam_id == 0) {
+        err << "Steam cloud: --steam-id <id> is required\n";
+        return 2;
+    }
     const auto result = pull_cloud_save(with_saved_auth_session(store, request));
     if (!result.ok) {
         err << result.message << '\n';
@@ -1281,6 +1294,10 @@ int run_push_cloud_save(core::session::SessionRepository& store,
                         const SteamCloudRequest& request,
                         std::ostream& out,
                         std::ostream& err) {
+    if (request.steam_id == 0) {
+        err << "Steam cloud: --steam-id <id> is required\n";
+        return 2;
+    }
     const auto result = push_cloud_save(with_saved_auth_session(store, request));
     if (!result.ok) {
         err << result.message << '\n';
@@ -1294,6 +1311,10 @@ int run_verify_cloud_local(core::session::SessionRepository& store,
                            bool include_extra_local,
                            std::ostream& out,
                            std::ostream& err) {
+    if (request.steam_id == 0) {
+        err << "Steam cloud: --steam-id <id> is required\n";
+        return 2;
+    }
     const auto result =
         verify_cloud_local_files(with_saved_auth_session(store, request), include_extra_local);
     for (const auto& entry : result.entries) {

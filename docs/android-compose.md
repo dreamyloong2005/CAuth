@@ -147,10 +147,11 @@ suspend fun example(client: CAuthClient) {
     val depot = client.steamDepot()
     val cloud = client.steamCloud()
 
-    val saved = auth.getSavedSession()
-    val branches = depot.fetchBranches(appId = 440)
+    val steamId = 76561198000000000L
+    val saved = auth.getSavedSession(steamId)
+    val branches = depot.fetchBranches(steamId = steamId, appId = 440)
     val files = cloud.listRemoteFiles(
-        SteamCloudRequest(appId = 2868840, remoteRoot = "savegames"),
+        SteamCloudRequest(appId = 2868840, steamId = steamId, remoteRoot = "savegames"),
         count = 20,
     )
 }
@@ -177,7 +178,7 @@ Actions currently exposed:
 - `login()`
 - `loadSavedSession()`
 - `loadSavedAccounts()`
-- `useSavedAccount(steamId)`
+- `selectSavedAccount(steamId)`
 - `clearSavedSession()`
 - `probeCm()`
 - `logonCm()`
@@ -185,7 +186,7 @@ Actions currently exposed:
 
 `CAuthSteamDepotController` currently owns:
 
-- `appId`, `branch`, `maxCount`
+- `appId`, `steamId`, `branch`, `maxCount`
 - `depotId`, `manifestGid`, `requestCode`, `branchPasswordHash`
 - manifest output path / manifest path / depot key
 - file filter and file list limit
@@ -222,7 +223,7 @@ Actions currently exposed:
 
 `CAuthSteamCloudController` currently owns:
 
-- `appId`, `localRoot`, `remoteRoot`, `accessToken`
+- `appId`, `steamId`, `localRoot`, `remoteRoot`, `accessToken`
 - `count`, `startIndex`
 - `dryRun`, `deleteRemoteOrphans`, `verifyIncludeExtraLocal`, `conflictPolicy`
 - remote file list snapshot
@@ -275,7 +276,7 @@ The shipped Compose auth surface covers Steam auth/session and CM diagnostics:
 - password login
 - Steam Guard continuation
 - saved-session inspection/clear
-- saved-account listing and active-account switching
+- saved-account listing and SteamID selection
 - CM probe
 - CM logon
 

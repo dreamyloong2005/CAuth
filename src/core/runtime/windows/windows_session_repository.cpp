@@ -110,19 +110,6 @@ void WindowsSessionRepository::save_auth_session(const session::AuthSession& ses
     save_repository_state(state);
 }
 
-std::optional<session::AuthSession> WindowsSessionRepository::load_auth_session() const {
-    return session::active_auth_session(load_repository_state());
-}
-
-void WindowsSessionRepository::clear_auth_session() {
-    auto state = load_repository_state();
-    if (!state.active.has_value()) {
-        return;
-    }
-    session::remove_auth_session(state, *state.active);
-    save_repository_state(state);
-}
-
 std::vector<session::AuthSession> WindowsSessionRepository::list_auth_sessions() const {
     return load_repository_state().sessions;
 }
@@ -133,22 +120,6 @@ std::optional<session::AuthSession> WindowsSessionRepository::load_auth_session(
     return session::find_auth_session(
         load_repository_state(),
         session::AuthSessionKey{std::string{provider}, std::string{subject_id}});
-}
-
-std::optional<session::AuthSessionKey> WindowsSessionRepository::active_auth_session_key() const {
-    return load_repository_state().active;
-}
-
-bool WindowsSessionRepository::set_active_auth_session(std::string_view provider,
-                                                       std::string_view subject_id) {
-    auto state = load_repository_state();
-    const auto changed = session::set_active_auth_session(
-        state,
-        session::AuthSessionKey{std::string{provider}, std::string{subject_id}});
-    if (changed) {
-        save_repository_state(state);
-    }
-    return changed;
 }
 
 void WindowsSessionRepository::clear_auth_session(std::string_view provider,
@@ -219,12 +190,6 @@ void WindowsSessionRepository::save_auth_session(const session::AuthSession&) {
     throw std::runtime_error("WindowsSessionRepository is only available on Windows");
 }
 
-std::optional<session::AuthSession> WindowsSessionRepository::load_auth_session() const {
-    return std::nullopt;
-}
-
-void WindowsSessionRepository::clear_auth_session() {}
-
 std::vector<session::AuthSession> WindowsSessionRepository::list_auth_sessions() const {
     return {};
 }
@@ -233,14 +198,6 @@ std::optional<session::AuthSession> WindowsSessionRepository::load_auth_session(
     std::string_view,
     std::string_view) const {
     return std::nullopt;
-}
-
-std::optional<session::AuthSessionKey> WindowsSessionRepository::active_auth_session_key() const {
-    return std::nullopt;
-}
-
-bool WindowsSessionRepository::set_active_auth_session(std::string_view, std::string_view) {
-    return false;
 }
 
 void WindowsSessionRepository::clear_auth_session(std::string_view, std::string_view) {}

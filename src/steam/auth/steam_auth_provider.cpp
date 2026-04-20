@@ -15,12 +15,12 @@ void keep_newest(std::optional<cauth::core::session::AuthSession>& selected,
 
 std::optional<cauth::core::session::AuthSession> select_steam_client_session(
     const cauth::core::session::SessionRepository& repository,
-    const cauth::core::session::AuthSessionKey& active) {
+    std::string_view subject_id) {
     std::optional<cauth::core::session::AuthSession> client;
     std::optional<cauth::core::session::AuthSession> legacy;
 
     for (const auto& session : repository.list_auth_sessions()) {
-        if (!cauth::core::session::matches_session(session, active) ||
+        if (!cauth::core::session::matches_session(session, kSteamAuthProvider, subject_id) ||
             !cauth::core::session::is_valid(session) ||
             steam_id(session) == 0) {
             continue;
@@ -43,20 +43,16 @@ StoredSteamAuthProvider::StoredSteamAuthProvider(
     cauth::core::session::SessionRepository& repository)
     : repository_(&repository) {}
 
-SteamAuthSessionLoadResult StoredSteamAuthProvider::load_auth_session() const {
+SteamAuthSessionLoadResult StoredSteamAuthProvider::load_auth_session(
+    std::string_view subject_id) const {
     if (repository_ == nullptr) {
         return {false, "Steam auth repository is not configured", std::nullopt};
     }
-
-    const auto active = repository_->active_auth_session_key();
-    if (!active.has_value()) {
-        return {false, "Auth session: not signed in", std::nullopt};
-    }
-    if (active->provider != kSteamAuthProvider) {
-        return {false, "Auth session: active account is not a Steam account", std::nullopt};
+    if (subject_id.empty()) {
+        return {false, "Auth session: steam_id is required", std::nullopt};
     }
 
-    const auto session = select_steam_client_session(*repository_, *active);
+    const auto session = select_steam_client_session(*repository_, subject_id);
     if (!session.has_value()) {
         return {false,
                 "Auth session: Steam client login is required; run steam auth login",

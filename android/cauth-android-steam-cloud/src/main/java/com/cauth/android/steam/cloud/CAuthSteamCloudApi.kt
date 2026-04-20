@@ -16,6 +16,7 @@ class CAuthSteamCloudApi(
         CAuthNativeSteamCloud.nativeListRemoteFiles(
             handle = client.requireNativeHandle(),
             appId = request.appId,
+            steamId = request.steamId,
             accessToken = request.accessToken,
             localRoot = request.localRoot,
             remoteRoot = request.remoteRoot,
@@ -32,6 +33,7 @@ class CAuthSteamCloudApi(
         CAuthNativeSteamCloud.nativePull(
             handle = client.requireNativeHandle(),
             appId = request.appId,
+            steamId = request.steamId,
             accessToken = request.accessToken,
             localRoot = request.localRoot,
             remoteRoot = request.remoteRoot,
@@ -45,6 +47,7 @@ class CAuthSteamCloudApi(
         CAuthNativeSteamCloud.nativePush(
             handle = client.requireNativeHandle(),
             appId = request.appId,
+            steamId = request.steamId,
             accessToken = request.accessToken,
             localRoot = request.localRoot,
             remoteRoot = request.remoteRoot,
@@ -61,6 +64,7 @@ class CAuthSteamCloudApi(
         CAuthNativeSteamCloud.nativeVerifyLocalFiles(
             handle = client.requireNativeHandle(),
             appId = request.appId,
+            steamId = request.steamId,
             accessToken = request.accessToken,
             localRoot = request.localRoot,
             remoteRoot = request.remoteRoot,
@@ -75,6 +79,7 @@ class CAuthSteamCloudApi(
         CAuthNativeSteamCloud.nativeStartPull(
             handle = client.requireNativeHandle(),
             appId = request.appId,
+            steamId = request.steamId,
             accessToken = request.accessToken,
             localRoot = request.localRoot,
             remoteRoot = request.remoteRoot,
@@ -88,6 +93,7 @@ class CAuthSteamCloudApi(
         CAuthNativeSteamCloud.nativeStartPush(
             handle = client.requireNativeHandle(),
             appId = request.appId,
+            steamId = request.steamId,
             accessToken = request.accessToken,
             localRoot = request.localRoot,
             remoteRoot = request.remoteRoot,

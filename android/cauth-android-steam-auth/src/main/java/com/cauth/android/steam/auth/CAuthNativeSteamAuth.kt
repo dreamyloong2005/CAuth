@@ -18,16 +18,13 @@ internal object CAuthNativeSteamAuth {
     ): LoginResultSnapshot
 
     @JvmStatic
-    external fun nativeGetSavedSession(handle: Long): SavedSessionSnapshot
+    external fun nativeGetSavedSession(handle: Long, steamId: Long): SavedSessionSnapshot
 
     @JvmStatic
     external fun nativeListSavedAccounts(handle: Long): Array<SavedAccountSnapshot>
 
     @JvmStatic
-    external fun nativeUseSavedAccount(handle: Long, steamId: Long)
-
-    @JvmStatic
-    external fun nativeClearSavedSession(handle: Long)
+    external fun nativeClearSavedSession(handle: Long, steamId: Long)
 
     @JvmStatic
     external fun nativeClearSavedAccount(handle: Long, steamId: Long)
@@ -39,5 +36,5 @@ internal object CAuthNativeSteamAuth {
     external fun nativeCmProbe(): CmProbeSnapshot
 
     @JvmStatic
-    external fun nativeCmLogon(handle: Long): CmLogonSnapshot
+    external fun nativeCmLogon(handle: Long, steamId: Long): CmLogonSnapshot
 }

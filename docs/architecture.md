@@ -18,7 +18,7 @@ cauth_core
 Owns the cross-platform substrate that other auth providers can reuse:
 
 - session and credential models
-- multi-account repository model and active-account pointer
+- multi-account repository model keyed by `provider + subject_id`
 - secure storage repository interfaces and platform-backed implementations
 - JWT parsing and shared auth result types
 - HTTP / websocket abstractions
@@ -26,8 +26,8 @@ Owns the cross-platform substrate that other auth providers can reuse:
 - shared application-facing orchestration utilities
 
 `cauth_core` should not contain Steam-specific protocol concepts. It can store generic records such
-as `provider`, `subject_id`, tokens, timestamps, and active-account metadata, but it should not know
-which Steam session flavor is preferred for CM or depot operations.
+as `provider`, `subject_id`, tokens, and timestamps, but it should not know which Steam session
+flavor is preferred for CM or depot operations.
 
 ### `cauth_steam_auth`
 

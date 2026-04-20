@@ -24,20 +24,16 @@ class CAuthSteamAuthApi(
         )
     }
 
-    suspend fun getSavedSession(): SavedSessionSnapshot = withContext(Dispatchers.IO) {
-        CAuthNativeSteamAuth.nativeGetSavedSession(client.requireNativeHandle())
+    suspend fun getSavedSession(steamId: Long): SavedSessionSnapshot = withContext(Dispatchers.IO) {
+        CAuthNativeSteamAuth.nativeGetSavedSession(client.requireNativeHandle(), steamId)
     }
 
     suspend fun listSavedAccounts(): List<SavedAccountSnapshot> = withContext(Dispatchers.IO) {
         CAuthNativeSteamAuth.nativeListSavedAccounts(client.requireNativeHandle()).toList()
     }
 
-    suspend fun useSavedAccount(steamId: Long) = withContext(Dispatchers.IO) {
-        CAuthNativeSteamAuth.nativeUseSavedAccount(client.requireNativeHandle(), steamId)
-    }
-
-    suspend fun clearSavedSession() = withContext(Dispatchers.IO) {
-        CAuthNativeSteamAuth.nativeClearSavedSession(client.requireNativeHandle())
+    suspend fun clearSavedSession(steamId: Long) = withContext(Dispatchers.IO) {
+        CAuthNativeSteamAuth.nativeClearSavedSession(client.requireNativeHandle(), steamId)
     }
 
     suspend fun clearSavedAccount(steamId: Long) = withContext(Dispatchers.IO) {
@@ -52,8 +48,8 @@ class CAuthSteamAuthApi(
         CAuthNativeSteamAuth.nativeCmProbe()
     }
 
-    suspend fun logonCm(): CmLogonSnapshot = withContext(Dispatchers.IO) {
-        CAuthNativeSteamAuth.nativeCmLogon(client.requireNativeHandle())
+    suspend fun logonCm(steamId: Long): CmLogonSnapshot = withContext(Dispatchers.IO) {
+        CAuthNativeSteamAuth.nativeCmLogon(client.requireNativeHandle(), steamId)
     }
 }
 

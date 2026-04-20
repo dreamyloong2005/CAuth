@@ -6,10 +6,10 @@ write Steam Cloud files for a game.
 ## CLI shape
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam cloud list --app-id 440
-.\build\windows-msvc-debug\cauth.exe steam cloud verify --app-id 440 --local-root .\build\tf2-sync
-.\build\windows-msvc-debug\cauth.exe steam cloud pull --app-id 440 --local-root .\build\tf2-sync --dry-run
-.\build\windows-msvc-debug\cauth.exe steam cloud push --app-id 440 --local-root .\build\tf2-sync --dry-run
+.\build\windows-msvc-debug\cauth.exe steam cloud list --steam-id 7656119... --app-id 440
+.\build\windows-msvc-debug\cauth.exe steam cloud verify --steam-id 7656119... --app-id 440 --local-root .\build\tf2-sync
+.\build\windows-msvc-debug\cauth.exe steam cloud pull --steam-id 7656119... --app-id 440 --local-root .\build\tf2-sync --dry-run
+.\build\windows-msvc-debug\cauth.exe steam cloud push --steam-id 7656119... --app-id 440 --local-root .\build\tf2-sync --dry-run
 ```
 
 Common flags:
@@ -18,10 +18,10 @@ Common flags:
 - `--conflict-policy <default|local-wins|remote-wins|newer-wins|fail>` controls pull and push
   conflict handling. `fail-on-conflict` is also accepted as an alias.
 - `--backend <auto|web|cm>` chooses whether cloud calls use web-backed or CM-backed auth material.
-- `--access-token <token>` overrides the saved login session. If omitted, CAuth uses the current
-  stored Steam auth session.
-- `--refresh-token <token>` and `--steam-id <id>` allow stateless cloud calls without relying on the
-  saved session store.
+- `--steam-id <id>` selects which saved Steam account to use. It is required even when an
+  `--access-token` override is supplied.
+- `--access-token <token>` overrides the saved login session token for web-backed calls.
+- `--refresh-token <token>` can be supplied with `--steam-id <id>` for stateless cloud calls.
 - `--delete-remote-orphans` allows `push` to remove remote files that do not exist locally.
 - `--include-extra-local` makes `verify` report local-only files explicitly.
 
@@ -31,7 +31,7 @@ Steam Cloud supports two practical session sources:
 
 1. normal `steam auth login`
    - usually gives CAuth enough saved auth material for `--backend auto`
-   - uses the active saved Steam account
+   - selected per command with `--steam-id <id>`
 2. `steam auth login-web`
    - drives the web-cookie / finalize-login path directly
    - useful when you intentionally want a web-flavored session
@@ -39,11 +39,10 @@ Steam Cloud supports two practical session sources:
 `steam auth web-cookies` is a good diagnostic command when you want to confirm that the saved web
 session is healthy before testing cloud operations.
 
-When several Steam accounts are saved, inspect and switch the active account first:
+When several Steam accounts are saved, inspect the repository and pass the desired SteamID:
 
 ```powershell
 .\build\windows-msvc-debug\cauth.exe steam auth accounts
-.\build\windows-msvc-debug\cauth.exe steam auth use --steam-id 7656119...
 ```
 
 Use `--backend auto` unless you are debugging a specific path. `--backend cm` forces CM Cloud
@@ -56,6 +55,7 @@ in one shot:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\steam-cloud-acceptance.ps1 `
+    -SteamId 7656119... `
     -AppId 440 `
     -LocalRoot .\build\tf2-sync `
     -RemoteRoot remote `
@@ -77,6 +77,7 @@ Useful examples:
 ```powershell
 # Preview the exact commands without touching Steam Cloud.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\steam-cloud-acceptance.ps1 `
+    -SteamId 7656119... `
     -AppId 2868840 `
     -LocalRoot .\build\slay2-sync `
     -RemoteRoot savegames `
@@ -84,6 +85,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\steam-cloud-accept
 
 # Run the read-only checks against the live account session.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\steam-cloud-acceptance.ps1 `
+    -SteamId 7656119... `
     -AppId 2868840 `
     -LocalRoot .\build\slay2-sync `
     -RemoteRoot savegames `
@@ -91,6 +93,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\steam-cloud-accept
 
 # Run the full flow and allow remote orphan deletion.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\steam-cloud-acceptance.ps1 `
+    -SteamId 7656119... `
     -AppId 2868840 `
     -LocalRoot .\build\slay2-sync `
     -RemoteRoot savegames `

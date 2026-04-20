@@ -7,6 +7,7 @@
 #include "steam/auth/steam_login_service.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
@@ -21,11 +22,9 @@ enum class AuthCommandKind {
     Status,
     WhoAmI,
     Accounts,
-    UseAccount,
     RefreshAccess,
     WebCookies,
     TokenInfo,
-    Clear,
     ClearAccount,
     ClearAll,
     Cm,
@@ -48,6 +47,7 @@ struct ParsedAuthCmCommand {
     AuthCmCommandKind kind = AuthCmCommandKind::Servers;
     cauth::core::cm::CmServerQuery query;
     std::uint32_t app_id = 0;
+    std::string steam_id;
     bool debug_app_info = false;
 };
 
@@ -63,6 +63,41 @@ struct ParsedAuthResult {
     int exit_code = 2;
     ParsedAuthCommand command;
 };
+
+std::uint64_t parse_steam_id_value(std::string_view value) {
+    if (value.empty()) {
+        return 0;
+    }
+    std::string text{value};
+    char* end = nullptr;
+    const auto parsed = std::strtoull(text.c_str(), &end, 10);
+    if (end == text.c_str() || (end != nullptr && *end != '\0')) {
+        return 0;
+    }
+    return static_cast<std::uint64_t>(parsed);
+}
+
+bool parse_steam_id_option(int argc,
+                           char** argv,
+                           int start_index,
+                           std::string_view command_name,
+                           std::string& out_steam_id) {
+    for (int index = start_index; index < argc; ++index) {
+        const std::string_view arg = argv[index];
+        if (arg == "--steam-id" && index + 1 < argc) {
+            out_steam_id = argv[++index];
+            continue;
+        }
+        std::cerr << "unknown or incomplete " << command_name << " option: " << arg << '\n';
+        cauth::cli::print_cli_usage();
+        return false;
+    }
+    if (parse_steam_id_value(out_steam_id) == 0) {
+        std::cerr << command_name << " requires --steam-id <id>\n";
+        return false;
+    }
+    return true;
+}
 
 ParsedAuthResult parse_auth_cm_command(int argc, char** argv) {
     ParsedAuthResult result;
@@ -124,6 +159,12 @@ ParsedAuthResult parse_auth_cm_command(int argc, char** argv) {
             request.query.max_count = static_cast<std::uint32_t>(std::max(1, std::atoi(argv[++index])));
             continue;
         }
+        if ((request.kind == AuthCmCommandKind::Logon ||
+             request.kind == AuthCmCommandKind::AppInfo) &&
+            arg == "--steam-id" && index + 1 < argc) {
+            request.steam_id = argv[++index];
+            continue;
+        }
         if (request.kind == AuthCmCommandKind::AppInfo && arg == "--app-id" && index + 1 < argc) {
             request.app_id = static_cast<std::uint32_t>(std::max(0, std::atoi(argv[++index])));
             continue;
@@ -135,6 +176,12 @@ ParsedAuthResult parse_auth_cm_command(int argc, char** argv) {
 
     if (request.kind == AuthCmCommandKind::AppInfo && request.app_id == 0) {
         std::cerr << "steam auth cm app-info requires --app-id <id>\n";
+        return result;
+    }
+    if ((request.kind == AuthCmCommandKind::Logon ||
+         request.kind == AuthCmCommandKind::AppInfo) &&
+        parse_steam_id_value(request.steam_id) == 0) {
+        std::cerr << "steam auth cm " << subcommand << " requires --steam-id <id>\n";
         return result;
     }
 
@@ -159,6 +206,9 @@ ParsedAuthResult parse_auth_command(int argc, char** argv) {
         return result;
     }
     if (subcommand == "whoami") {
+        if (!parse_steam_id_option(argc, argv, 3, "steam auth whoami", result.command.steam_id)) {
+            return result;
+        }
         result.ok = true;
         result.command.kind = AuthCommandKind::WhoAmI;
         return result;
@@ -168,65 +218,64 @@ ParsedAuthResult parse_auth_command(int argc, char** argv) {
         result.command.kind = AuthCommandKind::Accounts;
         return result;
     }
-    if (subcommand == "use") {
-        for (int index = 3; index < argc; ++index) {
-            const std::string_view arg = argv[index];
-            if (arg == "--steam-id" && index + 1 < argc) {
-                result.command.steam_id = argv[++index];
-                continue;
-            }
-            std::cerr << "unknown or incomplete steam auth use option: " << arg << '\n';
-            cauth::cli::print_cli_usage();
-            return result;
-        }
-        if (result.command.steam_id.empty()) {
-            std::cerr << "steam auth use requires --steam-id <id>\n";
-            return result;
-        }
-        result.ok = true;
-        result.command.kind = AuthCommandKind::UseAccount;
-        return result;
-    }
     if (subcommand == "refresh-access") {
+        if (!parse_steam_id_option(argc, argv, 3, "steam auth refresh-access", result.command.steam_id)) {
+            return result;
+        }
         result.ok = true;
         result.command.kind = AuthCommandKind::RefreshAccess;
         return result;
     }
     if (subcommand == "web-cookies") {
+        if (!parse_steam_id_option(argc, argv, 3, "steam auth web-cookies", result.command.steam_id)) {
+            return result;
+        }
         result.ok = true;
         result.command.kind = AuthCommandKind::WebCookies;
         return result;
     }
     if (subcommand == "token-info") {
+        if (!parse_steam_id_option(argc, argv, 3, "steam auth token-info", result.command.steam_id)) {
+            return result;
+        }
         result.ok = true;
         result.command.kind = AuthCommandKind::TokenInfo;
         return result;
     }
     if (subcommand == "clear") {
+        bool has_all = false;
+        bool has_steam_id = false;
         for (int index = 3; index < argc; ++index) {
             const std::string_view arg = argv[index];
             if (arg == "--all") {
                 result.command.kind = AuthCommandKind::ClearAll;
+                has_all = true;
                 continue;
             }
             if (arg == "--steam-id" && index + 1 < argc) {
                 result.command.kind = AuthCommandKind::ClearAccount;
                 result.command.steam_id = argv[++index];
+                has_steam_id = true;
                 continue;
             }
             std::cerr << "unknown or incomplete steam auth clear option: " << arg << '\n';
             cauth::cli::print_cli_usage();
+                return result;
+        }
+        if (has_all && has_steam_id) {
+            std::cerr << "steam auth clear accepts either --steam-id <id> or --all, not both\n";
             return result;
         }
         if (result.command.kind == AuthCommandKind::ClearAccount &&
-            result.command.steam_id.empty()) {
+            parse_steam_id_value(result.command.steam_id) == 0) {
             std::cerr << "steam auth clear --steam-id requires <id>\n";
             return result;
         }
-        result.ok = true;
         if (result.command.kind == AuthCommandKind::Status) {
-            result.command.kind = AuthCommandKind::Clear;
+            std::cerr << "steam auth clear requires --steam-id <id> or --all\n";
+            return result;
         }
+        result.ok = true;
         return result;
     }
     if (subcommand == "cm") return parse_auth_cm_command(argc - 1, argv + 1);
@@ -307,10 +356,15 @@ int run_auth_cm_command(const ParsedAuthCmCommand& request) {
     case AuthCmCommandKind::Probe:
         return cauth::steam::auth::run_cm_probe(request.query, std::cout, std::cerr);
     case AuthCmCommandKind::Logon:
-        return cauth::steam::auth::run_cm_logon(request.query, std::cout, std::cerr);
+        return cauth::steam::auth::run_cm_logon(
+            request.query,
+            parse_steam_id_value(request.steam_id),
+            std::cout,
+            std::cerr);
     case AuthCmCommandKind::AppInfo:
         return cauth::steam::auth::run_cm_app_info(
             request.query,
+            parse_steam_id_value(request.steam_id),
             request.app_id,
             request.debug_app_info,
             std::cout,
@@ -339,23 +393,31 @@ int run_steam_auth(int argc, char** argv) {
     case AuthCommandKind::Status:
         return cauth::steam::auth::print_status(*store, std::cout);
     case AuthCommandKind::WhoAmI:
-        return cauth::steam::auth::print_whoami(*store, std::cout, std::cerr);
-    case AuthCommandKind::Accounts:
-        return cauth::steam::auth::print_saved_accounts(*store, std::cout);
-    case AuthCommandKind::UseAccount:
-        return cauth::steam::auth::use_saved_account(
+        return cauth::steam::auth::print_whoami(
             *store,
             parsed.command.steam_id,
             std::cout,
             std::cerr);
+    case AuthCommandKind::Accounts:
+        return cauth::steam::auth::print_saved_accounts(*store, std::cout);
     case AuthCommandKind::RefreshAccess:
-        return cauth::steam::auth::refresh_saved_access_token_from_store(*store, std::cout, std::cerr);
+        return cauth::steam::auth::refresh_saved_access_token_from_store(
+            *store,
+            parsed.command.steam_id,
+            std::cout,
+            std::cerr);
     case AuthCommandKind::WebCookies:
-        return cauth::steam::auth::print_saved_web_cookies(*store, std::cout, std::cerr);
+        return cauth::steam::auth::print_saved_web_cookies(
+            *store,
+            parsed.command.steam_id,
+            std::cout,
+            std::cerr);
     case AuthCommandKind::TokenInfo:
-        return cauth::steam::auth::print_token_info(*store, std::cout, std::cerr);
-    case AuthCommandKind::Clear:
-        return cauth::steam::auth::clear_saved_session(*store, std::cout);
+        return cauth::steam::auth::print_token_info(
+            *store,
+            parsed.command.steam_id,
+            std::cout,
+            std::cerr);
     case AuthCommandKind::ClearAccount:
         return cauth::steam::auth::clear_saved_account(
             *store,

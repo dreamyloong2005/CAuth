@@ -3,6 +3,9 @@ param(
     [uint32]$AppId,
 
     [Parameter(Mandatory = $true)]
+    [UInt64]$SteamId,
+
+    [Parameter(Mandatory = $true)]
     [string]$LocalRoot,
 
     [string]$RemoteRoot = "",
@@ -47,9 +50,12 @@ function Write-Log {
     Add-Content -LiteralPath $script:ResolvedLogPath -Value $line
 }
 
-function Get-CommonSteamCloudArguments {
+function Get-SteamCloudArguments {
+    param([string]$Subcommand)
+
     $arguments = @(
-        "steam", "cloud"
+        "steam", "cloud", $Subcommand,
+        "--steam-id", "$SteamId"
     )
 
     if ($AccessToken) {
@@ -106,6 +112,7 @@ New-Item -ItemType Directory -Force -Path $resolvedLocalRoot | Out-Null
 
 Write-Log "Steam cloud acceptance started."
 Write-Log "AppId=$AppId"
+Write-Log "SteamId=$SteamId"
 Write-Log "LocalRoot=$resolvedLocalRoot"
 Write-Log ("RemoteRoot=" + ($(if ($RemoteRoot) { $RemoteRoot } else { "(empty)" })))
 Write-Log "ConflictPolicy=$ConflictPolicy"
@@ -119,9 +126,8 @@ if (-not $PlanOnly -and -not (Test-Path -LiteralPath $script:ResolvedCAuthExe)) 
     throw "CAuth executable not found: $script:ResolvedCAuthExe"
 }
 
-$listArguments = Get-CommonSteamCloudArguments
+$listArguments = Get-SteamCloudArguments -Subcommand "list"
 $listArguments += @(
-    "list",
     "--app-id", "$AppId",
     "--count", "$Count",
     "--start-index", "$StartIndex",
@@ -132,9 +138,8 @@ if ($RemoteRoot) {
     $listArguments += @("--remote-root", $RemoteRoot)
 }
 
-$verifyArguments = Get-CommonSteamCloudArguments
+$verifyArguments = Get-SteamCloudArguments -Subcommand "verify"
 $verifyArguments += @(
-    "verify",
     "--app-id", "$AppId",
     "--local-root", $resolvedLocalRoot
 )
@@ -143,9 +148,8 @@ if ($RemoteRoot) {
     $verifyArguments += @("--remote-root", $RemoteRoot)
 }
 
-$pullArguments = Get-CommonSteamCloudArguments
+$pullArguments = Get-SteamCloudArguments -Subcommand "pull"
 $pullArguments += @(
-    "pull",
     "--app-id", "$AppId",
     "--local-root", $resolvedLocalRoot,
     "--conflict-policy", $ConflictPolicy,
@@ -156,9 +160,8 @@ if ($RemoteRoot) {
     $pullArguments += @("--remote-root", $RemoteRoot)
 }
 
-$pushDryRunArguments = Get-CommonSteamCloudArguments
+$pushDryRunArguments = Get-SteamCloudArguments -Subcommand "push"
 $pushDryRunArguments += @(
-    "push",
     "--app-id", "$AppId",
     "--local-root", $resolvedLocalRoot,
     "--conflict-policy", $ConflictPolicy,
@@ -181,9 +184,8 @@ $steps = @(
 )
 
 if ($RunPush) {
-    $pushArguments = Get-CommonSteamCloudArguments
+    $pushArguments = Get-SteamCloudArguments -Subcommand "push"
     $pushArguments += @(
-        "push",
         "--app-id", "$AppId",
         "--local-root", $resolvedLocalRoot,
         "--conflict-policy", $ConflictPolicy

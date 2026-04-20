@@ -79,10 +79,11 @@ std::optional<std::vector<std::uint8_t>> hex_to_bytes(std::string_view hex) {
 }
 
 std::optional<cauth::core::depot::AppInfo> fetch_app_info(cauth_client_t* client,
+                                                          unsigned long long steam_id,
                                                           unsigned int app_id,
                                                           unsigned int max_count) {
     cauth::steam::auth::StoredSteamAuthProvider auth_provider{*client->session_repository};
-    cauth::core::depot::DepotCmClient depot_client{auth_provider};
+    cauth::core::depot::DepotCmClient depot_client{auth_provider, std::to_string(steam_id)};
     return depot_client.fetch_app_info(app_id, max_count);
 }
 
@@ -136,10 +137,12 @@ cauth_result_t load_manifest_for_file_operation(const char* input_path,
 } // namespace
 
 cauth_result_t cauth_depot_fetch_branches(cauth_client_t* client,
+                                          unsigned long long steam_id,
                                           unsigned int app_id,
                                           unsigned int max_count,
                                           cauth_app_branch_list_t* out_response) {
-    if (client == nullptr || out_response == nullptr || app_id == 0 || max_count == 0) {
+    if (client == nullptr || out_response == nullptr || steam_id == 0 ||
+        app_id == 0 || max_count == 0) {
         return CAUTH_ERROR_INVALID_ARGUMENT;
     }
 
@@ -153,7 +156,7 @@ cauth_result_t cauth_depot_fetch_branches(cauth_client_t* client,
     g_branch_entries.clear();
 
     try {
-        const auto app_info = fetch_app_info(client, app_id, max_count);
+        const auto app_info = fetch_app_info(client, steam_id, app_id, max_count);
         if (!app_info.has_value()) {
             return CAUTH_OK;
         }
@@ -190,11 +193,13 @@ cauth_result_t cauth_depot_fetch_branches(cauth_client_t* client,
 }
 
 cauth_result_t cauth_depot_fetch_manifests(cauth_client_t* client,
+                                           unsigned long long steam_id,
                                            unsigned int app_id,
                                            const char* branch,
                                            unsigned int max_count,
                                            cauth_depot_manifest_list_t* out_response) {
-    if (client == nullptr || out_response == nullptr || app_id == 0 || max_count == 0) {
+    if (client == nullptr || out_response == nullptr || steam_id == 0 ||
+        app_id == 0 || max_count == 0) {
         return CAUTH_ERROR_INVALID_ARGUMENT;
     }
 
@@ -211,7 +216,7 @@ cauth_result_t cauth_depot_fetch_manifests(cauth_client_t* client,
     g_last_manifest_branch = branch == nullptr || *branch == '\0' ? "public" : branch;
 
     try {
-        const auto app_info = fetch_app_info(client, app_id, max_count);
+        const auto app_info = fetch_app_info(client, steam_id, app_id, max_count);
         if (!app_info.has_value()) {
             return CAUTH_OK;
         }
@@ -262,11 +267,13 @@ cauth_result_t cauth_depot_fetch_manifests(cauth_client_t* client,
 }
 
 cauth_result_t cauth_depot_fetch_preflight(cauth_client_t* client,
+                                           unsigned long long steam_id,
                                            unsigned int app_id,
                                            const char* branch,
                                            unsigned int max_count,
                                            cauth_depot_preflight_report_t* out_response) {
-    if (client == nullptr || out_response == nullptr || app_id == 0 || max_count == 0) {
+    if (client == nullptr || out_response == nullptr || steam_id == 0 ||
+        app_id == 0 || max_count == 0) {
         return CAUTH_ERROR_INVALID_ARGUMENT;
     }
 
@@ -286,7 +293,7 @@ cauth_result_t cauth_depot_fetch_preflight(cauth_client_t* client,
     g_last_preflight_branch = branch == nullptr || *branch == '\0' ? "public" : branch;
 
     try {
-        const auto app_info = fetch_app_info(client, app_id, max_count);
+        const auto app_info = fetch_app_info(client, steam_id, app_id, max_count);
         if (!app_info.has_value()) {
             return CAUTH_OK;
         }
@@ -298,7 +305,7 @@ cauth_result_t cauth_depot_fetch_preflight(cauth_client_t* client,
         }
 
         cauth::steam::auth::StoredSteamAuthProvider auth_provider{*client->session_repository};
-        cauth::core::depot::DepotCmClient depot_client{auth_provider};
+        cauth::core::depot::DepotCmClient depot_client{auth_provider, std::to_string(steam_id)};
 
         std::vector<cauth::core::depot::DepotDecryptionKeyResponse> key_responses;
         key_responses.reserve(selection->manifests.size());
@@ -408,12 +415,13 @@ cauth_result_t cauth_depot_download_manifest(unsigned int depot_id,
 }
 
 cauth_result_t cauth_depot_fetch_key(cauth_client_t* client,
+                                     unsigned long long steam_id,
                                      unsigned int app_id,
                                      unsigned int depot_id,
                                      unsigned int max_count,
                                      cauth_depot_key_response_t* out_response) {
-    if (client == nullptr || out_response == nullptr || app_id == 0 || depot_id == 0 ||
-        max_count == 0) {
+    if (client == nullptr || out_response == nullptr || steam_id == 0 ||
+        app_id == 0 || depot_id == 0 || max_count == 0) {
         return CAUTH_ERROR_INVALID_ARGUMENT;
     }
 
@@ -424,7 +432,7 @@ cauth_result_t cauth_depot_fetch_key(cauth_client_t* client,
 
     try {
         cauth::steam::auth::StoredSteamAuthProvider auth_provider{*client->session_repository};
-        cauth::core::depot::DepotCmClient depot_client{auth_provider};
+        cauth::core::depot::DepotCmClient depot_client{auth_provider, std::to_string(steam_id)};
         const auto response = depot_client.fetch_depot_key(app_id, depot_id, max_count);
         if (!response.has_value()) {
             return CAUTH_OK;
@@ -860,6 +868,7 @@ const char* cauth_depot_last_error_detail(void) {
 
 cauth_result_t cauth_depot_fetch_manifest_request_code(
     cauth_client_t* client,
+    unsigned long long steam_id,
     unsigned int app_id,
     unsigned int depot_id,
     unsigned long long manifest_gid,
@@ -867,8 +876,8 @@ cauth_result_t cauth_depot_fetch_manifest_request_code(
     const char* branch_password_hash,
     unsigned int max_count,
     cauth_manifest_request_code_response_t* out_response) {
-    if (client == nullptr || out_response == nullptr || app_id == 0 || depot_id == 0 ||
-        manifest_gid == 0 || max_count == 0) {
+    if (client == nullptr || out_response == nullptr || steam_id == 0 ||
+        app_id == 0 || depot_id == 0 || manifest_gid == 0 || max_count == 0) {
         return CAUTH_ERROR_INVALID_ARGUMENT;
     }
 
@@ -877,7 +886,7 @@ cauth_result_t cauth_depot_fetch_manifest_request_code(
 
     try {
         cauth::steam::auth::StoredSteamAuthProvider auth_provider{*client->session_repository};
-        cauth::core::depot::DepotCmClient depot_client{auth_provider};
+        cauth::core::depot::DepotCmClient depot_client{auth_provider, std::to_string(steam_id)};
         cauth::core::depot::ManifestRequestCodeRequest request;
         request.app_id = app_id;
         request.depot_id = depot_id;

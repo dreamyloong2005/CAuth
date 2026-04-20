@@ -19,11 +19,12 @@ void write_line(std::ostream* stream, const std::string& message) {
 using SessionOperation = std::function<cm::SteamCmAttemptResult(cm::CmSession&)>;
 
 bool with_authed_cm_session(const cauth::steam::auth::SteamAuthProvider& auth_provider,
+                            std::string_view subject_id,
                             std::uint32_t max_count,
                             std::ostream* out,
                             std::ostream* err,
                             const SessionOperation& operation) {
-    const auto loaded = auth_provider.load_auth_session();
+    const auto loaded = auth_provider.load_auth_session(subject_id);
     if (!loaded.ok || !loaded.session.has_value()) {
         write_line(err, loaded.error_message.empty() ? "Auth session: unavailable"
                                                      : loaded.error_message);
@@ -44,15 +45,16 @@ bool with_authed_cm_session(const cauth::steam::auth::SteamAuthProvider& auth_pr
 } // namespace
 
 DepotCmClient::DepotCmClient(cauth::steam::auth::SteamAuthProvider& auth_provider,
+                             std::string_view subject_id,
                              std::ostream* out,
                              std::ostream* err)
-    : auth_provider_(&auth_provider), out_(out), err_(err) {}
+    : auth_provider_(&auth_provider), subject_id_(subject_id), out_(out), err_(err) {}
 
 std::optional<AppInfo> DepotCmClient::fetch_app_info(std::uint32_t app_id,
                                                      std::uint32_t max_count) const {
     std::optional<AppInfo> app_info;
     const auto ok = with_authed_cm_session(
-        *auth_provider_, max_count, out_, err_,
+        *auth_provider_, subject_id_, max_count, out_, err_,
         [&](cm::CmSession& cm_session) {
             const auto send_result = cm_session.send_message(make_pics_product_info_request(
                 PicsProductInfoRequest{{PicsProductInfoAppRequest{app_id, 0, true}}, false, true}));
@@ -114,7 +116,7 @@ std::optional<DepotDecryptionKeyResponse> DepotCmClient::fetch_depot_key(std::ui
                                                                          std::uint32_t max_count) const {
     std::optional<DepotDecryptionKeyResponse> response;
     const auto ok = with_authed_cm_session(
-        *auth_provider_, max_count, out_, err_,
+        *auth_provider_, subject_id_, max_count, out_, err_,
         [&](cm::CmSession& cm_session) {
             const auto send_result = cm_session.send_message(
                 make_depot_decryption_key_request(DepotDecryptionKeyRequest{depot_id, app_id}));
@@ -163,7 +165,7 @@ std::optional<ManifestRequestCodeResponse> DepotCmClient::fetch_manifest_request
     std::uint32_t max_count) const {
     std::optional<ManifestRequestCodeResponse> response;
     const auto ok = with_authed_cm_session(
-        *auth_provider_, max_count, out_, err_,
+        *auth_provider_, subject_id_, max_count, out_, err_,
         [&](cm::CmSession& cm_session) {
             const auto call = cm_session.call_service_method(
                 kGetManifestRequestCodeMethod, encode_manifest_request_code_request_body(request),

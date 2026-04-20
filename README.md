@@ -17,13 +17,13 @@ cauth_core
 
 - `cauth_core`
   - cross-platform client lifetime and runtime bridges
-  - session repository model with multiple saved accounts and one active account pointer
+  - session repository model with multiple saved accounts addressed by `provider + subject_id`
   - secure-storage interfaces and platform-backed storage implementations
   - shared C ABI types for non-C++ hosts
 - `cauth_steam_auth`
   - Steam client, web-browser, and mobile-app login entry points
   - Steam Guard polling and continuation
-  - saved-account listing, switching, and clearing
+  - saved-account listing, explicit lookup, and clearing
   - CM directory lookup, probe, logon, and authenticated service calls
   - web-cookie / finalize-login helpers for web-backed flows
 - `cauth_steam_depot`
@@ -44,12 +44,12 @@ for development and acceptance testing, but it is not required by library consum
 
 ## Current Version
 
-The current development version is `0.2.0`.
+The current development version is `0.3.0`.
 
 Native versioning is controlled by CMake:
 
 ```cmake
-project(CAuth VERSION 0.2.0)
+project(CAuth VERSION 0.3.0)
 ```
 
 CMake generates the native version header at configure time, and the CLI / C ABI read that same
@@ -163,13 +163,12 @@ Remove-Variable plain
 Remove-Variable password
 ```
 
-Inspect and switch saved accounts:
+Inspect saved accounts and choose the account explicitly for later operations:
 
 ```powershell
 & $cauth steam auth status
-& $cauth steam auth whoami
 & $cauth steam auth accounts
-& $cauth steam auth use --steam-id 7656119...
+& $cauth steam auth whoami --steam-id 7656119...
 & $cauth steam auth clear --steam-id 7656119...
 ```
 
@@ -177,8 +176,8 @@ Depot and cloud smoke checks:
 
 ```powershell
 & $cauth steam auth cm probe --max-count 10
-& $cauth steam depot preflight --app-id 2868840 --branch public --max-count 20
-& $cauth steam cloud list --app-id 2868840 --remote-root savegames --backend auto
+& $cauth steam depot preflight --steam-id 7656119... --app-id 2868840 --branch public --max-count 20
+& $cauth steam cloud list --steam-id 7656119... --app-id 2868840 --remote-root savegames --backend auto
 ```
 
 For a full validation path, use [docs/testing.md](docs/testing.md).

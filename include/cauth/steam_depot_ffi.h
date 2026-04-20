@@ -121,15 +121,18 @@ typedef struct cauth_depot_local_verify_report {
 } cauth_depot_local_verify_report_t;
 
 CAUTH_API cauth_result_t cauth_depot_fetch_branches(cauth_client_t* client,
+                                                    unsigned long long steam_id,
                                                     unsigned int app_id,
                                                     unsigned int max_count,
                                                     cauth_app_branch_list_t* out_response);
 CAUTH_API cauth_result_t cauth_depot_fetch_manifests(cauth_client_t* client,
+                                                     unsigned long long steam_id,
                                                      unsigned int app_id,
                                                      const char* branch,
                                                      unsigned int max_count,
                                                      cauth_depot_manifest_list_t* out_response);
 CAUTH_API cauth_result_t cauth_depot_fetch_preflight(cauth_client_t* client,
+                                                     unsigned long long steam_id,
                                                      unsigned int app_id,
                                                      const char* branch,
                                                      unsigned int max_count,
@@ -140,12 +143,14 @@ CAUTH_API cauth_result_t cauth_depot_download_manifest(unsigned int depot_id,
                                                        unsigned int max_count,
                                                        const char* output_path);
 CAUTH_API cauth_result_t cauth_depot_fetch_key(cauth_client_t* client,
+                                               unsigned long long steam_id,
                                                unsigned int app_id,
                                                unsigned int depot_id,
                                                unsigned int max_count,
                                                cauth_depot_key_response_t* out_response);
 CAUTH_API cauth_result_t cauth_depot_fetch_manifest_request_code(
     cauth_client_t* client,
+    unsigned long long steam_id,
     unsigned int app_id,
     unsigned int depot_id,
     unsigned long long manifest_gid,

@@ -220,17 +220,19 @@ void clear_current_thread_depot_download_hooks() {
     g_download_hook_user_data = nullptr;
 }
 
-std::optional<cauth::core::depot::AppInfo> fetch_app_info_from_cm(std::uint32_t app_id,
+std::optional<cauth::core::depot::AppInfo> fetch_app_info_from_cm(std::uint64_t steam_id,
+                                                                  std::uint32_t app_id,
                                                                   std::uint32_t max_count,
                                                                   std::ostream& out,
                                                                   std::ostream& err) {
     const auto store = cauth::core::platform::make_platform_session_repository();
     cauth::steam::auth::StoredSteamAuthProvider auth_provider{*store};
-    cauth::core::depot::DepotCmClient depot_client{auth_provider, &out, &err};
+    cauth::core::depot::DepotCmClient depot_client{auth_provider, std::to_string(steam_id), &out, &err};
     return depot_client.fetch_app_info(app_id, max_count);
 }
 
 std::optional<cauth::core::depot::DepotDecryptionKeyResponse> fetch_depot_key_from_cm(
+    std::uint64_t steam_id,
     std::uint32_t app_id,
     std::uint32_t depot_id,
     std::uint32_t max_count,
@@ -238,27 +240,29 @@ std::optional<cauth::core::depot::DepotDecryptionKeyResponse> fetch_depot_key_fr
     std::ostream& err) {
     const auto store = cauth::core::platform::make_platform_session_repository();
     cauth::steam::auth::StoredSteamAuthProvider auth_provider{*store};
-    cauth::core::depot::DepotCmClient depot_client{auth_provider, &out, &err};
+    cauth::core::depot::DepotCmClient depot_client{auth_provider, std::to_string(steam_id), &out, &err};
     return depot_client.fetch_depot_key(app_id, depot_id, max_count);
 }
 
 std::optional<cauth::core::depot::ManifestRequestCodeResponse>
 fetch_manifest_request_code_from_cm(
+    std::uint64_t steam_id,
     const cauth::core::depot::ManifestRequestCodeRequest& request,
     std::uint32_t max_count,
     std::ostream& out,
     std::ostream& err) {
     const auto store = cauth::core::platform::make_platform_session_repository();
     cauth::steam::auth::StoredSteamAuthProvider auth_provider{*store};
-    cauth::core::depot::DepotCmClient depot_client{auth_provider, &out, &err};
+    cauth::core::depot::DepotCmClient depot_client{auth_provider, std::to_string(steam_id), &out, &err};
     return depot_client.fetch_manifest_request_code(request, max_count);
 }
 
-int print_branches(std::uint32_t app_id,
+int print_branches(std::uint64_t steam_id,
+                   std::uint32_t app_id,
                    std::uint32_t max_count,
                    std::ostream& out,
                    std::ostream& err) {
-    const auto app_info = fetch_app_info_from_cm(app_id, max_count, out, err);
+    const auto app_info = fetch_app_info_from_cm(steam_id, app_id, max_count, out, err);
     if (!app_info.has_value()) return 1;
     out << "Branches for app " << app_id << ": " << app_info->branches.size() << '\n';
     for (const auto& branch_info : app_info->branches) {
@@ -270,12 +274,13 @@ int print_branches(std::uint32_t app_id,
     return 0;
 }
 
-int print_manifests(std::uint32_t app_id,
+int print_manifests(std::uint64_t steam_id,
+                    std::uint32_t app_id,
                     std::string_view branch,
                     std::uint32_t max_count,
                     std::ostream& out,
                     std::ostream& err) {
-    const auto app_info = fetch_app_info_from_cm(app_id, max_count, out, err);
+    const auto app_info = fetch_app_info_from_cm(steam_id, app_id, max_count, out, err);
     if (!app_info.has_value()) return 1;
     out << "Depot manifests for app " << app_id << " branch " << branch << '\n';
     for (const auto& depot : app_info->depots) {
@@ -290,12 +295,13 @@ int print_manifests(std::uint32_t app_id,
     return 0;
 }
 
-int print_preflight(std::uint32_t app_id,
+int print_preflight(std::uint64_t steam_id,
+                    std::uint32_t app_id,
                     std::string_view branch,
                     std::uint32_t max_count,
                     std::ostream& out,
                     std::ostream& err) {
-    const auto app_info = fetch_app_info_from_cm(app_id, max_count, out, err);
+    const auto app_info = fetch_app_info_from_cm(steam_id, app_id, max_count, out, err);
     if (!app_info.has_value()) return 1;
     out << "Preflight for app " << app_id << " branch " << branch << '\n';
     for (const auto& depot : app_info->depots) {
@@ -310,12 +316,13 @@ int print_preflight(std::uint32_t app_id,
     return 0;
 }
 
-int print_depot_key(std::uint32_t app_id,
+int print_depot_key(std::uint64_t steam_id,
+                    std::uint32_t app_id,
                     std::uint32_t depot_id,
                     std::uint32_t max_count,
                     std::ostream& out,
                     std::ostream& err) {
-    const auto response = fetch_depot_key_from_cm(app_id, depot_id, max_count, out, err);
+    const auto response = fetch_depot_key_from_cm(steam_id, app_id, depot_id, max_count, out, err);
     if (!response.has_value()) return 1;
     out << "Depot key for app " << app_id << " depot " << depot_id << ": eresult=" << response->eresult;
     if (response->depot_id != 0) out << " response_depot=" << response->depot_id;
@@ -324,7 +331,8 @@ int print_depot_key(std::uint32_t app_id,
     return response->eresult == 1 ? 0 : 1;
 }
 
-int print_manifest_request_code(std::uint32_t app_id,
+int print_manifest_request_code(std::uint64_t steam_id,
+                                std::uint32_t app_id,
                                 std::uint32_t depot_id,
                                 std::uint64_t manifest_gid,
                                 std::string_view branch,
@@ -332,6 +340,7 @@ int print_manifest_request_code(std::uint32_t app_id,
                                 std::ostream& out,
                                 std::ostream& err) {
     const auto response = fetch_manifest_request_code_from_cm(
+        steam_id,
         cauth::core::depot::ManifestRequestCodeRequest{
             app_id,
             depot_id,

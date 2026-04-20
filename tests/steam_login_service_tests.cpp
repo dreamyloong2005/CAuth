@@ -72,7 +72,7 @@ int main() {
         return 1;
     }
 
-    store.clear_auth_session();
+    store.clear_all_auth_sessions();
     auto default_device_name_request = make_request();
     default_device_name_request.device_name.clear();
     const auto default_device_name_result = service.login(default_device_name_request);
@@ -82,12 +82,12 @@ int main() {
         return 1;
     }
 
-    store.clear_auth_session();
+    store.clear_all_auth_sessions();
 
     authenticator.needs_guard = true;
     const auto guard_result = service.login(make_request());
     if (guard_result.status != cauth::steam::auth::SteamLoginStatus::SteamGuardRequired ||
-        store.load_auth_session().has_value()) {
+        !store.list_auth_sessions().empty()) {
         std::cerr << "Steam Guard challenge should not save a session\n";
         return 1;
     }
@@ -100,7 +100,8 @@ int main() {
         return 1;
     }
 
-    const auto saved = store.load_auth_session();
+    const auto saved =
+        store.load_auth_session(cauth::steam::auth::kSteamAuthProvider, "76561198000000000");
     if (!saved.has_value() || saved->account_name != "test_account" ||
         saved->refresh_token != "refresh-token-for-test" ||
         saved->access_token != "access-token-for-test") {
@@ -113,13 +114,13 @@ int main() {
         return 1;
     }
 
-    store.clear_auth_session();
+    store.clear_all_auth_sessions();
     authenticator.needs_guard = false;
     auto transient_request = make_request();
     transient_request.remember_session = false;
     const auto transient_result = service.login(transient_request);
     if (transient_result.status != cauth::steam::auth::SteamLoginStatus::Succeeded ||
-        store.load_auth_session().has_value()) {
+        !store.list_auth_sessions().empty()) {
         std::cerr << "transient login should not save the auth session\n";
         return 1;
     }

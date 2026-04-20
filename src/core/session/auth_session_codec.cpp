@@ -19,6 +19,8 @@ constexpr std::array<std::uint8_t, 12> kMagicV3 = {'C', 'A', 'U', 'T', 'H', 'S',
                                                    'E', 'S', 'S', '3', '\r', '\n'};
 constexpr std::array<std::uint8_t, 12> kMagicStoreV1 = {'C', 'A', 'U', 'T', 'H', 'A',
                                                         'C', 'C', 'T', '1', '\r', '\n'};
+constexpr std::array<std::uint8_t, 12> kMagicStoreV2 = {'C', 'A', 'U', 'T', 'H', 'A',
+                                                        'C', 'C', 'T', '2', '\r', '\n'};
 constexpr std::string_view kLegacyV1Provider = "steam";
 
 void append_u32(std::vector<std::uint8_t>& out, std::uint32_t value) {
@@ -187,11 +189,11 @@ bool read_session(const std::vector<std::uint8_t>& bytes,
 bool decode_store_v1(const std::vector<std::uint8_t>& bytes,
                      AuthSessionRepositoryState& state) {
     std::size_t offset = kMagicStoreV1.size();
-    AuthSessionKey active;
+    AuthSessionKey legacy_selected;
     std::uint32_t count = 0;
 
-    if (!read_string(bytes, offset, active.provider) ||
-        !read_string(bytes, offset, active.subject_id) ||
+    if (!read_string(bytes, offset, legacy_selected.provider) ||
+        !read_string(bytes, offset, legacy_selected.subject_id) ||
         !read_u32(bytes, offset, count)) {
         return false;
     }
@@ -206,16 +208,43 @@ bool decode_store_v1(const std::vector<std::uint8_t>& bytes,
         if (!read_session(bytes, offset, session)) {
             return false;
         }
-        upsert_auth_session(state, session, false);
+        upsert_auth_session(state, session);
     }
 
     if (offset != bytes.size()) {
         return false;
     }
 
-    if (is_valid(active) && find_auth_session(state, active).has_value()) {
-        state.active = std::move(active);
+    normalize_auth_session_repository_state(state);
+    return true;
+}
+
+bool decode_store_v2(const std::vector<std::uint8_t>& bytes,
+                     AuthSessionRepositoryState& state) {
+    std::size_t offset = kMagicStoreV2.size();
+    std::uint32_t count = 0;
+
+    if (!read_u32(bytes, offset, count)) {
+        return false;
     }
+
+    constexpr std::uint32_t kMaxAccounts = 1024;
+    if (count > kMaxAccounts) {
+        return false;
+    }
+
+    for (std::uint32_t index = 0; index < count; ++index) {
+        AuthSession session;
+        if (!read_session(bytes, offset, session)) {
+            return false;
+        }
+        upsert_auth_session(state, session);
+    }
+
+    if (offset != bytes.size()) {
+        return false;
+    }
+
     normalize_auth_session_repository_state(state);
     return true;
 }
@@ -275,13 +304,7 @@ std::vector<std::uint8_t> encode_auth_session_repository_state(
     normalize_auth_session_repository_state(normalized);
 
     std::vector<std::uint8_t> out;
-    out.insert(out.end(), kMagicStoreV1.begin(), kMagicStoreV1.end());
-
-    const AuthSessionKey active = normalized.active.value_or(AuthSessionKey{});
-    if (!append_string(out, active.provider) ||
-        !append_string(out, active.subject_id)) {
-        return {};
-    }
+    out.insert(out.end(), kMagicStoreV2.begin(), kMagicStoreV2.end());
 
     if (normalized.sessions.size() > std::numeric_limits<std::uint32_t>::max()) {
         return {};
@@ -303,6 +326,12 @@ std::optional<AuthSessionRepositoryState> decode_auth_session_repository_state(
     }
 
     AuthSessionRepositoryState state;
+    if (std::equal(kMagicStoreV2.begin(), kMagicStoreV2.end(), bytes.begin())) {
+        if (!decode_store_v2(bytes, state)) {
+            return std::nullopt;
+        }
+        return state;
+    }
     if (std::equal(kMagicStoreV1.begin(), kMagicStoreV1.end(), bytes.begin())) {
         if (!decode_store_v1(bytes, state)) {
             return std::nullopt;

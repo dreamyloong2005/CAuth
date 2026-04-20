@@ -192,11 +192,12 @@ suspend fun loadData(client: CAuthClient) {
     val depot = client.steamDepot()
     val cloud = client.steamCloud()
 
-    val session = auth.getSavedSession()
+    val steamId = 76561198000000000L
+    val session = auth.getSavedSession(steamId)
     val accounts = auth.listSavedAccounts()
-    val preflight = depot.fetchPreflight(appId = 2868840)
+    val preflight = depot.fetchPreflight(steamId = steamId, appId = 2868840)
     val remote = cloud.listRemoteFiles(
-        SteamCloudRequest(appId = 2868840, remoteRoot = "savegames"),
+        SteamCloudRequest(appId = 2868840, steamId = steamId, remoteRoot = "savegames"),
     )
 }
 ```
@@ -240,7 +241,7 @@ That means:
 ## 10. Recommended rollout into a real app
 
 1. integrate `core` + `steam_auth`
-2. get login, account listing, active-account switching, and session restore stable
+2. get login, account listing, explicit SteamID selection, and session restore stable
 3. add `steam_depot` or `steam_cloud`
 4. only then replace stock panes with your product UI
 

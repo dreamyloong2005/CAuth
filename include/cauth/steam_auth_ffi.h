@@ -141,10 +141,13 @@ CAUTH_API cauth_result_t cauth_probe_app_id(unsigned long long app_id,
 CAUTH_API cauth_result_t cauth_get_capabilities(cauth_capabilities_t* out_capabilities);
 CAUTH_API cauth_result_t cauth_cm_probe(cauth_cm_probe_result_t* out_probe);
 CAUTH_API cauth_result_t cauth_cm_logon(cauth_client_t* client,
+                                        unsigned long long steam_id,
                                         cauth_cm_logon_result_t* out_result);
 CAUTH_API cauth_result_t cauth_auth_get_saved_session(cauth_client_t* client,
+                                                      unsigned long long steam_id,
                                                       cauth_saved_session_t* out_session);
-CAUTH_API cauth_result_t cauth_auth_clear_saved_session(cauth_client_t* client);
+CAUTH_API cauth_result_t cauth_auth_clear_saved_session(cauth_client_t* client,
+                                                        unsigned long long steam_id);
 CAUTH_API cauth_result_t cauth_auth_save_session(cauth_client_t* client,
                                                  const cauth_auth_session_t* session);
 CAUTH_API cauth_result_t cauth_auth_parse_password_rsa_response(

@@ -293,8 +293,9 @@ cauth_result_t cauth_auth_login_password(cauth_client_t* client,
 }
 
 cauth_result_t cauth_auth_get_saved_session(cauth_client_t* client,
+                                            unsigned long long steam_id,
                                             cauth_saved_session_t* out_session) {
-    if (client == nullptr || out_session == nullptr) {
+    if (client == nullptr || steam_id == 0 || out_session == nullptr) {
         return CAUTH_ERROR_INVALID_ARGUMENT;
     }
 
@@ -306,7 +307,12 @@ cauth_result_t cauth_auth_get_saved_session(cauth_client_t* client,
     out_session->created_at_unix_seconds = 0;
 
     cauth_session_record_t generic_session{};
-    const auto result = cauth_session_get_saved(client, &generic_session);
+    const auto subject_id = std::to_string(steam_id);
+    const auto result = cauth_session_get_saved(
+        client,
+        cauth::steam::auth::kSteamAuthProvider.data(),
+        subject_id.c_str(),
+        &generic_session);
     if (result != CAUTH_OK || generic_session.present == 0) {
         return result;
     }
@@ -325,8 +331,16 @@ cauth_result_t cauth_auth_get_saved_session(cauth_client_t* client,
     return CAUTH_OK;
 }
 
-cauth_result_t cauth_auth_clear_saved_session(cauth_client_t* client) {
-    return cauth_session_clear_saved(client);
+cauth_result_t cauth_auth_clear_saved_session(cauth_client_t* client,
+                                              unsigned long long steam_id) {
+    if (steam_id == 0) {
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+    const auto subject_id = std::to_string(steam_id);
+    return cauth_session_clear_account(
+        client,
+        cauth::steam::auth::kSteamAuthProvider.data(),
+        subject_id.c_str());
 }
 
 cauth_result_t cauth_auth_save_session(cauth_client_t* client,
@@ -653,8 +667,10 @@ cauth_result_t cauth_cm_probe(cauth_cm_probe_result_t* out_probe) {
     }
 }
 
-cauth_result_t cauth_cm_logon(cauth_client_t* client, cauth_cm_logon_result_t* out_result) {
-    if (client == nullptr || out_result == nullptr) {
+cauth_result_t cauth_cm_logon(cauth_client_t* client,
+                              unsigned long long steam_id,
+                              cauth_cm_logon_result_t* out_result) {
+    if (client == nullptr || steam_id == 0 || out_result == nullptr) {
         return CAUTH_ERROR_INVALID_ARGUMENT;
     }
 
@@ -667,7 +683,9 @@ cauth_result_t cauth_cm_logon(cauth_client_t* client, cauth_cm_logon_result_t* o
     out_result->steam_id = 0;
 
     try {
-        const auto session = client->session_repository->load_auth_session();
+        const auto session = client->session_repository->load_auth_session(
+            cauth::steam::auth::kSteamAuthProvider,
+            std::to_string(steam_id));
         if (!session.has_value()) {
             g_last_cm_logon_endpoint.clear();
             g_last_cm_logon_status = "Auth session: not signed in";

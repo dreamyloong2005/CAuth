@@ -8,7 +8,8 @@ CAuth should never store a Steam password in plaintext.
 - Store sensitive material in platform secure storage.
 - Keep UI and CLI frontends out of direct secret storage.
 - Do not log passwords, tokens, sentry data, or raw authentication payloads.
-- When several accounts are saved, treat the active-account pointer as sensitive session state.
+- When several accounts are saved, treat the chosen `subject_id` as sensitive session-selection
+  state in your product.
 - Keep raw cookie dumps and Web API responses out of committed logs.
 
 ## Platform Storage Plan

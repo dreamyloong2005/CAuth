@@ -604,11 +604,13 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeFetchDepotBranche
     JNIEnv* env,
     jclass,
     jlong handle,
+    jlong steam_id,
     jint app_id,
     jint max_count) {
     cauth_app_branch_list_t result{};
     const cauth_result_t native_result = cauth_depot_fetch_branches(
-        client_from_handle(handle), static_cast<unsigned int>(app_id),
+        client_from_handle(handle), static_cast<unsigned long long>(steam_id),
+        static_cast<unsigned int>(app_id),
         static_cast<unsigned int>(max_count), &result);
     if (native_result != CAUTH_OK) {
         throw_result_exception(env, "Depot branches failed", native_result);
@@ -622,13 +624,15 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeFetchDepotManifes
     JNIEnv* env,
     jclass,
     jlong handle,
+    jlong steam_id,
     jint app_id,
     jstring branch,
     jint max_count) {
     const char* branch_chars = branch == nullptr ? nullptr : env->GetStringUTFChars(branch, nullptr);
     cauth_depot_manifest_list_t result{};
     const cauth_result_t native_result = cauth_depot_fetch_manifests(
-        client_from_handle(handle), static_cast<unsigned int>(app_id), branch_chars,
+        client_from_handle(handle), static_cast<unsigned long long>(steam_id),
+        static_cast<unsigned int>(app_id), branch_chars,
         static_cast<unsigned int>(max_count), &result);
     if (branch_chars != nullptr) {
         env->ReleaseStringUTFChars(branch, branch_chars);
@@ -645,13 +649,15 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeFetchDepotPreflig
     JNIEnv* env,
     jclass,
     jlong handle,
+    jlong steam_id,
     jint app_id,
     jstring branch,
     jint max_count) {
     const char* branch_chars = branch == nullptr ? nullptr : env->GetStringUTFChars(branch, nullptr);
     cauth_depot_preflight_report_t result{};
     const cauth_result_t native_result = cauth_depot_fetch_preflight(
-        client_from_handle(handle), static_cast<unsigned int>(app_id), branch_chars,
+        client_from_handle(handle), static_cast<unsigned long long>(steam_id),
+        static_cast<unsigned int>(app_id), branch_chars,
         static_cast<unsigned int>(max_count), &result);
     if (branch_chars != nullptr) {
         env->ReleaseStringUTFChars(branch, branch_chars);
@@ -668,12 +674,14 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeFetchDepotKey(
     JNIEnv* env,
     jclass,
     jlong handle,
+    jlong steam_id,
     jint app_id,
     jint depot_id,
     jint max_count) {
     cauth_depot_key_response_t result{};
     const cauth_result_t native_result = cauth_depot_fetch_key(
-        client_from_handle(handle), static_cast<unsigned int>(app_id),
+        client_from_handle(handle), static_cast<unsigned long long>(steam_id),
+        static_cast<unsigned int>(app_id),
         static_cast<unsigned int>(depot_id), static_cast<unsigned int>(max_count), &result);
     if (native_result != CAUTH_OK) {
         throw_result_exception(env, "Depot key failed", native_result);
@@ -687,6 +695,7 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeFetchManifestRequ
     JNIEnv* env,
     jclass,
     jlong handle,
+    jlong steam_id,
     jint app_id,
     jint depot_id,
     jlong manifest_gid,
@@ -699,7 +708,8 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeFetchManifestRequ
                                                  : env->GetStringUTFChars(branch_password_hash, nullptr);
     cauth_manifest_request_code_response_t result{};
     const cauth_result_t native_result = cauth_depot_fetch_manifest_request_code(
-        client_from_handle(handle), static_cast<unsigned int>(app_id),
+        client_from_handle(handle), static_cast<unsigned long long>(steam_id),
+        static_cast<unsigned int>(app_id),
         static_cast<unsigned int>(depot_id), static_cast<unsigned long long>(manifest_gid),
         branch_chars, branch_password_hash_chars, static_cast<unsigned int>(max_count), &result);
     if (branch_chars != nullptr) {

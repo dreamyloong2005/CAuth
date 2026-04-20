@@ -78,8 +78,6 @@ Defined in `include/cauth/core_ffi.h`:
 - `cauth_result_message()`
 - `cauth_session_get_saved()`
 - `cauth_session_list_saved()`
-- `cauth_session_set_active()`
-- `cauth_session_clear_saved()`
 - `cauth_session_clear_account()`
 - `cauth_session_clear_all()`
 - `cauth_session_save()`
@@ -138,14 +136,13 @@ Web-flow helpers:
 `CAuthSteamAuthApi`:
 
 - `loginPassword(...)`
-- `getSavedSession()`
+- `getSavedSession(steamId)`
 - `listSavedAccounts()`
-- `useSavedAccount(steamId)`
-- `clearSavedSession()`
+- `clearSavedSession(steamId)`
 - `clearSavedAccount(steamId)`
 - `clearAllSavedAccounts()`
 - `probeCm()`
-- `logonCm()`
+- `logonCm(steamId)`
 
 `CAuthSteamAuthController`:
 
@@ -153,7 +150,7 @@ Web-flow helpers:
 - owns saved-session snapshot
 - owns saved-account list snapshot
 - owns CM probe/logon snapshots
-- exposes `login()`, `loadSavedSession()`, `loadSavedAccounts()`, `useSavedAccount(steamId)`,
+- exposes `login()`, `loadSavedSession()`, `loadSavedAccounts()`, `selectSavedAccount(steamId)`,
   `clearSavedSession()`, `probeCm()`, `logonCm()`
 
 ### CLI equivalents
@@ -162,13 +159,12 @@ Web-flow helpers:
 - `cauth steam auth login-web`
 - `cauth steam auth login-mobile`
 - `cauth steam auth status`
-- `cauth steam auth whoami`
+- `cauth steam auth whoami --steam-id <id>`
 - `cauth steam auth accounts`
-- `cauth steam auth use --steam-id <id>`
-- `cauth steam auth refresh-access`
-- `cauth steam auth web-cookies`
-- `cauth steam auth token-info`
-- `cauth steam auth clear [--steam-id <id>|--all]`
+- `cauth steam auth refresh-access --steam-id <id>`
+- `cauth steam auth web-cookies --steam-id <id>`
+- `cauth steam auth token-info --steam-id <id>`
+- `cauth steam auth clear (--steam-id <id>|--all)`
 - `cauth steam auth cm ...`
 
 ## Steam depot surface
@@ -321,20 +317,20 @@ Main operations:
 ### Check whether a Steam session already exists
 
 - C FFI: `cauth_auth_get_saved_session()`
-- Android API: `client.steamAuth().getSavedSession()`
-- CLI: `cauth steam auth status`
+- Android API: `client.steamAuth().getSavedSession(steamId)`
+- CLI: `cauth steam auth whoami --steam-id <id>`
 
-### List or switch saved Steam accounts
+### List or select saved Steam accounts
 
 - C FFI:
   - `cauth_session_list_saved()`
-  - `cauth_session_set_active()`
+  - `cauth_session_get_saved()`
 - Android API:
   - `client.steamAuth().listSavedAccounts()`
-  - `client.steamAuth().useSavedAccount(steamId)`
+  - `client.steamAuth().getSavedSession(steamId)`
 - CLI:
   - `cauth steam auth accounts`
-  - `cauth steam auth use --steam-id <id>`
+  - `cauth steam auth whoami --steam-id <id>`
 
 ### Inspect app branches and depots
 

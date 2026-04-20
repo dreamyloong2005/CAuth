@@ -209,6 +209,7 @@ int main() {
         std::ostringstream err;
         cauth::steam::cloud::SteamCloudRequest list_request;
         list_request.app_id = 440;
+        list_request.steam_id = 76561198000000000ULL;
         list_request.access_token = "token";
         list_request.remote_root = "saves";
         if (cauth::steam::cloud::print_remote_files(store, list_request, 10, 0, true, out, err) != 0) {
@@ -280,6 +281,7 @@ int main() {
         std::ostringstream err;
         cauth::steam::cloud::SteamCloudRequest list_request;
         list_request.app_id = 440;
+        list_request.steam_id = 76561198000000000ULL;
         if (cauth::steam::cloud::print_remote_files(store, list_request, 10, 0, true, out, err) != 0) {
             std::cerr << "print_remote_files should fill saved Steam session fields\n";
             return 1;

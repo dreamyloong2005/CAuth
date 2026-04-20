@@ -40,6 +40,14 @@ fun CAuthSteamDepotQuerySection(
             singleLine = true,
         )
         OutlinedTextField(
+            value = state.steamIdText,
+            onValueChange = controller::setSteamIdText,
+            label = { Text("SteamID for saved auth") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !state.busy,
+            singleLine = true,
+        )
+        OutlinedTextField(
             value = state.branch,
             onValueChange = controller::setBranch,
             label = { Text("Branch") },

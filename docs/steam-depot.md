@@ -20,20 +20,19 @@ local verification.
 ### 1. Inspect the app
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam depot branches --app-id 2868840 --max-count 20
-.\build\windows-msvc-debug\cauth.exe steam depot manifests --app-id 2868840 --branch public --max-count 20
-.\build\windows-msvc-debug\cauth.exe steam depot preflight --app-id 2868840 --branch public --max-count 20
+.\build\windows-msvc-debug\cauth.exe steam depot branches --steam-id 7656119... --app-id 2868840 --max-count 20
+.\build\windows-msvc-debug\cauth.exe steam depot manifests --steam-id 7656119... --app-id 2868840 --branch public --max-count 20
+.\build\windows-msvc-debug\cauth.exe steam depot preflight --steam-id 7656119... --app-id 2868840 --branch public --max-count 20
 ```
 
 `preflight` is the best starting point because it joins branch, depot, and manifest information into
 one snapshot.
 
-Depot operations use the active saved Steam account. If you have multiple accounts saved, choose
-the account that owns the target app before continuing:
+Depot metadata operations use saved Steam auth material and therefore require an explicit SteamID.
+If you have multiple accounts saved, choose the account that owns the target app and pass that ID:
 
 ```powershell
 .\build\windows-msvc-debug\cauth.exe steam auth accounts
-.\build\windows-msvc-debug\cauth.exe steam auth use --steam-id 7656119...
 ```
 
 ## Platform-aware depot selection
@@ -67,8 +66,8 @@ platform.
 Once you have a target depot and manifest:
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam depot key --app-id 2868840 --depot-id <depot_id> --max-count 20
-.\build\windows-msvc-debug\cauth.exe steam depot manifest-code --app-id 2868840 --depot-id <depot_id> --manifest-gid <manifest_gid> --branch public --max-count 20
+.\build\windows-msvc-debug\cauth.exe steam depot key --steam-id 7656119... --app-id 2868840 --depot-id <depot_id> --max-count 20
+.\build\windows-msvc-debug\cauth.exe steam depot manifest-code --steam-id 7656119... --app-id 2868840 --depot-id <depot_id> --manifest-gid <manifest_gid> --branch public --max-count 20
 ```
 
 Common failure hints:

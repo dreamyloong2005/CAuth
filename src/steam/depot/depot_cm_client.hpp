@@ -9,12 +9,15 @@
 #include <cstdint>
 #include <iosfwd>
 #include <optional>
+#include <string>
+#include <string_view>
 
 namespace cauth::core::depot {
 
 class DepotCmClient {
   public:
     DepotCmClient(cauth::steam::auth::SteamAuthProvider& auth_provider,
+                  std::string_view subject_id,
                   std::ostream* out = nullptr,
                   std::ostream* err = nullptr);
 
@@ -28,6 +31,7 @@ class DepotCmClient {
 
   private:
     cauth::steam::auth::SteamAuthProvider* auth_provider_;
+    std::string subject_id_;
     std::ostream* out_;
     std::ostream* err_;
 };

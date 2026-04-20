@@ -10,6 +10,7 @@ internal object CAuthNativeSteamCloud {
     external fun nativeListRemoteFiles(
         handle: Long,
         appId: Int,
+        steamId: Long,
         accessToken: String?,
         localRoot: String?,
         remoteRoot: String?,
@@ -25,6 +26,7 @@ internal object CAuthNativeSteamCloud {
     external fun nativePull(
         handle: Long,
         appId: Int,
+        steamId: Long,
         accessToken: String?,
         localRoot: String?,
         remoteRoot: String?,
@@ -37,6 +39,7 @@ internal object CAuthNativeSteamCloud {
     external fun nativePush(
         handle: Long,
         appId: Int,
+        steamId: Long,
         accessToken: String?,
         localRoot: String?,
         remoteRoot: String?,
@@ -49,6 +52,7 @@ internal object CAuthNativeSteamCloud {
     external fun nativeVerifyLocalFiles(
         handle: Long,
         appId: Int,
+        steamId: Long,
         accessToken: String?,
         localRoot: String?,
         remoteRoot: String?,
@@ -62,6 +66,7 @@ internal object CAuthNativeSteamCloud {
     external fun nativeStartPull(
         handle: Long,
         appId: Int,
+        steamId: Long,
         accessToken: String?,
         localRoot: String?,
         remoteRoot: String?,
@@ -74,6 +79,7 @@ internal object CAuthNativeSteamCloud {
     external fun nativeStartPush(
         handle: Long,
         appId: Int,
+        steamId: Long,
         accessToken: String?,
         localRoot: String?,
         remoteRoot: String?,

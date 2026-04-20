@@ -21,7 +21,7 @@ Recommended reading order:
    - Android example build and logcat loop
 3. [accounts.md](accounts.md)
    - saved account repository
-   - active account pointer
+   - explicit `subject_id` selection
    - CLI and Android account operations
 4. [integration.md](integration.md)
    - how to choose modules

@@ -41,6 +41,14 @@ fun CAuthSteamCloudRequestSection(
             singleLine = true,
         )
         OutlinedTextField(
+            value = state.steamIdText,
+            onValueChange = controller::setSteamIdText,
+            label = { Text("SteamID for saved auth") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !state.busy,
+            singleLine = true,
+        )
+        OutlinedTextField(
             value = state.localRoot,
             onValueChange = controller::setLocalRoot,
             label = { Text("Local root") },
