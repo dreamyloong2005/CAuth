@@ -37,11 +37,14 @@ The root `.gitignore` excludes:
 
 1. Decide the repository visibility
    - private first is the safer default
-2. Choose a project license
-   - this is still a required owner decision
-   - do not publish a public repo without being explicit about licensing intent
+2. Confirm the license files are still intentional
+   - CAuth is MIT licensed
+   - vendored dependencies keep their own upstream licenses
 3. Confirm that `reference/` stays local-only research material
 4. Confirm no account data, tokens, manifests, or downloaded content remain in the working tree
+5. Confirm the published version
+   - current development version is `0.2.0`
+   - version source of truth is `project(CAuth VERSION ...)` in `CMakeLists.txt`
 
 ## Suggested first push flow
 
@@ -52,6 +55,17 @@ git commit -m "Initial import"
 git remote add origin <your-github-repo-url>
 git push -u origin main
 ```
+
+## Tagging a release
+
+Use a leading `v` tag after validation:
+
+```powershell
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+Before tagging, run the checks in [versioning.md](versioning.md) and [testing.md](testing.md).
 
 ## If Git breaks later
 
@@ -71,10 +85,11 @@ At minimum, keep these files at the repo root:
 - `README.md`
 - `CONTRIBUTING.md`
 - `SECURITY.md`
-- `LICENSE` once chosen
+- `LICENSE`
 
 ## Companion docs
 
 - [index.md](index.md)
 - [getting-started.md](getting-started.md)
 - [testing.md](testing.md)
+- [versioning.md](versioning.md)

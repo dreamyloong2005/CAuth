@@ -7,7 +7,7 @@ std::string normalize_device_name(std::string_view requested_name) {
         return "CAuth";
     }
 
-    return std::string{requested_name} + "_CAuth";
+    return std::string{requested_name};
 }
 
 } // namespace cauth::steam::auth

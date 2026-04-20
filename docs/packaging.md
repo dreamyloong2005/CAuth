@@ -13,8 +13,10 @@ CAuth currently exposes five CMake install components:
 The intended layering is:
 
 ```text
-Core <- SteamAuth <- SteamDepot
-                  <- SteamCloud
+Core
+  <- SteamAuth
+      <- SteamDepot
+      <- SteamCloud
 ```
 
 `Cli` is optional and sits on top of the native libraries.
@@ -94,7 +96,7 @@ Steam auth only after `Core` is installed:
 
 ```cmake
 find_package(CAuth CONFIG REQUIRED COMPONENTS core steam_auth)
-target_link_libraries(my_app PRIVATE cauth::steam_auth cauth::steam_auth_ffi)
+target_link_libraries(my_app PRIVATE cauth::core cauth::steam_auth cauth::steam_auth_ffi)
 ```
 
 Full Steam stack:
@@ -131,3 +133,18 @@ target_link_libraries(my_app
 
 On Windows, consumers that link the FFI DLL targets must make the installed `bin` directory
 available at runtime so the corresponding DLLs can be found.
+
+## Versioned CMake Package
+
+`CAuthConfigVersion.cmake` is generated from the CMake project version. Consumers can request a
+compatible package version:
+
+```cmake
+find_package(CAuth 0.2 CONFIG REQUIRED COMPONENTS core steam_auth)
+```
+
+The installed package currently uses `SameMajorVersion` compatibility. While CAuth is still in
+`0.x`, treat minor-version bumps as potentially meaningful API changes and verify against the
+target release.
+
+See [versioning.md](versioning.md) for the version source of truth and bump checklist.

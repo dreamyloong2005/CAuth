@@ -42,7 +42,7 @@ fun CAuthLoginPane(
             CAuthSteamAuthActionButtons(controller = controller)
             CAuthSteamAuthStatus(statusText = state.statusText)
             CAuthSteamAuthTrace(traceLines = state.traceLines)
-            CAuthSteamAuthResults(state = state)
+            CAuthSteamAuthResults(state = state, controller = controller)
         }
     }
 }

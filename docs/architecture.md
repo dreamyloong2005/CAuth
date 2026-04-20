@@ -5,8 +5,10 @@ CAuth is organized as a layered native toolkit with explicit module boundaries.
 ## Module Graph
 
 ```text
-cauth_core <- cauth_steam_auth <- cauth_steam_depot
-                              <- cauth_steam_cloud
+cauth_core
+  <- cauth_steam_auth
+      <- cauth_steam_depot
+      <- cauth_steam_cloud
 ```
 
 ## Modules
@@ -16,13 +18,16 @@ cauth_core <- cauth_steam_auth <- cauth_steam_depot
 Owns the cross-platform substrate that other auth providers can reuse:
 
 - session and credential models
+- multi-account repository model and active-account pointer
 - secure storage repository interfaces and platform-backed implementations
 - JWT parsing and shared auth result types
 - HTTP / websocket abstractions
 - platform runtime bridges
 - shared application-facing orchestration utilities
 
-`cauth_core` should not contain Steam-specific protocol concepts.
+`cauth_core` should not contain Steam-specific protocol concepts. It can store generic records such
+as `provider`, `subject_id`, tokens, timestamps, and active-account metadata, but it should not know
+which Steam session flavor is preferred for CM or depot operations.
 
 ### `cauth_steam_auth`
 
@@ -33,6 +38,8 @@ Owns Steam account authentication and authenticated CM access:
 - Web login and cookie/token follow-up
 - CM directory lookup, probe, logon, and auth-oriented service calls
 - Steam session persistence through `cauth_core`
+- Steam-specific session selection rules, such as preferring `steam-client` auth material for CM,
+  depot, and most native Steam workflows
 
 This module depends on `cauth_core`.
 
@@ -88,6 +95,20 @@ src/steam/cloud/     cloud-save sync workflows
 src/ffi/             split FFI implementations
 src/cli/             thin CLI frontend over application modules
 ```
+
+## Account Boundary
+
+The account repository belongs to `cauth_core` because account storage is provider-neutral. The
+interpretation of a stored session belongs to the owning provider module.
+
+For Steam, `cauth_steam_auth` maps a generic stored account to Steam-specific session types:
+
+- `steam-client`
+- `web-browser`
+- `mobile-app`
+
+Depot and cloud modules should not parse repository internals directly. They should ask
+`cauth_steam_auth` for usable auth material.
 
 ## Packaging Model
 

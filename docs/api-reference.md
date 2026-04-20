@@ -11,8 +11,10 @@ It is not a full generated reference. The goal is to answer:
 ## Module map
 
 ```text
-cauth_core <- cauth_steam_auth <- cauth_steam_depot
-                              <- cauth_steam_cloud
+cauth_core
+  <- cauth_steam_auth
+      <- cauth_steam_depot
+      <- cauth_steam_cloud
 ```
 
 ## C++ umbrella headers
@@ -75,7 +77,11 @@ Defined in `include/cauth/core_ffi.h`:
 - `cauth_client_destroy()`
 - `cauth_result_message()`
 - `cauth_session_get_saved()`
+- `cauth_session_list_saved()`
+- `cauth_session_set_active()`
 - `cauth_session_clear_saved()`
+- `cauth_session_clear_account()`
+- `cauth_session_clear_all()`
 - `cauth_session_save()`
 
 ### Android
@@ -85,6 +91,12 @@ Defined in `include/cauth/core_ffi.h`:
 - `CAuthClient.create()`
 - `CAuthClient.version()`
 - `CAuthClient.close()`
+
+Core owns the provider-neutral session repository. Provider modules decide how to interpret stored
+records.
+
+`cauth_get_version()` reports the generated native project version. See
+[versioning.md](versioning.md) for the source of truth.
 
 ## Steam auth surface
 
@@ -127,7 +139,11 @@ Web-flow helpers:
 
 - `loginPassword(...)`
 - `getSavedSession()`
+- `listSavedAccounts()`
+- `useSavedAccount(steamId)`
 - `clearSavedSession()`
+- `clearSavedAccount(steamId)`
+- `clearAllSavedAccounts()`
 - `probeCm()`
 - `logonCm()`
 
@@ -135,8 +151,10 @@ Web-flow helpers:
 
 - owns editable login form state
 - owns saved-session snapshot
+- owns saved-account list snapshot
 - owns CM probe/logon snapshots
-- exposes `login()`, `loadSavedSession()`, `clearSavedSession()`, `probeCm()`, `logonCm()`
+- exposes `login()`, `loadSavedSession()`, `loadSavedAccounts()`, `useSavedAccount(steamId)`,
+  `clearSavedSession()`, `probeCm()`, `logonCm()`
 
 ### CLI equivalents
 
@@ -145,10 +163,12 @@ Web-flow helpers:
 - `cauth steam auth login-mobile`
 - `cauth steam auth status`
 - `cauth steam auth whoami`
+- `cauth steam auth accounts`
+- `cauth steam auth use --steam-id <id>`
 - `cauth steam auth refresh-access`
 - `cauth steam auth web-cookies`
 - `cauth steam auth token-info`
-- `cauth steam auth clear`
+- `cauth steam auth clear [--steam-id <id>|--all]`
 - `cauth steam auth cm ...`
 
 ## Steam depot surface
@@ -304,6 +324,18 @@ Main operations:
 - Android API: `client.steamAuth().getSavedSession()`
 - CLI: `cauth steam auth status`
 
+### List or switch saved Steam accounts
+
+- C FFI:
+  - `cauth_session_list_saved()`
+  - `cauth_session_set_active()`
+- Android API:
+  - `client.steamAuth().listSavedAccounts()`
+  - `client.steamAuth().useSavedAccount(steamId)`
+- CLI:
+  - `cauth steam auth accounts`
+  - `cauth steam auth use --steam-id <id>`
+
 ### Inspect app branches and depots
 
 - C FFI: `cauth_depot_fetch_branches()`, `cauth_depot_fetch_preflight()`
@@ -338,6 +370,7 @@ Main operations:
 
 - [compose-project-integration.md](compose-project-integration.md)
 - [android-compose.md](android-compose.md)
+- [accounts.md](accounts.md)
 - [testing.md](testing.md)
 - [steam-depot.md](steam-depot.md)
 - [steam-cloud.md](steam-cloud.md)

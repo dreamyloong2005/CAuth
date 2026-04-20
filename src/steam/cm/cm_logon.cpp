@@ -276,11 +276,7 @@ std::vector<std::uint8_t> encode_client_logon_body(const session::AuthSession& s
 CmMessage make_client_logon_message(const session::AuthSession& session,
                                     const CmLogonRequest& request) {
     std::vector<std::uint8_t> header;
-    const auto header_steam_id =
-        cauth::steam::auth::steam_id(session) != 0
-            ? cauth::steam::auth::steam_id(session)
-            : kSteamIdIndividualAccountZero;
-    append_fixed64_field(header, 1, header_steam_id);
+    append_fixed64_field(header, 1, kSteamIdIndividualAccountZero);
 
     return CmMessage{
         EMsg::ClientLogon,

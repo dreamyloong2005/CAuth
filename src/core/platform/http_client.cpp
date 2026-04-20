@@ -257,7 +257,7 @@ HttpResponse winhttp_request(const HttpRequest& request) {
 
 HttpResponse perform_platform_http_request(const HttpRequest& request) {
     if (request.url.empty()) {
-        return {false, "URL is required", 0, {}};
+        return {false, "URL is required", 0, {}, {}};
     }
 
 #ifdef _WIN32

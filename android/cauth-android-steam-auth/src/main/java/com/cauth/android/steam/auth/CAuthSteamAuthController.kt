@@ -17,6 +17,7 @@ data class CAuthSteamAuthState(
     val busy: Boolean = false,
     val loginResult: LoginResultSnapshot? = null,
     val savedSession: SavedSessionSnapshot? = null,
+    val savedAccounts: List<SavedAccountSnapshot> = emptyList(),
     val cmProbe: CmProbeSnapshot? = null,
     val cmLogon: CmLogonSnapshot? = null,
     val traceLines: List<String> = emptyList(),
@@ -108,6 +109,56 @@ class CAuthSteamAuthController(
         }
     }
 
+    fun loadSavedAccounts() {
+        appendTrace("Saved Accounts clicked")
+        _state.update { it.copy(statusText = "Loading saved accounts...", busy = true) }
+        scope.launch {
+            appendTrace("Saved Accounts coroutine started")
+            runCatching { api.listSavedAccounts() }
+                .onSuccess { accounts ->
+                    _state.update {
+                        it.copy(
+                            statusText = "Saved accounts: ${accounts.size}",
+                            busy = false,
+                            savedAccounts = accounts,
+                        )
+                    }
+                    appendTrace("Saved Accounts returned count=${accounts.size} active=${accounts.firstOrNull { account -> account.active }?.steamId ?: 0}")
+                }
+                .onFailure { failure ->
+                    _state.update {
+                        it.copy(
+                            statusText = failure.message ?: "Accounts load failed",
+                            busy = false,
+                        )
+                    }
+                    appendTrace("Saved Accounts failed: ${failure::class.simpleName}: ${failure.message ?: "(no message)"}")
+                }
+        }
+    }
+
+    fun useSavedAccount(steamId: Long) {
+        appendTrace("Use Saved Account clicked steamId=$steamId")
+        _state.update { it.copy(statusText = "Switching active account...", busy = true) }
+        scope.launch {
+            runCatching { api.useSavedAccount(steamId) }
+                .onSuccess {
+                    _state.update { it.copy(statusText = "Active account switched", busy = false) }
+                    appendTrace("Use Saved Account completed steamId=$steamId")
+                    loadSavedAccounts()
+                }
+                .onFailure { failure ->
+                    _state.update {
+                        it.copy(
+                            statusText = failure.message ?: "Account switch failed",
+                            busy = false,
+                        )
+                    }
+                    appendTrace("Use Saved Account failed: ${failure::class.simpleName}: ${failure.message ?: "(no message)"}")
+                }
+        }
+    }
+
     fun clearSavedSession() {
         appendTrace("Clear Session clicked")
         _state.update { it.copy(statusText = "Clearing saved session...", busy = true) }
@@ -120,6 +171,7 @@ class CAuthSteamAuthController(
                             statusText = "Saved session cleared",
                             busy = false,
                             savedSession = null,
+                            savedAccounts = emptyList(),
                         )
                     }
                     appendTrace("Clear Session completed")

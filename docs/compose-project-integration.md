@@ -193,6 +193,7 @@ suspend fun loadData(client: CAuthClient) {
     val cloud = client.steamCloud()
 
     val session = auth.getSavedSession()
+    val accounts = auth.listSavedAccounts()
     val preflight = depot.fetchPreflight(appId = 2868840)
     val remote = cloud.listRemoteFiles(
         SteamCloudRequest(appId = 2868840, remoteRoot = "savegames"),
@@ -239,7 +240,7 @@ That means:
 ## 10. Recommended rollout into a real app
 
 1. integrate `core` + `steam_auth`
-2. get login and session restore stable
+2. get login, account listing, active-account switching, and session restore stable
 3. add `steam_depot` or `steam_cloud`
 4. only then replace stock panes with your product UI
 
@@ -249,5 +250,6 @@ That order keeps auth/session issues from getting mixed into depot or cloud debu
 
 - [android-compose.md](android-compose.md)
 - [integration.md](integration.md)
+- [accounts.md](accounts.md)
 - [api-reference.md](api-reference.md)
 - [testing.md](testing.md)

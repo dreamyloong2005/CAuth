@@ -1,59 +1,59 @@
 # Roadmap
 
-## Milestone 0: Project Foundation
+This file tracks the project direction after the module split. It is not a promise of dates.
 
-- CMake project scaffold.
-- Native core library.
-- C ABI header.
-- CLI diagnostic command.
-- Basic executable tests.
+## Completed Foundation
 
-## Milestone 1: Authentication Spike
+- CMake project and install components.
+- Public C++ umbrella headers.
+- Split C ABI headers and FFI libraries.
+- Windows desktop CLI.
+- Android JNI/Kotlin modules.
+- Compose diagnostic example app.
+- MIT license and publishing hygiene docs.
 
-- Login request/result model.
-- Login service that saves successful sessions.
-- Steam network authenticator orchestration.
-- Steam GetPasswordRSAPublicKey transport.
-- Steam RSA password encryption on Windows.
-- Steam BeginAuthSessionViaCredentials transport.
-- Steam PollAuthSessionStatus transport.
-- Interactive Steam Guard continuation flow.
-- Real-account login hardening.
-- Protocol message serialization plan.
-- Login state machine design.
-- Steam Guard prompt flow.
-- Secure credential backend interface.
+## Current Core
 
-## Milestone 2: Session Persistence
+- Provider-neutral session model.
+- Multi-account repository with active-account pointer.
+- Platform-backed session repositories.
+- Runtime bridges for desktop and Android.
+- Shared transport and crypto utilities.
 
-- Platform credential storage.
-- Session restore.
-- Logout and token cleanup.
-- Redacted diagnostics.
-- Steam Directory CM endpoint discovery.
+## Current Steam Auth
 
-## Milestone 3: CM Session
+- Steam client login path.
+- Web-browser login path.
+- Mobile-app login entry point.
+- Steam Guard polling and continuation.
+- Saved-account list, switch, and clear flows.
+- CM directory lookup, probe, logon, and auth service calls.
+- Web-cookie / finalize-login diagnostic path.
 
-- CM websocket transport probe.
-- CM message framing.
-- ClientLogon message construction.
-- Client logon with saved access token.
-- Heartbeat message construction.
-- Heartbeat smoke send.
-- Heartbeat loop and disconnect handling.
-- Account/license query smoke test.
+## Current Steam Depot
 
-## Milestone 4: Depot Prototype
+- Branch, depot, and manifest discovery.
+- Platform-aware depot selection metadata.
+- Depot key and manifest request-code retrieval.
+- Manifest download and parsing.
+- Chunk, file, and all-files download.
+- zlib and zstd-backed compatibility paths.
+- Local binary verification against manifest content.
 
-- App/depot metadata lookup.
-- Manifest parsing.
-- Chunk download.
-- Hash verification.
-- Resume support.
+## Current Steam Cloud
 
-## Milestone 5: Android Compose Integration
+- Remote cloud file listing.
+- Local-vs-remote verification.
+- Pull and push workflows.
+- Conflict policy support.
+- CM and web-backed auth material paths.
+- Android progress and cancellation task model.
 
-- Android JNI/Kotlin binding package.
-- Compose-based login flow.
-- Compose-based depot task UI.
-- Progress and error reporting.
+## Next Hardening
+
+- Finish product-facing docs for host integration.
+- Tighten Android example acceptance flows.
+- Add CI once the GitHub repository is stable.
+- Expand platform secure storage coverage beyond Windows and Android.
+- Add more protocol regression fixtures.
+- Start `cauth_microsoft_auth` as the second provider to validate that `cauth_core` stays generic.

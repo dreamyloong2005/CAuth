@@ -67,18 +67,18 @@ int main() {
     caller_named_request.device_name = "ExampleLauncher";
     const auto caller_named_result = service.login(caller_named_request);
     if (caller_named_result.status != cauth::steam::auth::SteamLoginStatus::Succeeded ||
-        authenticator.last_request.device_name != "ExampleLauncher_CAuth") {
-        std::cerr << "device name should be normalized with _CAuth suffix\n";
+        authenticator.last_request.device_name != "ExampleLauncher") {
+        std::cerr << "custom device name should be passed through unchanged\n";
         return 1;
     }
 
     store.clear_auth_session();
-    auto already_suffixed_request = make_request();
-    already_suffixed_request.device_name = "ExampleLauncher_CAuth";
-    const auto already_suffixed_result = service.login(already_suffixed_request);
-    if (already_suffixed_result.status != cauth::steam::auth::SteamLoginStatus::Succeeded ||
-        authenticator.last_request.device_name != "ExampleLauncher_CAuth") {
-        std::cerr << "device name should not duplicate _CAuth suffix\n";
+    auto default_device_name_request = make_request();
+    default_device_name_request.device_name.clear();
+    const auto default_device_name_result = service.login(default_device_name_request);
+    if (default_device_name_result.status != cauth::steam::auth::SteamLoginStatus::Succeeded ||
+        authenticator.last_request.device_name != "CAuth") {
+        std::cerr << "empty device name should fall back to CAuth\n";
         return 1;
     }
 

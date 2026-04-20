@@ -76,7 +76,7 @@ cauth::steam::auth::SteamLoginRequest make_request(cauth::steam::auth::SteamLogi
     cauth::steam::auth::SteamLoginRequest request;
     request.account_name = "test_account";
     request.password = "password";
-    request.device_name = "TestDevice_CAuth";
+    request.device_name = "TestDevice";
     request.platform_type = type;
     return request;
 }

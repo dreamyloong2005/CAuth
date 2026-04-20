@@ -98,7 +98,7 @@ cauth::steam::auth::SteamLoginRequest make_request() {
         "test_account",
         "plain-password",
         "",
-        "TestCaller_CAuth",
+        "TestCaller",
         true,
         cauth::steam::auth::SteamLoginPlatformType::SteamClient,
     };
@@ -128,7 +128,7 @@ int main() {
         transport.last_begin_request.encryption_timestamp != 1234 ||
         transport.last_begin_request.platform_type !=
             cauth::steam::auth::SteamLoginPlatformType::SteamClient ||
-        transport.last_begin_request.device_friendly_name != "TestCaller_CAuth") {
+        transport.last_begin_request.device_friendly_name != "TestCaller") {
         std::cerr << "network authenticator should pass encrypted password fields\n";
         return 1;
     }

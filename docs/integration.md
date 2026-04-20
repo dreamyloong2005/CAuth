@@ -22,9 +22,11 @@ Use the smallest set that matches your product:
 - `cauth_core`
   - secure storage/session substrate only
   - reusable auth/session infrastructure for future providers
+  - multi-account repository and active-account pointer
 - `cauth_core + cauth_steam_auth`
   - Steam login
   - saved session restore
+  - saved account list / switch / clear
   - Steam Guard continuation
   - CM probe/logon/auth flows
 - `cauth_core + cauth_steam_auth + cauth_steam_depot`
@@ -161,6 +163,32 @@ Use the C++ headers if your host is native C++ and can consume C++ linkage direc
 Use the `*_ffi.h` headers if your host wants a stable C ABI, JNI bridge, game engine binding, or
 other foreign-function integration.
 
+## Account Selection
+
+CAuth separates saved accounts from the active account pointer. Product code should make account
+selection explicit:
+
+1. authenticate through `steam_auth`
+2. list saved accounts
+3. let the user choose the active account when more than one exists
+4. run depot or cloud work after the active account is correct
+
+Desktop CLI equivalents:
+
+```powershell
+.\build\windows-msvc-debug\cauth.exe steam auth accounts
+.\build\windows-msvc-debug\cauth.exe steam auth use --steam-id 7656119...
+```
+
+Android API equivalents:
+
+```kotlin
+val accounts = client.steamAuth().listSavedAccounts()
+client.steamAuth().useSavedAccount(steamId)
+```
+
+See [accounts.md](accounts.md) for the repository model and cleanup commands.
+
 ## Desktop Smoke Tests
 
 After integrating, verify each layer independently.
@@ -170,6 +198,7 @@ After integrating, verify each layer independently.
 ```powershell
 .\build\windows-msvc-debug\cauth.exe steam auth status
 .\build\windows-msvc-debug\cauth.exe steam auth whoami
+.\build\windows-msvc-debug\cauth.exe steam auth accounts
 .\build\windows-msvc-debug\cauth.exe steam auth cm probe --max-count 5
 ```
 
@@ -293,6 +322,7 @@ suspend fun inspect(client: CAuthClient) {
     val cloud = client.steamCloud()
 
     val session = auth.getSavedSession()
+    val accounts = auth.listSavedAccounts()
     val branches = depot.fetchBranches(appId = 2868840)
     val files = cloud.listRemoteFiles(
         SteamCloudRequest(appId = 2868840, remoteRoot = "savegames"),
@@ -307,14 +337,16 @@ When integrating into your own product, keep the rollout narrow:
 
 1. `core`
 2. `steam_auth`
-3. `steam_depot` or `steam_cloud`
-4. your own host-side orchestration and UI polish
+3. saved-account selection and active-account restore
+4. `steam_depot` or `steam_cloud`
+5. your own host-side orchestration and UI polish
 
 That keeps login/session issues isolated before you add content or cloud operations.
 
 ## Related Docs
 
 - [architecture.md](architecture.md)
+- [accounts.md](accounts.md)
 - [packaging.md](packaging.md)
 - [compose-project-integration.md](compose-project-integration.md)
 - [api-reference.md](api-reference.md)

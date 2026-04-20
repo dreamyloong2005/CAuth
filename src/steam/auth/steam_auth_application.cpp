@@ -5,10 +5,12 @@
 #include "steam/auth/steam_web_api_auth_transport.hpp"
 #include "steam/auth/steam_web_cookie_service.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace cauth::steam::auth {
@@ -102,6 +104,65 @@ std::optional<SteamLoginPlatformType> steam_login_platform_type_from_session(
     return std::nullopt;
 }
 
+struct SavedSteamAccountView {
+    cauth::core::session::AuthSession representative;
+    std::vector<std::string> session_types;
+};
+
+std::string display_session_type(const cauth::core::session::AuthSession& session) {
+    return session.session_type.empty() ? "legacy" : session.session_type;
+}
+
+void append_unique_session_type(SavedSteamAccountView& view,
+                                const cauth::core::session::AuthSession& session) {
+    const auto type = display_session_type(session);
+    if (std::find(view.session_types.begin(), view.session_types.end(), type) ==
+        view.session_types.end()) {
+        view.session_types.push_back(type);
+    }
+}
+
+std::vector<SavedSteamAccountView> saved_steam_account_views(
+    const std::vector<cauth::core::session::AuthSession>& sessions) {
+    std::vector<SavedSteamAccountView> views;
+    for (const auto& session : sessions) {
+        if (!is_steam_session(session)) {
+            continue;
+        }
+        const auto found = std::find_if(
+            views.begin(),
+            views.end(),
+            [&](const SavedSteamAccountView& candidate) {
+                return cauth::core::session::matches_session(
+                    candidate.representative,
+                    session.provider,
+                    session.subject_id);
+            });
+        if (found == views.end()) {
+            SavedSteamAccountView view;
+            view.representative = session;
+            append_unique_session_type(view, session);
+            views.push_back(std::move(view));
+            continue;
+        }
+        append_unique_session_type(*found, session);
+        if (session.created_at >= found->representative.created_at) {
+            found->representative = session;
+        }
+    }
+    return views;
+}
+
+void print_session_types(const std::vector<std::string>& session_types,
+                         std::ostream& out) {
+    for (std::size_t index = 0; index < session_types.size(); ++index) {
+        if (index != 0) {
+            out << ',';
+        }
+        out << session_types[index];
+    }
+}
+
 } // namespace
 
 int run_login(cauth::core::session::SessionRepository& store,
@@ -172,6 +233,46 @@ int print_whoami(cauth::core::session::SessionRepository& store,
         return 0;
     }
     out << "Access token: ok\n";
+    return 0;
+}
+
+int print_saved_accounts(cauth::core::session::SessionRepository& store,
+                         std::ostream& out) {
+    const auto views = saved_steam_account_views(store.list_auth_sessions());
+    const auto active = store.active_auth_session_key();
+
+    out << "Steam auth accounts:\n";
+    for (const auto& view : views) {
+        const auto& session = view.representative;
+        const bool is_active = active.has_value() &&
+                               cauth::core::session::matches_session(session, *active);
+        out << "  " << (is_active ? "* " : "- ")
+            << cauth::core::session::redacted_account_label(session)
+            << " steam_id=" << steam_id(session)
+            << " session_types=";
+        print_session_types(view.session_types, out);
+        out << '\n';
+    }
+
+    if (views.empty()) {
+        out << "  (none)\n";
+    }
+    return 0;
+}
+
+int use_saved_account(cauth::core::session::SessionRepository& store,
+                      std::string_view steam_id_value,
+                      std::ostream& out,
+                      std::ostream& err) {
+    if (steam_id_value.empty()) {
+        err << "Steam auth account switch requires --steam-id <id>\n";
+        return 2;
+    }
+    if (!store.set_active_auth_session(kSteamAuthProvider, steam_id_value)) {
+        err << "Steam auth account not found: " << steam_id_value << '\n';
+        return 1;
+    }
+    out << "Steam auth: active account set to " << steam_id_value << '\n';
     return 0;
 }
 
@@ -292,7 +393,27 @@ int print_token_info(cauth::core::session::SessionRepository& store,
 
 int clear_saved_session(cauth::core::session::SessionRepository& store, std::ostream& out) {
     store.clear_auth_session();
-    out << "Steam auth: cleared\n";
+    out << "Steam auth: active account cleared\n";
+    return 0;
+}
+
+int clear_saved_account(cauth::core::session::SessionRepository& store,
+                        std::string_view steam_id_value,
+                        std::ostream& out) {
+    store.clear_auth_session(kSteamAuthProvider, steam_id_value);
+    out << "Steam auth: account cleared " << steam_id_value << '\n';
+    return 0;
+}
+
+int clear_all_saved_accounts(cauth::core::session::SessionRepository& store,
+                             std::ostream& out) {
+    const auto sessions = store.list_auth_sessions();
+    for (const auto& session : sessions) {
+        if (is_steam_session(session)) {
+            store.clear_auth_session(session.provider, session.subject_id);
+        }
+    }
+    out << "Steam auth: all steam accounts cleared\n";
     return 0;
 }
 

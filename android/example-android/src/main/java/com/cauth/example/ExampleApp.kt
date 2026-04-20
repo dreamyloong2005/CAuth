@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -61,6 +63,7 @@ fun CAuthExampleApp() {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .statusBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
@@ -357,6 +360,7 @@ private fun ExampleScreen(modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .padding(16.dp)
+            .navigationBarsPadding()
             .fillMaxSize()
             .verticalScroll(scrollState),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -414,7 +418,7 @@ private fun ExampleScreen(modifier: Modifier = Modifier) {
                             Button(
                                 onClick = {
                                     applyFieldPreset {
-                                        authController.setDeviceName("AndroidExample_CAuth")
+                                        authController.setDeviceName("AndroidExample")
                                         authController.setLoginPlatform(LoginPlatform.SteamClient)
                                     }
                                 },
@@ -424,7 +428,7 @@ private fun ExampleScreen(modifier: Modifier = Modifier) {
                             Button(
                                 onClick = {
                                     applyFieldPreset {
-                                        authController.setDeviceName("AndroidExample_CAuth")
+                                        authController.setDeviceName("AndroidExample")
                                         authController.setLoginPlatform(LoginPlatform.WebBrowser)
                                     }
                                 },
@@ -457,7 +461,7 @@ private fun ExampleScreen(modifier: Modifier = Modifier) {
                         CAuthSteamAuthActionButtons(controller = authController)
                         CAuthSteamAuthStatus(statusText = authState.statusText)
                         CAuthSteamAuthTrace(traceLines = authState.traceLines)
-                        CAuthSteamAuthResults(state = authState)
+                        CAuthSteamAuthResults(state = authState, controller = authController)
                     }
                 }
                 ExampleStatusCard(

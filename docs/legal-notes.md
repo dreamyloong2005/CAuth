@@ -9,6 +9,12 @@ CAuth is intended as an original native implementation.
 - GPL source code must not be copied into CAuth unless the project intentionally adopts compatible
   licensing.
 
+## Vendored Dependencies
+
+CAuth currently vendors zlib and zstd source trees under `.deps/` for build reliability. Those
+dependencies retain their upstream licenses and notices. Do not rewrite their license headers or
+mix their terms into CAuth's MIT license.
+
 ## Project Hygiene
 
 - Keep research notes separate from implementation files.

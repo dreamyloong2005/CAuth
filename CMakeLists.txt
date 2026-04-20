@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 
 project(
     CAuth
-    VERSION 0.1.0
+    VERSION 0.2.0
     DESCRIPTION "Native Steam authentication and depot access toolkit"
     LANGUAGES C CXX
 )
@@ -19,6 +19,14 @@ set(CAUTH_ZSTD_ROOT "" CACHE PATH "Optional zstd root for VZstd depot chunk supp
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+set(CAUTH_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${CAUTH_GENERATED_INCLUDE_DIR}/core")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/cauth_version_generated.hpp.in"
+    "${CAUTH_GENERATED_INCLUDE_DIR}/core/version_generated.hpp"
+    @ONLY
+)
 
 set(CAUTH_CORE_SOURCES
     third_party/lzma-sdk/LzmaDec.c
@@ -131,6 +139,8 @@ cauth_configure_target(cauth_core)
 cauth_configure_target(cauth_steam_auth)
 cauth_configure_target(cauth_steam_depot)
 cauth_configure_target(cauth_steam_cloud)
+
+target_include_directories(cauth_core PRIVATE "${CAUTH_GENERATED_INCLUDE_DIR}")
 
 target_link_libraries(cauth_steam_auth PUBLIC cauth::core)
 target_link_libraries(cauth_steam_depot PUBLIC cauth::steam_auth)

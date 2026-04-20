@@ -6,6 +6,7 @@
 #include "steam/auth/steam_login_service.hpp"
 
 #include <iosfwd>
+#include <string_view>
 
 namespace cauth::steam::auth {
 
@@ -18,6 +19,12 @@ int print_status(cauth::core::session::SessionRepository& store, std::ostream& o
 int print_whoami(cauth::core::session::SessionRepository& store,
                  std::ostream& out,
                  std::ostream& err);
+int print_saved_accounts(cauth::core::session::SessionRepository& store,
+                         std::ostream& out);
+int use_saved_account(cauth::core::session::SessionRepository& store,
+                      std::string_view steam_id,
+                      std::ostream& out,
+                      std::ostream& err);
 SteamLoginPlatformType steam_login_platform_type_for_refresh_token(
     const cauth::core::session::AuthSession& session);
 int refresh_saved_access_token_from_store(cauth::core::session::SessionRepository& store,
@@ -37,5 +44,10 @@ int print_token_info(cauth::core::session::SessionRepository& store,
                      std::ostream& out,
                      std::ostream& err);
 int clear_saved_session(cauth::core::session::SessionRepository& store, std::ostream& out);
+int clear_saved_account(cauth::core::session::SessionRepository& store,
+                        std::string_view steam_id,
+                        std::ostream& out);
+int clear_all_saved_accounts(cauth::core::session::SessionRepository& store,
+                             std::ostream& out);
 
 } // namespace cauth::steam::auth

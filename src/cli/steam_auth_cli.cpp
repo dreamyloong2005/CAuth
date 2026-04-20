@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace {
@@ -19,10 +20,14 @@ enum class AuthCommandKind {
     Login,
     Status,
     WhoAmI,
+    Accounts,
+    UseAccount,
     RefreshAccess,
     WebCookies,
     TokenInfo,
     Clear,
+    ClearAccount,
+    ClearAll,
     Cm,
 };
 
@@ -50,6 +55,7 @@ struct ParsedAuthCommand {
     AuthCommandKind kind = AuthCommandKind::Status;
     std::optional<ParsedAuthLoginCommand> login;
     std::optional<ParsedAuthCmCommand> cm;
+    std::string steam_id;
 };
 
 struct ParsedAuthResult {
@@ -157,6 +163,30 @@ ParsedAuthResult parse_auth_command(int argc, char** argv) {
         result.command.kind = AuthCommandKind::WhoAmI;
         return result;
     }
+    if (subcommand == "accounts") {
+        result.ok = true;
+        result.command.kind = AuthCommandKind::Accounts;
+        return result;
+    }
+    if (subcommand == "use") {
+        for (int index = 3; index < argc; ++index) {
+            const std::string_view arg = argv[index];
+            if (arg == "--steam-id" && index + 1 < argc) {
+                result.command.steam_id = argv[++index];
+                continue;
+            }
+            std::cerr << "unknown or incomplete steam auth use option: " << arg << '\n';
+            cauth::cli::print_cli_usage();
+            return result;
+        }
+        if (result.command.steam_id.empty()) {
+            std::cerr << "steam auth use requires --steam-id <id>\n";
+            return result;
+        }
+        result.ok = true;
+        result.command.kind = AuthCommandKind::UseAccount;
+        return result;
+    }
     if (subcommand == "refresh-access") {
         result.ok = true;
         result.command.kind = AuthCommandKind::RefreshAccess;
@@ -173,8 +203,30 @@ ParsedAuthResult parse_auth_command(int argc, char** argv) {
         return result;
     }
     if (subcommand == "clear") {
+        for (int index = 3; index < argc; ++index) {
+            const std::string_view arg = argv[index];
+            if (arg == "--all") {
+                result.command.kind = AuthCommandKind::ClearAll;
+                continue;
+            }
+            if (arg == "--steam-id" && index + 1 < argc) {
+                result.command.kind = AuthCommandKind::ClearAccount;
+                result.command.steam_id = argv[++index];
+                continue;
+            }
+            std::cerr << "unknown or incomplete steam auth clear option: " << arg << '\n';
+            cauth::cli::print_cli_usage();
+            return result;
+        }
+        if (result.command.kind == AuthCommandKind::ClearAccount &&
+            result.command.steam_id.empty()) {
+            std::cerr << "steam auth clear --steam-id requires <id>\n";
+            return result;
+        }
         result.ok = true;
-        result.command.kind = AuthCommandKind::Clear;
+        if (result.command.kind == AuthCommandKind::Status) {
+            result.command.kind = AuthCommandKind::Clear;
+        }
         return result;
     }
     if (subcommand == "cm") return parse_auth_cm_command(argc - 1, argv + 1);
@@ -288,6 +340,14 @@ int run_steam_auth(int argc, char** argv) {
         return cauth::steam::auth::print_status(*store, std::cout);
     case AuthCommandKind::WhoAmI:
         return cauth::steam::auth::print_whoami(*store, std::cout, std::cerr);
+    case AuthCommandKind::Accounts:
+        return cauth::steam::auth::print_saved_accounts(*store, std::cout);
+    case AuthCommandKind::UseAccount:
+        return cauth::steam::auth::use_saved_account(
+            *store,
+            parsed.command.steam_id,
+            std::cout,
+            std::cerr);
     case AuthCommandKind::RefreshAccess:
         return cauth::steam::auth::refresh_saved_access_token_from_store(*store, std::cout, std::cerr);
     case AuthCommandKind::WebCookies:
@@ -296,6 +356,13 @@ int run_steam_auth(int argc, char** argv) {
         return cauth::steam::auth::print_token_info(*store, std::cout, std::cerr);
     case AuthCommandKind::Clear:
         return cauth::steam::auth::clear_saved_session(*store, std::cout);
+    case AuthCommandKind::ClearAccount:
+        return cauth::steam::auth::clear_saved_account(
+            *store,
+            parsed.command.steam_id,
+            std::cout);
+    case AuthCommandKind::ClearAll:
+        return cauth::steam::auth::clear_all_saved_accounts(*store, std::cout);
     case AuthCommandKind::Cm:
         return run_auth_cm_command(*parsed.command.cm);
     }

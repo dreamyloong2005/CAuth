@@ -11,6 +11,8 @@ Thanks for contributing to CAuth.
   - `cauth_steam_cloud`
 - Prefer putting generic behavior into `core` first, then letting platform layers provide only the
   platform-specific bridge pieces.
+- Keep account storage provider-neutral. Steam-specific session choices belong in
+  `cauth_steam_auth`, not in `cauth_core`.
 - Do not copy GPL reference code into CAuth.
 
 ## Development setup
@@ -46,6 +48,7 @@ Please run the smallest relevant validation set:
 Useful docs:
 
 - [docs/testing.md](docs/testing.md)
+- [docs/accounts.md](docs/accounts.md)
 - [docs/integration.md](docs/integration.md)
 - [docs/api-reference.md](docs/api-reference.md)
 

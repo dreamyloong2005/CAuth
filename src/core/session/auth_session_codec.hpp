@@ -11,6 +11,10 @@ namespace cauth::core::session {
 
 std::vector<std::uint8_t> encode_auth_session(const AuthSession& session);
 std::optional<AuthSession> decode_auth_session(const std::vector<std::uint8_t>& bytes);
+std::vector<std::uint8_t> encode_auth_session_repository_state(
+    const AuthSessionRepositoryState& state);
+std::optional<AuthSessionRepositoryState> decode_auth_session_repository_state(
+    const std::vector<std::uint8_t>& bytes);
 
 } // namespace cauth::core::session
 

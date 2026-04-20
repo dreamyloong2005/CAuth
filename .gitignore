@@ -1,33 +1,105 @@
-build/
-.vs/
-.vscode/
-out/
-android/.gradle/
-android/.kotlin/
-android/**/build/
-android/**/.cxx/
-reference/
+# Build trees
+/build/
+/out/
+/dist/
+/install/
+/packages/
 
-*.user
+# CMake in-source build artifacts
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+_deps/
+CMakeUserPresets.json
+
+# Visual Studio / IDE state
+/.vs/
+/.vscode/
+/.idea/
 *.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.iml
+
+# Native compiler and linker outputs
+*.obj
+*.o
+*.lo
+*.ilk
+*.pdb
+*.idb
+*.ipdb
+*.iobj
+*.exp
+*.dll
+*.dylib
+*.so
+*.exe
+*.app
+
+# Android / Gradle outputs
+/android/.gradle/
+/android/.kotlin/
+/android/local.properties
+/android/**/build/
+/android/**/.cxx/
+/android/**/.externalNativeBuild/
+*.apk
+*.aab
+
+# Logs, editor temp files, and OS noise
 *.log
 *.tmp
-*.pdb
-*.obj
+*.temp
+*.bak
+*.swp
+*.swo
+*.orig
+.DS_Store
+Thumbs.db
 
-CMakeUserPresets.json
+# Local env / secret material
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+
+# Local Steam research snapshots
+/reference/
 
 # Local research / test artifacts
 tmp-*
 tmp_*
+manifest.bin
+manifest_*.bin
 manifest_*.zip
 downloaded_file.bin
+chunk.bin
+files.bin
+depot-out/
 cloud-test/
 tmp-cloud-upload-web/
 
-# Bundled dependency caches / local vendor builds
-.deps/*.zip
-.deps/zstd-msvc/
-.deps/zstd-msvc-build/
-.deps/zstd-msvc-nmake/
-.deps/zstd-v1.5.7-win64/
+# Local acceptance output
+/build-logs/
+/logs/
+
+# Vendored dependency archives / local vendor build caches.
+# Do not ignore .deps/zlib-1.3.1 or .deps/zstd-1.5.7 source trees.
+/.deps/*.zip
+/.deps/*.tar
+/.deps/*.tar.gz
+/.deps/*.tgz
+/.deps/**/build/
+/.deps/**/out/
+/.deps/**/cmake-build-*/
+/.deps/zstd-msvc/
+/.deps/zstd-msvc-build/
+/.deps/zstd-msvc-nmake/
+/.deps/zstd-v1.5.7-win64/

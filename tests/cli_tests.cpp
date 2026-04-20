@@ -49,7 +49,7 @@ int main() {
         auto argv = make_argv(args);
         const auto exit_code = cauth::cli::run_cli(static_cast<int>(argv.size()), argv.data(), out, err);
         if (expect_true(exit_code == 0, "version command should succeed") != 0) return 1;
-        if (expect_true(contains(out.str(), "CAuth 0.1.0"), "version output should include semantic version") != 0) return 1;
+        if (expect_true(contains(out.str(), "CAuth 0.2.0"), "version output should include semantic version") != 0) return 1;
         if (expect_true(err.str().empty(), "version command should not write stderr") != 0) return 1;
     }
 

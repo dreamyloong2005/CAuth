@@ -145,6 +145,13 @@ fun CAuthSteamAuthActionButtons(
         }
 
         Button(
+            onClick = controller::loadSavedAccounts,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Saved Accounts")
+        }
+
+        Button(
             onClick = controller::clearSavedSession,
             modifier = Modifier.fillMaxWidth(),
         ) {
@@ -224,6 +231,7 @@ fun CAuthSteamAuthTrace(
 @Composable
 fun CAuthSteamAuthResults(
     state: CAuthSteamAuthState,
+    controller: CAuthSteamAuthController,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -247,6 +255,26 @@ fun CAuthSteamAuthResults(
                     "Saved tokens: refresh=${it.hasRefreshToken} access=${it.hasAccessToken} createdAt=${it.createdAtUnixSeconds}",
                     style = MaterialTheme.typography.bodySmall,
                 )
+            }
+        }
+
+        if (state.savedAccounts.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Saved accounts", style = MaterialTheme.typography.labelLarge)
+                state.savedAccounts.forEach { account ->
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            "${if (account.active) "*" else "-"} ${account.accountName ?: "(none)"} steamId=${account.steamId}",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Button(onClick = { controller.useSavedAccount(account.steamId) }) {
+                            Text("Use")
+                        }
+                    }
+                }
             }
         }
 

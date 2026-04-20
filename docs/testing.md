@@ -23,6 +23,12 @@ $cauth = ".\\build\\windows-msvc-debug\\cauth.exe"
 & $cauth doctor
 ```
 
+Expected version output for the current development line:
+
+```text
+CAuth 0.2.0
+```
+
 ## 2. Steam auth
 
 ### Sign in with the CM-backed path
@@ -46,8 +52,23 @@ Expected result:
 ```powershell
 & $cauth steam auth status
 & $cauth steam auth whoami
+& $cauth steam auth accounts
 & $cauth steam auth token-info
 & $cauth steam auth web-cookies
+```
+
+If more than one account is saved, switch the active account before testing depot or cloud:
+
+```powershell
+& $cauth steam auth use --steam-id 7656119...
+& $cauth steam auth status
+```
+
+To remove test accounts:
+
+```powershell
+& $cauth steam auth clear --steam-id 7656119...
+& $cauth steam auth clear --all
 ```
 
 ### Web login path
@@ -126,6 +147,8 @@ manifest, excluding directory-only entries.
 ## 5. Cloud workflow
 
 Cloud can run against saved CM-backed auth material or against the standalone web-login flow.
+Use `--backend auto` first. If you are diagnosing auth material directly, try `--backend cm` or
+`--backend web`.
 
 ### List and verify
 
@@ -169,7 +192,8 @@ adb logcat -s CAuthNative CAuthCompose
 
 Recommended Android validation sequence:
 
-1. auth page: login, saved-session reload, CM probe, CM logon
+1. auth page: login, saved-session reload, saved-account list, active-account switch, CM probe,
+   CM logon
 2. depot page: run the manifest workflow, fetch key + code, download manifest, inspect files,
    download one file, verify local files
 3. cloud page: list, verify, dry-run pull/push, then real transfer if needed

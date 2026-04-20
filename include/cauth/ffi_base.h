@@ -45,6 +45,12 @@ typedef struct cauth_session_record {
     unsigned long long created_at_unix_seconds;
 } cauth_session_record_t;
 
+typedef struct cauth_session_list {
+    const cauth_session_record_t* sessions;
+    unsigned long long count;
+    long long active_index;
+} cauth_session_list_t;
+
 #ifdef __cplusplus
 }
 #endif

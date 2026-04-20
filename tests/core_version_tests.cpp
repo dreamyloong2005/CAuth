@@ -5,12 +5,12 @@
 
 int main() {
     const auto version = cauth_get_version();
-    if (version.major != 0 || version.minor != 1 || version.patch != 0) {
+    if (version.major != 0 || version.minor != 2 || version.patch != 0) {
         std::cerr << "unexpected version tuple\n";
         return 1;
     }
 
-    if (std::strcmp(version.text, "0.1.0") != 0) {
+    if (std::strcmp(version.text, "0.2.0") != 0) {
         std::cerr << "unexpected version text\n";
         return 1;
     }

@@ -1,8 +1,7 @@
 #ifndef CAUTH_STEAM_AUTH_STEAM_AUTH_PROVIDER_HPP
 #define CAUTH_STEAM_AUTH_STEAM_AUTH_PROVIDER_HPP
 
-#include "core/session/auth_session.hpp"
-#include "core/session/auth_session_storage.hpp"
+#include "core/session/session_repository.hpp"
 
 #include <optional>
 #include <string>
@@ -24,12 +23,12 @@ class SteamAuthProvider {
 
 class StoredSteamAuthProvider final : public SteamAuthProvider {
   public:
-    explicit StoredSteamAuthProvider(cauth::core::session::AuthSessionReader& reader);
+    explicit StoredSteamAuthProvider(cauth::core::session::SessionRepository& repository);
 
     SteamAuthSessionLoadResult load_auth_session() const override;
 
   private:
-    cauth::core::session::AuthSessionReader* reader_;
+    cauth::core::session::SessionRepository* repository_;
 };
 
 } // namespace cauth::steam::auth

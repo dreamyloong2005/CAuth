@@ -11,6 +11,7 @@
 #include <fstream>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -70,19 +71,7 @@ std::optional<std::vector<std::uint8_t>> read_binary_file(const std::filesystem:
     return bytes;
 }
 
-} // namespace
-
-WindowsSessionRepository::WindowsSessionRepository() : WindowsSessionRepository(default_session_path()) {}
-
-WindowsSessionRepository::WindowsSessionRepository(std::filesystem::path path)
-    : path_(std::move(path)) {}
-
-void WindowsSessionRepository::save_auth_session(const session::AuthSession& session) {
-    auto plain = session::encode_auth_session(session);
-    if (plain.empty()) {
-        throw std::runtime_error("failed to encode auth session");
-    }
-
+std::vector<std::uint8_t> protect_bytes(std::vector<std::uint8_t> plain) {
     DATA_BLOB input = make_blob(plain);
     DATA_BLOB output{};
     if (CryptProtectData(&input, L"CAuth auth session", nullptr, nullptr, nullptr,
@@ -92,16 +81,11 @@ void WindowsSessionRepository::save_auth_session(const session::AuthSession& ses
 
     const auto encrypted = blob_to_vector(output);
     LocalFree(output.pbData);
-    write_binary_file(path_, encrypted);
+    return encrypted;
 }
 
-std::optional<session::AuthSession> WindowsSessionRepository::load_auth_session() const {
-    auto encrypted = read_binary_file(path_);
-    if (!encrypted.has_value()) {
-        return std::nullopt;
-    }
-
-    DATA_BLOB input = make_blob(*encrypted);
+std::optional<std::vector<std::uint8_t>> unprotect_bytes(std::vector<std::uint8_t> encrypted) {
+    DATA_BLOB input = make_blob(encrypted);
     DATA_BLOB output{};
     if (CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN,
                            &output) == FALSE) {
@@ -110,12 +94,108 @@ std::optional<session::AuthSession> WindowsSessionRepository::load_auth_session(
 
     auto plain = blob_to_vector(output);
     LocalFree(output.pbData);
-    return session::decode_auth_session(plain);
+    return plain;
+}
+
+} // namespace
+
+WindowsSessionRepository::WindowsSessionRepository() : WindowsSessionRepository(default_session_path()) {}
+
+WindowsSessionRepository::WindowsSessionRepository(std::filesystem::path path)
+    : path_(std::move(path)) {}
+
+void WindowsSessionRepository::save_auth_session(const session::AuthSession& session) {
+    auto state = load_repository_state();
+    session::upsert_auth_session(state, session);
+    save_repository_state(state);
+}
+
+std::optional<session::AuthSession> WindowsSessionRepository::load_auth_session() const {
+    return session::active_auth_session(load_repository_state());
 }
 
 void WindowsSessionRepository::clear_auth_session() {
+    auto state = load_repository_state();
+    if (!state.active.has_value()) {
+        return;
+    }
+    session::remove_auth_session(state, *state.active);
+    save_repository_state(state);
+}
+
+std::vector<session::AuthSession> WindowsSessionRepository::list_auth_sessions() const {
+    return load_repository_state().sessions;
+}
+
+std::optional<session::AuthSession> WindowsSessionRepository::load_auth_session(
+    std::string_view provider,
+    std::string_view subject_id) const {
+    return session::find_auth_session(
+        load_repository_state(),
+        session::AuthSessionKey{std::string{provider}, std::string{subject_id}});
+}
+
+std::optional<session::AuthSessionKey> WindowsSessionRepository::active_auth_session_key() const {
+    return load_repository_state().active;
+}
+
+bool WindowsSessionRepository::set_active_auth_session(std::string_view provider,
+                                                       std::string_view subject_id) {
+    auto state = load_repository_state();
+    const auto changed = session::set_active_auth_session(
+        state,
+        session::AuthSessionKey{std::string{provider}, std::string{subject_id}});
+    if (changed) {
+        save_repository_state(state);
+    }
+    return changed;
+}
+
+void WindowsSessionRepository::clear_auth_session(std::string_view provider,
+                                                  std::string_view subject_id) {
+    auto state = load_repository_state();
+    session::remove_auth_session(
+        state,
+        session::AuthSessionKey{std::string{provider}, std::string{subject_id}});
+    save_repository_state(state);
+}
+
+void WindowsSessionRepository::clear_all_auth_sessions() {
     std::error_code ignored;
     std::filesystem::remove(path_, ignored);
+}
+
+session::AuthSessionRepositoryState WindowsSessionRepository::load_repository_state() const {
+    auto encrypted = read_binary_file(path_);
+    if (!encrypted.has_value()) {
+        return {};
+    }
+
+    auto plain = unprotect_bytes(std::move(*encrypted));
+    if (!plain.has_value()) {
+        return {};
+    }
+
+    auto state = session::decode_auth_session_repository_state(*plain);
+    if (!state.has_value()) {
+        return {};
+    }
+    return *state;
+}
+
+void WindowsSessionRepository::save_repository_state(
+    const session::AuthSessionRepositoryState& state) {
+    if (state.sessions.empty()) {
+        clear_all_auth_sessions();
+        return;
+    }
+
+    auto plain = session::encode_auth_session_repository_state(state);
+    if (plain.empty()) {
+        throw std::runtime_error("failed to encode auth session");
+    }
+    const auto encrypted = protect_bytes(std::move(plain));
+    write_binary_file(path_, encrypted);
 }
 
 const std::filesystem::path& WindowsSessionRepository::path() const noexcept {
@@ -144,6 +224,28 @@ std::optional<session::AuthSession> WindowsSessionRepository::load_auth_session(
 }
 
 void WindowsSessionRepository::clear_auth_session() {}
+
+std::vector<session::AuthSession> WindowsSessionRepository::list_auth_sessions() const {
+    return {};
+}
+
+std::optional<session::AuthSession> WindowsSessionRepository::load_auth_session(
+    std::string_view,
+    std::string_view) const {
+    return std::nullopt;
+}
+
+std::optional<session::AuthSessionKey> WindowsSessionRepository::active_auth_session_key() const {
+    return std::nullopt;
+}
+
+bool WindowsSessionRepository::set_active_auth_session(std::string_view, std::string_view) {
+    return false;
+}
+
+void WindowsSessionRepository::clear_auth_session(std::string_view, std::string_view) {}
+
+void WindowsSessionRepository::clear_all_auth_sessions() {}
 
 const std::filesystem::path& WindowsSessionRepository::path() const noexcept {
     return path_;

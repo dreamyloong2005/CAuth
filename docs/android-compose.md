@@ -166,6 +166,7 @@ suspend fun example(client: CAuthClient) {
 - in-flight busy flag
 - login result
 - saved session snapshot
+- saved account list snapshot
 - CM probe result
 - CM logon result
 - rolling trace lines
@@ -175,6 +176,8 @@ Actions currently exposed:
 
 - `login()`
 - `loadSavedSession()`
+- `loadSavedAccounts()`
+- `useSavedAccount(steamId)`
 - `clearSavedSession()`
 - `probeCm()`
 - `logonCm()`
@@ -272,6 +275,7 @@ The shipped Compose auth surface covers Steam auth/session and CM diagnostics:
 - password login
 - Steam Guard continuation
 - saved-session inspection/clear
+- saved-account listing and active-account switching
 - CM probe
 - CM logon
 

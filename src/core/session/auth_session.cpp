@@ -1,9 +1,23 @@
 #include "core/session/auth_session.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <utility>
 
 namespace cauth::core::session {
+namespace {
+
+bool same_account(const AuthSession& session, const AuthSessionKey& key) noexcept {
+    return matches_session(session, key);
+}
+
+bool same_session_slot(const AuthSession& left, const AuthSession& right) noexcept {
+    return left.provider == right.provider &&
+           left.subject_id == right.subject_id &&
+           left.session_type == right.session_type;
+}
+
+} // namespace
 
 AuthSession::AuthSession(std::string provider_value,
                          std::string subject_id_value,
@@ -20,9 +34,27 @@ AuthSession::AuthSession(std::string provider_value,
       provider(std::move(provider_value)),
       subject_id(std::move(subject_id_value)) {}
 
+bool is_valid(const AuthSessionKey& key) noexcept {
+    return !key.provider.empty() && !key.subject_id.empty();
+}
+
 bool is_valid(const AuthSession& session) noexcept {
     return !session.provider.empty() && !session.subject_id.empty() &&
-           !session.account_name.empty() && !session.refresh_token.empty();
+           !session.refresh_token.empty();
+}
+
+AuthSessionKey session_key(const AuthSession& session) {
+    return AuthSessionKey{session.provider, session.subject_id};
+}
+
+bool matches_session(const AuthSession& session, const AuthSessionKey& key) noexcept {
+    return matches_session(session, key.provider, key.subject_id);
+}
+
+bool matches_session(const AuthSession& session,
+                     std::string_view provider,
+                     std::string_view subject_id) noexcept {
+    return session.provider == provider && session.subject_id == subject_id;
 }
 
 std::string redacted_account_label(const AuthSession& session) {
@@ -60,6 +92,92 @@ std::optional<std::uint64_t> parse_numeric_subject_id(const AuthSession& session
     }
 
     return value;
+}
+
+std::optional<AuthSession> active_auth_session(const AuthSessionRepositoryState& state) {
+    if (!state.active.has_value()) {
+        return std::nullopt;
+    }
+    return find_auth_session(state, *state.active);
+}
+
+std::optional<AuthSession> find_auth_session(const AuthSessionRepositoryState& state,
+                                             const AuthSessionKey& key) {
+    std::optional<AuthSession> selected;
+    for (const auto& session : state.sessions) {
+        if (!same_account(session, key)) {
+            continue;
+        }
+        if (!selected.has_value() || session.created_at >= selected->created_at) {
+            selected = session;
+        }
+    }
+    return selected;
+}
+
+void upsert_auth_session(AuthSessionRepositoryState& state,
+                         const AuthSession& session,
+                         bool make_active) {
+    if (!is_valid(session)) {
+        return;
+    }
+
+    const auto key = session_key(session);
+    const auto found = std::find_if(
+        state.sessions.begin(),
+        state.sessions.end(),
+        [&](const AuthSession& candidate) { return same_session_slot(candidate, session); });
+    if (found == state.sessions.end()) {
+        state.sessions.push_back(session);
+    } else {
+        *found = session;
+    }
+
+    if (make_active) {
+        state.active = key;
+    }
+}
+
+bool set_active_auth_session(AuthSessionRepositoryState& state, const AuthSessionKey& key) {
+    auto session = find_auth_session(state, key);
+    if (!is_valid(key) || !session.has_value()) {
+        return false;
+    }
+    state.active = key;
+    return true;
+}
+
+bool remove_auth_session(AuthSessionRepositoryState& state, const AuthSessionKey& key) {
+    const auto before = state.sessions.size();
+    state.sessions.erase(
+        std::remove_if(
+            state.sessions.begin(),
+            state.sessions.end(),
+            [&](const AuthSession& candidate) { return same_account(candidate, key); }),
+        state.sessions.end());
+    if (state.sessions.size() == before) {
+        return false;
+    }
+
+    if (state.active.has_value() && state.active->provider == key.provider &&
+        state.active->subject_id == key.subject_id) {
+        state.active.reset();
+    }
+    normalize_auth_session_repository_state(state);
+    return true;
+}
+
+void normalize_auth_session_repository_state(AuthSessionRepositoryState& state) {
+    AuthSessionRepositoryState normalized;
+    for (const auto& session : state.sessions) {
+        upsert_auth_session(normalized, session, false);
+    }
+
+    if (state.active.has_value() && find_auth_session(normalized, *state.active).has_value()) {
+        normalized.active = state.active;
+    }
+
+    state = std::move(normalized);
 }
 
 } // namespace cauth::core::session

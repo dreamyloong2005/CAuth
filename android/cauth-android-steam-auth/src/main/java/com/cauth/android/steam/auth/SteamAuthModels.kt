@@ -51,6 +51,15 @@ data class SavedSessionSnapshot(
     val createdAtUnixSeconds: Long,
 )
 
+data class SavedAccountSnapshot(
+    val active: Boolean,
+    val steamId: Long,
+    val accountName: String?,
+    val hasRefreshToken: Boolean,
+    val hasAccessToken: Boolean,
+    val createdAtUnixSeconds: Long,
+)
+
 data class CmProbeSnapshot(
     val ok: Boolean,
     val endpoint: String?,

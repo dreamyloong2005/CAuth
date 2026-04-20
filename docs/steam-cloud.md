@@ -31,12 +31,23 @@ Steam Cloud supports two practical session sources:
 
 1. normal `steam auth login`
    - usually gives CAuth enough saved auth material for `--backend auto`
+   - uses the active saved Steam account
 2. `steam auth login-web`
    - drives the web-cookie / finalize-login path directly
    - useful when you intentionally want a web-flavored session
 
 `steam auth web-cookies` is a good diagnostic command when you want to confirm that the saved web
 session is healthy before testing cloud operations.
+
+When several Steam accounts are saved, inspect and switch the active account first:
+
+```powershell
+.\build\windows-msvc-debug\cauth.exe steam auth accounts
+.\build\windows-msvc-debug\cauth.exe steam auth use --steam-id 7656119...
+```
+
+Use `--backend auto` unless you are debugging a specific path. `--backend cm` forces CM Cloud
+service calls. `--backend web` forces web-backed auth material.
 
 ## Acceptance Script
 

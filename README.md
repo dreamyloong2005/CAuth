@@ -1,39 +1,109 @@
 # CAuth
 
-CAuth is a native C/C++ toolkit for secure authentication storage, Steam sign-in, and Steam depot
-download workflows.
+CAuth is a native C/C++ toolkit for Steam authentication, Steam depot downloads, and Steam Cloud
+save synchronization. It is designed as a set of small modules that can be installed and consumed
+independently.
 
-The project is intentionally split into four installable modules:
-
-- `cauth_core`: cross-platform auth/session infrastructure and platform bridges.
-- `cauth_steam_auth`: Steam login, Steam Guard continuation, CM access, and Web/API auth flows.
-- `cauth_steam_depot`: Steam app/depot metadata, manifests, CDN download, verification, and file extraction.
-- `cauth_steam_cloud`: Steam cloud-save list/pull/push workflows.
-
-That dependency chain is strict:
+The current stack is:
 
 ```text
-cauth_core <- cauth_steam_auth <- cauth_steam_depot
-                              <- cauth_steam_cloud
+cauth_core
+  <- cauth_steam_auth
+      <- cauth_steam_depot
+      <- cauth_steam_cloud
 ```
 
-## Current Layout
+## What It Provides
+
+- `cauth_core`
+  - cross-platform client lifetime and runtime bridges
+  - session repository model with multiple saved accounts and one active account pointer
+  - secure-storage interfaces and platform-backed storage implementations
+  - shared C ABI types for non-C++ hosts
+- `cauth_steam_auth`
+  - Steam client, web-browser, and mobile-app login entry points
+  - Steam Guard polling and continuation
+  - saved-account listing, switching, and clearing
+  - CM directory lookup, probe, logon, and authenticated service calls
+  - web-cookie / finalize-login helpers for web-backed flows
+- `cauth_steam_depot`
+  - branch, depot, and manifest discovery
+  - platform-aware depot metadata
+  - depot key and manifest request-code retrieval
+  - manifest, chunk, file, and whole-depot download
+  - local binary verification against depot manifests
+- `cauth_steam_cloud`
+  - Steam Cloud file listing
+  - local-vs-remote verification
+  - pull and push workflows
+  - conflict policy handling
+  - progress and cancellation support on Android
+
+The command-line tool under `cauth.exe` is a diagnostic frontend over those modules. It is useful
+for development and acceptance testing, but it is not required by library consumers.
+
+## Current Version
+
+The current development version is `0.2.0`.
+
+Native versioning is controlled by CMake:
+
+```cmake
+project(CAuth VERSION 0.2.0)
+```
+
+CMake generates the native version header at configure time, and the CLI / C ABI read that same
+value. Android's example app has its own `versionCode` / `versionName` for APK packaging.
+
+See [docs/versioning.md](docs/versioning.md) before bumping the version.
+
+## Repository Layout
 
 ```text
-include/cauth/       Public C++ and C ABI entry headers
-src/core/            Shared runtime, storage, crypto, transport abstractions
-src/steam/auth/      Steam authentication logic
-src/steam/cm/        Steam CM protocol support used by auth/depot
-src/steam/depot/     Steam depot and content download logic
-src/steam/cloud/     Steam cloud-save synchronization logic
-src/ffi/             Split FFI adapters for core / steam_auth / steam_depot / steam_cloud
-src/cli/             Development and diagnostic CLI
-tests/               Unit and install-consumer smoke tests
+cmake/              CMake package helpers and generated-header templates
+include/cauth/       Public C++ and C ABI headers
+src/core/            Shared runtime, storage, session, crypto, and transport infrastructure
+src/steam/auth/      Steam login, account, web auth, and CM auth workflows
+src/steam/cm/        Steam CM protocol support shared by Steam modules
+src/steam/depot/     Depot metadata, manifest, CDN, download, and verification workflows
+src/steam/cloud/     Steam Cloud list, verify, pull, and push workflows
+src/ffi/             Split C ABI implementations
+src/cli/             Development CLI frontend
+android/             Android JNI, Kotlin APIs, Compose UI, and example app
+docs/                Integration and validation guides
+tests/               Unit and smoke tests
+.deps/               Vendored zlib/zstd source trees used by the build
 ```
+
+`reference/` is intentionally ignored. It is only for local research snapshots and should not be
+published.
+
+## Requirements
+
+Desktop Windows:
+
+- Visual Studio 2022 Build Tools or full Visual Studio 2022
+- CMake 3.22 or newer
+- a Developer PowerShell or another shell with the MSVC environment loaded
+
+Android:
+
+- Android Studio or a compatible Gradle/SDK setup
+- Android SDK platform tools
+- Android NDK matching the Android CMake configuration
+- a device or emulator for the example app
+
+Steam compatibility dependencies:
+
+- zlib is required for compressed CM multi messages
+- zstd is required for VZstd depot chunks
+
+The repository currently contains vendored source trees under `.deps/zlib-1.3.1` and
+`.deps/zstd-1.5.7`. Build outputs and downloaded archives under `.deps/` are ignored.
 
 ## Build
 
-Open a Visual Studio 2022 developer shell, then run:
+From a Visual Studio 2022 developer shell:
 
 ```powershell
 cmake --preset default
@@ -41,204 +111,134 @@ cmake --build --preset default
 ctest --preset default
 ```
 
-For full Steam coverage, make sure zlib and zstd support are available. This repository will pick up
-bundled trees under `.deps/zlib-1.3.1` and `.deps/zstd-1.5.7` automatically when they exist. zlib is
-needed for compressed CM multi messages, and zstd is needed for VZstd depot chunks.
+The default Windows build tree is:
 
-## Start Here
-
-If you are preparing to consume CAuth in a real project, use these docs in order:
-
-1. [docs/index.md](docs/index.md)
-2. [docs/getting-started.md](docs/getting-started.md)
-3. [docs/testing.md](docs/testing.md)
-4. [docs/integration.md](docs/integration.md)
-5. [docs/architecture.md](docs/architecture.md)
-6. [docs/android-compose.md](docs/android-compose.md)
-7. [docs/compose-project-integration.md](docs/compose-project-integration.md)
-8. [docs/api-reference.md](docs/api-reference.md)
-9. [docs/steam-depot.md](docs/steam-depot.md)
-10. [docs/steam-cloud.md](docs/steam-cloud.md)
-11. [docs/packaging.md](docs/packaging.md)
-12. [docs/github-publishing.md](docs/github-publishing.md)
-
-## CLI
-
-Common commands:
-
-```powershell
-.\build\windows-msvc-debug\cauth.exe --version
-.\build\windows-msvc-debug\cauth.exe doctor
-.\build\windows-msvc-debug\cauth.exe steam auth status
-.\build\windows-msvc-debug\cauth.exe steam auth whoami
-.\build\windows-msvc-debug\cauth.exe steam auth cm servers --protocol websocket --max-count 5
-.\build\windows-msvc-debug\cauth.exe steam auth cm probe --max-count 5
-.\build\windows-msvc-debug\cauth.exe steam auth cm logon --max-count 5
-.\build\windows-msvc-debug\cauth.exe steam depot branches --app-id 440 --max-count 5
-.\build\windows-msvc-debug\cauth.exe steam depot verify-local --in .\manifest.bin --local-root .\out
-.\build\windows-msvc-debug\cauth.exe steam cloud list --app-id 440
-.\build\windows-msvc-debug\cauth.exe steam cloud verify --app-id 440 --local-root .\build\tf2-sync
-.\build\windows-msvc-debug\cauth.exe steam cloud pull --app-id 440 --local-root .\build\tf2-sync --dry-run
-.\build\windows-msvc-debug\cauth.exe steam cloud push --app-id 440 --local-root .\build\tf2-sync --dry-run
+```text
+build/windows-msvc-debug
 ```
 
-Test Steam login with a real account:
+The CLI is normally:
+
+```powershell
+.\build\windows-msvc-debug\cauth.exe
+```
+
+## Android Example
+
+From the repository root:
+
+```powershell
+cd .\android
+.\gradlew.bat :example-android:assembleDebug
+.\gradlew.bat :example-android:installDebug
+```
+
+Useful logcat filters:
+
+```powershell
+adb logcat -s CAuthNative CAuthCompose
+```
+
+The example app is a real diagnostic console for auth, depot, and cloud flows. It is also the
+fastest way to validate the Android JNI and Compose layers before integrating CAuth into another
+project.
+
+## Quick CLI Flow
+
+```powershell
+$cauth = ".\build\windows-msvc-debug\cauth.exe"
+& $cauth --version
+& $cauth doctor
+```
+
+Sign in with the CM-backed Steam client path:
 
 ```powershell
 $password = Read-Host "Steam password" -AsSecureString
 $plain = [Runtime.InteropServices.Marshal]::PtrToStringUni(
     [Runtime.InteropServices.Marshal]::SecureStringToBSTR($password)
 )
-$plain | .\build\windows-msvc-debug\cauth.exe steam auth login --username your_steam_login --password-stdin
+$plain | & $cauth steam auth login --username your_steam_login --password-stdin --poll-attempts 48 --device-name "MyLauncher"
 Remove-Variable plain
 Remove-Variable password
 ```
 
-Web-browser login remains available as a separate path:
+Inspect and switch saved accounts:
 
 ```powershell
-$plain | .\build\windows-msvc-debug\cauth.exe steam auth login-web --username your_steam_login --password-stdin
+& $cauth steam auth status
+& $cauth steam auth whoami
+& $cauth steam auth accounts
+& $cauth steam auth use --steam-id 7656119...
+& $cauth steam auth clear --steam-id 7656119...
 ```
 
-Mobile-app login is also exposed:
+Depot and cloud smoke checks:
 
 ```powershell
-$plain | .\build\windows-msvc-debug\cauth.exe steam auth login-mobile --username your_steam_login --password-stdin
+& $cauth steam auth cm probe --max-count 10
+& $cauth steam depot preflight --app-id 2868840 --branch public --max-count 20
+& $cauth steam cloud list --app-id 2868840 --remote-root savegames --backend auto
 ```
 
-If Steam Guard is slow to reach the phone, increase polling:
+For a full validation path, use [docs/testing.md](docs/testing.md).
+
+## Installation Components
+
+CMake install components are split by module:
+
+- `Core`
+- `SteamAuth`
+- `SteamDepot`
+- `SteamCloud`
+- `Cli`
+
+Examples:
 
 ```powershell
-$plain | .\build\windows-msvc-debug\cauth.exe steam auth login --username your_steam_login --password-stdin --poll-attempts 48
-```
-
-The device name shown by Steam is normalized with a `_CAuth` suffix. For example,
-`--device-name "MyLauncher"` becomes `MyLauncher_CAuth`.
-
-## Module Installation
-
-Install everything:
-
-```powershell
-cmake --install .\build\windows-msvc-debug --config Debug --prefix .\build\install
-```
-
-Install only `core`:
-
-```powershell
-cmake --install .\build\windows-msvc-debug --config Debug --prefix .\build\install-core --component Core
-```
-
-Install only `steam_auth` on top of an existing prefix that already contains `core`:
-
-```powershell
+cmake --install .\build\windows-msvc-debug --config Debug --prefix .\build\install --component Core
 cmake --install .\build\windows-msvc-debug --config Debug --prefix .\build\install --component SteamAuth
-```
-
-Install only `steam_depot` on top of an existing prefix that already contains `core` and `steam_auth`:
-
-```powershell
 cmake --install .\build\windows-msvc-debug --config Debug --prefix .\build\install --component SteamDepot
-```
-
-Install only `steam_cloud` on top of an existing prefix that already contains `core` and `steam_auth`:
-
-```powershell
 cmake --install .\build\windows-msvc-debug --config Debug --prefix .\build\install --component SteamCloud
 ```
 
-The exported CMake package loads installed module targets dynamically and preserves the dependency
-chain. A consumer can request only what it needs:
-
-```cmake
-find_package(CAuth CONFIG REQUIRED COMPONENTS core)
-target_link_libraries(my_app PRIVATE cauth::core cauth::core_ffi)
-```
-
-Or the full Steam stack:
+Native consumers use the exported CMake package:
 
 ```cmake
 find_package(CAuth CONFIG REQUIRED COMPONENTS core steam_auth steam_depot)
+
 target_link_libraries(my_app
     PRIVATE
         cauth::core
         cauth::steam_auth
         cauth::steam_depot
-        cauth::core_ffi
-        cauth::steam_auth_ffi
-        cauth::steam_depot_ffi
 )
 ```
 
-Or auth plus sync without depot:
+Use the `*_ffi` targets when a C ABI is needed for JNI, game engines, or other foreign-function
+hosts.
 
-```cmake
-find_package(CAuth CONFIG REQUIRED COMPONENTS core steam_auth steam_cloud)
-target_link_libraries(my_app
-    PRIVATE
-        cauth::core
-        cauth::steam_auth
-        cauth::steam_cloud
-        cauth::core_ffi
-        cauth::steam_auth_ffi
-        cauth::steam_cloud_ffi
-)
-```
+## Documentation
 
-If you link an FFI DLL target, remember to make the installed `bin` directory visible at runtime on
-Windows.
+Start here:
 
-## Android Compose
+1. [docs/index.md](docs/index.md)
+2. [docs/getting-started.md](docs/getting-started.md)
+3. [docs/testing.md](docs/testing.md)
+4. [docs/accounts.md](docs/accounts.md)
+5. [docs/integration.md](docs/integration.md)
+6. [docs/versioning.md](docs/versioning.md)
+7. [docs/android-compose.md](docs/android-compose.md)
+8. [docs/steam-depot.md](docs/steam-depot.md)
+9. [docs/steam-cloud.md](docs/steam-cloud.md)
+10. [docs/api-reference.md](docs/api-reference.md)
+11. [docs/packaging.md](docs/packaging.md)
 
-An Android multi-module scaffold now lives under `android/`:
+## Security And Legal Notes
 
-- `cauth-android-core`: JNI + Kotlin SDK over the native CAuth modules
-- `cauth-android-compose`: reusable Compose UI surface
-- `example-android`: test app for login/session/CM verification
+CAuth must not store Steam passwords. Persisted auth material should go through the platform
+session repository and secure storage layer.
 
-Open `android/` in Android Studio or run Gradle from that directory:
-
-```powershell
-cd .\android
-.\gradlew.bat help
-.\gradlew.bat :example-android:assembleDebug
-```
-
-The Android Gradle settings include Aliyun mirrors ahead of `google()` / `mavenCentral()` to make
-dependency resolution more reliable in mainland China.
-
-The recommended Compose integration shape is now:
-
-- `CAuthClient` in `cauth-android-core` for raw native access
-- `CAuthSteamAuthController` in `cauth-android-core` for auth/session state and actions
-- `cauth-android-compose` for optional ready-made Compose UI
-
-For the full Android/Compose integration guide, see [docs/android-compose.md](docs/android-compose.md).
-
-For the integration-focused entry point that covers desktop and Android together, see
-[docs/integration.md](docs/integration.md).
-
-For the first-time setup path, build presets, and dependency notes, see
-[docs/getting-started.md](docs/getting-started.md).
-
-For an end-to-end validation checklist, see [docs/testing.md](docs/testing.md).
-
-For the Steam depot flow, platform-tagged depot selection, and local verification, see
-[docs/steam-depot.md](docs/steam-depot.md).
-
-For the Steam Cloud sync flow and the acceptance script, see [docs/steam-cloud.md](docs/steam-cloud.md).
-
-## Validation
-
-The repository includes install-consumer smoke tests for:
-
-- full package consumption from an installed prefix
-- `core`-only consumption from a `--component Core` install
-
-## Reference Projects
-
-- SteamKit2: protocol and behavior reference
-- DepotDownloader: depot workflow reference
-
-Their licenses are treated as research constraints. CAuth should not copy GPL source into the
-project.
+The project is MIT licensed. Vendored dependencies keep their own upstream licenses. SteamKit2 and
+DepotDownloader are protocol and behavior references only; GPL source must not be copied into this
+project unless the whole project intentionally adopts compatible licensing.

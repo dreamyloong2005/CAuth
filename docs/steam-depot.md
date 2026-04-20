@@ -28,6 +28,14 @@ local verification.
 `preflight` is the best starting point because it joins branch, depot, and manifest information into
 one snapshot.
 
+Depot operations use the active saved Steam account. If you have multiple accounts saved, choose
+the account that owns the target app before continuing:
+
+```powershell
+.\build\windows-msvc-debug\cauth.exe steam auth accounts
+.\build\windows-msvc-debug\cauth.exe steam auth use --steam-id 7656119...
+```
+
 ## Platform-aware depot selection
 
 Each resolved depot can expose:

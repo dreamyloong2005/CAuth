@@ -5,10 +5,12 @@
 #include "core/session/auth_session.hpp"
 #include "ffi/client_internal.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <memory>
 #include <new>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -21,6 +23,59 @@ thread_local std::string g_last_saved_subject_id;
 thread_local std::string g_last_saved_account_name;
 thread_local std::string g_last_saved_refresh_token;
 thread_local std::string g_last_saved_access_token;
+
+struct SessionRecordStorage {
+    std::string provider;
+    std::string subject_id;
+    std::string account_name;
+    std::string refresh_token;
+    std::string access_token;
+};
+
+thread_local std::vector<SessionRecordStorage> g_last_session_list_storage;
+thread_local std::vector<cauth_session_record_t> g_last_session_list_records;
+
+void clear_session_record(cauth_session_record_t& out_session) {
+    out_session.present = 0;
+    out_session.provider = "";
+    out_session.subject_id = "";
+    out_session.account_name = "";
+    out_session.refresh_token = "";
+    out_session.access_token = "";
+    out_session.has_refresh_token = 0;
+    out_session.has_access_token = 0;
+    out_session.created_at_unix_seconds = 0;
+}
+
+unsigned long long created_at_seconds(const cauth::core::session::AuthSession& session) {
+    return static_cast<unsigned long long>(
+        std::chrono::duration_cast<std::chrono::seconds>(
+            session.created_at.time_since_epoch())
+            .count());
+}
+
+std::vector<cauth::core::session::AuthSession> account_representatives(
+    const std::vector<cauth::core::session::AuthSession>& sessions) {
+    std::vector<cauth::core::session::AuthSession> representatives;
+    for (const auto& session : sessions) {
+        const auto found = std::find_if(
+            representatives.begin(),
+            representatives.end(),
+            [&](const cauth::core::session::AuthSession& candidate) {
+                return cauth::core::session::matches_session(candidate,
+                                                             session.provider,
+                                                             session.subject_id);
+            });
+        if (found == representatives.end()) {
+            representatives.push_back(session);
+            continue;
+        }
+        if (session.created_at >= found->created_at) {
+            *found = session;
+        }
+    }
+    return representatives;
+}
 
 } // namespace
 
@@ -73,15 +128,7 @@ cauth_result_t cauth_session_get_saved(cauth_client_t* client,
         return CAUTH_ERROR_INVALID_ARGUMENT;
     }
 
-    out_session->present = 0;
-    out_session->provider = "";
-    out_session->subject_id = "";
-    out_session->account_name = "";
-    out_session->refresh_token = "";
-    out_session->access_token = "";
-    out_session->has_refresh_token = 0;
-    out_session->has_access_token = 0;
-    out_session->created_at_unix_seconds = 0;
+    clear_session_record(*out_session);
 
     try {
         const auto session = client->session_repository->load_auth_session();
@@ -108,11 +155,80 @@ cauth_result_t cauth_session_get_saved(cauth_client_t* client,
         out_session->access_token = g_last_saved_access_token.c_str();
         out_session->has_refresh_token = session->refresh_token.empty() ? 0 : 1;
         out_session->has_access_token = session->access_token.empty() ? 0 : 1;
-        out_session->created_at_unix_seconds = static_cast<unsigned long long>(
-            std::chrono::duration_cast<std::chrono::seconds>(
-                session->created_at.time_since_epoch())
-                .count());
+        out_session->created_at_unix_seconds = created_at_seconds(*session);
         return CAUTH_OK;
+    } catch (...) {
+        return CAUTH_ERROR_INTERNAL;
+    }
+}
+
+cauth_result_t cauth_session_list_saved(cauth_client_t* client,
+                                        cauth_session_list_t* out_sessions) {
+    if (client == nullptr || out_sessions == nullptr) {
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+
+    out_sessions->sessions = nullptr;
+    out_sessions->count = 0;
+    out_sessions->active_index = -1;
+
+    try {
+        const auto sessions =
+            account_representatives(client->session_repository->list_auth_sessions());
+        const auto active = client->session_repository->active_auth_session_key();
+
+        g_last_session_list_storage.clear();
+        g_last_session_list_records.clear();
+        g_last_session_list_storage.reserve(sessions.size());
+        g_last_session_list_records.reserve(sessions.size());
+
+        for (const auto& session : sessions) {
+            auto& storage = g_last_session_list_storage.emplace_back();
+            storage.provider = session.provider;
+            storage.subject_id = session.subject_id;
+            storage.account_name = session.account_name;
+            storage.refresh_token = session.refresh_token;
+            storage.access_token = session.access_token;
+
+            cauth_session_record_t record{};
+            record.present = 1;
+            record.provider = storage.provider.c_str();
+            record.subject_id = storage.subject_id.c_str();
+            record.account_name = storage.account_name.c_str();
+            record.refresh_token = storage.refresh_token.c_str();
+            record.access_token = storage.access_token.c_str();
+            record.has_refresh_token = session.refresh_token.empty() ? 0 : 1;
+            record.has_access_token = session.access_token.empty() ? 0 : 1;
+            record.created_at_unix_seconds = created_at_seconds(session);
+
+            if (active.has_value() &&
+                cauth::core::session::matches_session(session, *active)) {
+                out_sessions->active_index =
+                    static_cast<long long>(g_last_session_list_records.size());
+            }
+            g_last_session_list_records.push_back(record);
+        }
+
+        out_sessions->sessions = g_last_session_list_records.data();
+        out_sessions->count =
+            static_cast<unsigned long long>(g_last_session_list_records.size());
+        return CAUTH_OK;
+    } catch (...) {
+        return CAUTH_ERROR_INTERNAL;
+    }
+}
+
+cauth_result_t cauth_session_set_active(cauth_client_t* client,
+                                        const char* provider,
+                                        const char* subject_id) {
+    if (client == nullptr || provider == nullptr || subject_id == nullptr) {
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+
+    try {
+        return client->session_repository->set_active_auth_session(provider, subject_id)
+                   ? CAUTH_OK
+                   : CAUTH_ERROR_INVALID_ARGUMENT;
     } catch (...) {
         return CAUTH_ERROR_INTERNAL;
     }
@@ -130,6 +246,41 @@ cauth_result_t cauth_session_clear_saved(cauth_client_t* client) {
         g_last_saved_account_name.clear();
         g_last_saved_refresh_token.clear();
         g_last_saved_access_token.clear();
+        return CAUTH_OK;
+    } catch (...) {
+        return CAUTH_ERROR_INTERNAL;
+    }
+}
+
+cauth_result_t cauth_session_clear_account(cauth_client_t* client,
+                                           const char* provider,
+                                           const char* subject_id) {
+    if (client == nullptr || provider == nullptr || subject_id == nullptr) {
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+
+    try {
+        client->session_repository->clear_auth_session(provider, subject_id);
+        return CAUTH_OK;
+    } catch (...) {
+        return CAUTH_ERROR_INTERNAL;
+    }
+}
+
+cauth_result_t cauth_session_clear_all(cauth_client_t* client) {
+    if (client == nullptr) {
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+
+    try {
+        client->session_repository->clear_all_auth_sessions();
+        g_last_saved_provider.clear();
+        g_last_saved_subject_id.clear();
+        g_last_saved_account_name.clear();
+        g_last_saved_refresh_token.clear();
+        g_last_saved_access_token.clear();
+        g_last_session_list_storage.clear();
+        g_last_session_list_records.clear();
         return CAUTH_OK;
     } catch (...) {
         return CAUTH_ERROR_INTERNAL;

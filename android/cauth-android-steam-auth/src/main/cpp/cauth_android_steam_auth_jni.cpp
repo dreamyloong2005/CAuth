@@ -3,8 +3,11 @@
 #include <android/log.h>
 #include <jni.h>
 
+#include <cstdlib>
 #include <cstdint>
+#include <cstring>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -14,6 +17,8 @@ constexpr const char* kLoginResultSnapshotClassName =
     "com/cauth/android/steam/auth/LoginResultSnapshot";
 constexpr const char* kSavedSessionSnapshotClassName =
     "com/cauth/android/steam/auth/SavedSessionSnapshot";
+constexpr const char* kSavedAccountSnapshotClassName =
+    "com/cauth/android/steam/auth/SavedAccountSnapshot";
 constexpr const char* kCmProbeSnapshotClassName =
     "com/cauth/android/steam/auth/CmProbeSnapshot";
 constexpr const char* kCmLogonSnapshotClassName =
@@ -21,6 +26,7 @@ constexpr const char* kCmLogonSnapshotClassName =
 
 jclass g_login_result_snapshot_class = nullptr;
 jclass g_saved_session_snapshot_class = nullptr;
+jclass g_saved_account_snapshot_class = nullptr;
 jclass g_cm_probe_snapshot_class = nullptr;
 jclass g_cm_logon_snapshot_class = nullptr;
 
@@ -58,6 +64,10 @@ jclass ensure_login_result_snapshot_class(JNIEnv* env) {
 
 jclass ensure_saved_session_snapshot_class(JNIEnv* env) {
     return require_global_class(env, g_saved_session_snapshot_class, kSavedSessionSnapshotClassName);
+}
+
+jclass ensure_saved_account_snapshot_class(JNIEnv* env) {
+    return require_global_class(env, g_saved_account_snapshot_class, kSavedAccountSnapshotClassName);
 }
 
 jclass ensure_cm_probe_snapshot_class(JNIEnv* env) {
@@ -103,6 +113,48 @@ jobject make_saved_session(JNIEnv* env, const cauth_saved_session_t& session) {
                                                            : env->NewStringUTF(session.account_name);
     jobject instance = env->NewObject(
         cls, ctor, static_cast<jboolean>(session.present != 0), static_cast<jlong>(session.steam_id),
+        account_name, static_cast<jboolean>(session.has_refresh_token != 0),
+        static_cast<jboolean>(session.has_access_token != 0),
+        static_cast<jlong>(session.created_at_unix_seconds));
+    if (account_name != nullptr) {
+        env->DeleteLocalRef(account_name);
+    }
+    return instance;
+}
+
+unsigned long long parse_steam_id(const char* value) {
+    if (value == nullptr || value[0] == '\0') {
+        return 0;
+    }
+    char* end = nullptr;
+    const auto parsed = std::strtoull(value, &end, 10);
+    if (end == value || (end != nullptr && *end != '\0')) {
+        return 0;
+    }
+    return parsed;
+}
+
+bool is_steam_record(const cauth_session_record_t& record) {
+    return record.present != 0 && record.provider != nullptr &&
+           std::strcmp(record.provider, "steam") == 0;
+}
+
+jobject make_saved_account(JNIEnv* env,
+                           const cauth_session_record_t& session,
+                           bool active) {
+    jclass cls = ensure_saved_account_snapshot_class(env);
+    if (cls == nullptr) {
+        return nullptr;
+    }
+    jmethodID ctor = env->GetMethodID(cls, "<init>", "(ZJLjava/lang/String;ZZJ)V");
+    if (ctor == nullptr) {
+        return nullptr;
+    }
+    jstring account_name = session.account_name == nullptr
+                               ? nullptr
+                               : env->NewStringUTF(session.account_name);
+    jobject instance = env->NewObject(
+        cls, ctor, static_cast<jboolean>(active), static_cast<jlong>(parse_steam_id(session.subject_id)),
         account_name, static_cast<jboolean>(session.has_refresh_token != 0),
         static_cast<jboolean>(session.has_access_token != 0),
         static_cast<jlong>(session.created_at_unix_seconds));
@@ -237,6 +289,106 @@ Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeClearSavedSession(
     const cauth_result_t result = cauth_auth_clear_saved_session(client_from_handle(handle));
     if (result != CAUTH_OK) {
         throw_result_exception(env, "Failed to clear saved session", result);
+    }
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeListSavedAccounts(
+    JNIEnv* env,
+    jclass,
+    jlong handle) {
+    cauth_session_list_t session_list{};
+    const cauth_result_t result =
+        cauth_session_list_saved(client_from_handle(handle), &session_list);
+    if (result != CAUTH_OK) {
+        throw_result_exception(env, "Failed to list saved accounts", result);
+        return nullptr;
+    }
+
+    std::vector<unsigned long long> steam_indexes;
+    for (unsigned long long index = 0; index < session_list.count; ++index) {
+        if (is_steam_record(session_list.sessions[index])) {
+            steam_indexes.push_back(index);
+        }
+    }
+
+    jclass cls = ensure_saved_account_snapshot_class(env);
+    if (cls == nullptr) {
+        return nullptr;
+    }
+    jobjectArray array =
+        env->NewObjectArray(static_cast<jsize>(steam_indexes.size()), cls, nullptr);
+    if (array == nullptr) {
+        return nullptr;
+    }
+
+    for (jsize output_index = 0; output_index < static_cast<jsize>(steam_indexes.size());
+         ++output_index) {
+        const auto source_index = steam_indexes[static_cast<std::size_t>(output_index)];
+        const bool active = session_list.active_index == static_cast<long long>(source_index);
+        jobject item = make_saved_account(env, session_list.sessions[source_index], active);
+        if (item == nullptr) {
+            return nullptr;
+        }
+        env->SetObjectArrayElement(array, output_index, item);
+        env->DeleteLocalRef(item);
+    }
+    return array;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeUseSavedAccount(
+    JNIEnv* env,
+    jclass,
+    jlong handle,
+    jlong steam_id) {
+    const auto steam_id_text = std::to_string(static_cast<unsigned long long>(steam_id));
+    const cauth_result_t result =
+        cauth_session_set_active(client_from_handle(handle), "steam", steam_id_text.c_str());
+    if (result != CAUTH_OK) {
+        throw_result_exception(env, "Failed to switch saved account", result);
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeClearSavedAccount(
+    JNIEnv* env,
+    jclass,
+    jlong handle,
+    jlong steam_id) {
+    const auto steam_id_text = std::to_string(static_cast<unsigned long long>(steam_id));
+    const cauth_result_t result =
+        cauth_session_clear_account(client_from_handle(handle), "steam", steam_id_text.c_str());
+    if (result != CAUTH_OK) {
+        throw_result_exception(env, "Failed to clear saved account", result);
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeClearAllSavedAccounts(
+    JNIEnv* env,
+    jclass,
+    jlong handle) {
+    cauth_session_list_t session_list{};
+    cauth_result_t result = cauth_session_list_saved(client_from_handle(handle), &session_list);
+    if (result != CAUTH_OK) {
+        throw_result_exception(env, "Failed to list saved accounts", result);
+        return;
+    }
+
+    for (unsigned long long index = 0; index < session_list.count; ++index) {
+        const auto& record = session_list.sessions[index];
+        if (!is_steam_record(record)) {
+            continue;
+        }
+        result = cauth_session_clear_account(
+            client_from_handle(handle),
+            "steam",
+            record.subject_id == nullptr ? "" : record.subject_id);
+        if (result != CAUTH_OK) {
+            throw_result_exception(env, "Failed to clear saved account", result);
+            return;
+        }
     }
 }
 

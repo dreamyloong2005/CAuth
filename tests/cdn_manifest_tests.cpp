@@ -9,8 +9,8 @@ int main() {
     if (servers.size() != 2 || servers[0].vhost != "cdn.example.com" ||
         servers[0].protocol != cauth::core::depot::CdnServerProtocol::Https ||
         servers[0].port != 443 || servers[1].vhost != "cache2.example.com" ||
-        servers[1].protocol != cauth::core::depot::CdnServerProtocol::Http ||
-        servers[1].port != 80) {
+        servers[1].protocol != cauth::core::depot::CdnServerProtocol::Https ||
+        servers[1].port != 443) {
         std::cerr << "CDN directory response should parse server endpoints\n";
         return 1;
     }

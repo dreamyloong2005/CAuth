@@ -13,6 +13,7 @@
 #include <set>
 #include <sstream>
 #include <string_view>
+#include <utility>
 
 namespace cauth::steam::auth {
 namespace {
@@ -49,6 +50,13 @@ struct AjaxRefreshResponse {
 struct SetTokenResponse {
     std::string token;
 };
+
+SteamWebCookieResult make_web_cookie_error(std::string message) {
+    SteamWebCookieResult result;
+    result.ok = false;
+    result.error_message = std::move(message);
+    return result;
+}
 
 bool ascii_iequals(std::string_view left, std::string_view right) {
     if (left.size() != right.size()) {
@@ -833,10 +841,10 @@ SteamWebCookieResult
 SteamWebCookieService::get_web_cookies(const cauth::core::session::AuthSession& session,
                                        std::string_view store_path) const {
     if (session.refresh_token.empty()) {
-        return {false, "A refresh token is required to finalize a web login", {}};
+        return make_web_cookie_error("A refresh token is required to finalize a web login");
     }
     if (steam_id(session) == 0) {
-        return {false, "A SteamID is required to finalize a web login", {}};
+        return make_web_cookie_error("A SteamID is required to finalize a web login");
     }
 
     const auto session_id = random_session_id();
@@ -854,22 +862,21 @@ SteamWebCookieService::get_web_cookies(const cauth::core::session::AuthSession& 
 
     const auto finalize_response = requester_->request(finalize_request);
     if (!finalize_response.ok) {
-        return {false, "finalizelogin failed: " + finalize_response.error_message, {}};
+        return make_web_cookie_error("finalizelogin failed: " + finalize_response.error_message);
     }
 
     const auto finalize_body = cauth::core::platform::http_body_as_string(finalize_response);
     if (!finalize_body.has_value()) {
-        return {false, "finalizelogin body decode failed", {}};
+        return make_web_cookie_error("finalizelogin body decode failed");
     }
 
     const auto parsed = parse_finalize_login_response(*finalize_body);
     if (!parsed.has_value()) {
-        return {
-            false,
+        return make_web_cookie_error(
             "finalizelogin response parse failed: " +
-                trim_ascii(finalize_body->substr(0, std::min<std::size_t>(finalize_body->size(), 240))),
-            {},
-        };
+            trim_ascii(finalize_body->substr(
+                0,
+                std::min<std::size_t>(finalize_body->size(), 240))));
     }
 
     auto cookies = collect_response_cookies(finalize_response, host_from_url(kFinalizeLoginUrl));
@@ -878,13 +885,13 @@ SteamWebCookieService::get_web_cookies(const cauth::core::session::AuthSession& 
         fields.emplace_back("steamID", std::to_string(steam_id(session)));
         const auto transfer_response = requester_->request(make_multipart_request(transfer.url, fields));
         if (!transfer_response.ok) {
-            return {false, "login transfer failed: " + transfer_response.error_message, {}};
+            return make_web_cookie_error("login transfer failed: " + transfer_response.error_message);
         }
 
         const auto transfer_cookies =
             collect_response_cookies(transfer_response, host_from_url(transfer.url));
         if (transfer_cookies.empty()) {
-            return {false, "login transfer did not return cookies", {}};
+            return make_web_cookie_error("login transfer did not return cookies");
         }
         cookies.insert(cookies.end(), transfer_cookies.begin(), transfer_cookies.end());
     }

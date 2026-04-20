@@ -416,7 +416,7 @@ std::string build_begin_app_upload_batch_form_body(
     const std::vector<std::string>& files_to_upload,
     const std::vector<std::string>& files_to_delete) {
     return build_begin_app_upload_batch_form_body(
-        SteamCloudWebAuthContext{std::string{access_token}, {}},
+        SteamCloudWebAuthContext{std::string{access_token}, {}, {}},
         app_id,
         machine_name,
         files_to_upload,
@@ -442,7 +442,7 @@ SteamCloudUploadResult upload_cloud_files(std::string_view access_token,
                                           const std::vector<SteamCloudUploadFile>& files,
                                           const std::vector<std::string>& files_to_delete) {
     return upload_cloud_files(
-        SteamCloudWebAuthContext{std::string{access_token}, {}},
+        SteamCloudWebAuthContext{std::string{access_token}, {}, {}},
         app_id,
         machine_name,
         files,
