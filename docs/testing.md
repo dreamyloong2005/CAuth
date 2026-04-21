@@ -26,7 +26,7 @@ $cauth = ".\\build\\windows-msvc-debug\\cauth.exe"
 Expected version output for the current development line:
 
 ```text
-CAuth 0.3.1
+CAuth 0.3.2
 ```
 
 ## 2. Steam auth
@@ -149,21 +149,21 @@ Use `--backend auto` first. If you are diagnosing auth material directly, try `-
 
 ```powershell
 & $cauth steam cloud list --steam-id 7656119... --app-id 2868840 --remote-root savegames --backend auto
-& $cauth steam cloud verify --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --backend auto
+& $cauth steam cloud verify --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-cloud --remote-root savegames --backend auto
 ```
 
 ### Dry-run pull and push
 
 ```powershell
-& $cauth steam cloud pull --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --backend auto --dry-run
-& $cauth steam cloud push --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --backend auto --dry-run
+& $cauth steam cloud pull --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-cloud --remote-root savegames --backend auto --dry-run
+& $cauth steam cloud push --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-cloud --remote-root savegames --backend auto --dry-run
 ```
 
 ### Real pull or push
 
 ```powershell
-& $cauth steam cloud pull --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --backend auto
-& $cauth steam cloud push --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --backend auto
+& $cauth steam cloud pull --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-cloud --remote-root savegames --backend auto
+& $cauth steam cloud push --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-cloud --remote-root savegames --backend auto
 ```
 
 If you want an orchestrated script run, use:
@@ -172,7 +172,7 @@ If you want an orchestrated script run, use:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\steam-cloud-acceptance.ps1 `
     -SteamId 7656119... `
     -AppId 2868840 `
-    -LocalRoot .\build\slay2-sync `
+    -LocalRoot .\build\slay2-cloud `
     -RemoteRoot savegames `
     -PlanOnly
 ```

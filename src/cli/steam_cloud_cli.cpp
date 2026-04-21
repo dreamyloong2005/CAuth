@@ -14,15 +14,15 @@
 namespace {
 using namespace cauth::cli::support;
 
-enum class SyncCommandKind {
+enum class CloudCommandKind {
     List,
     Verify,
     Pull,
     Push,
 };
 
-struct ParsedSyncCommand {
-    SyncCommandKind kind = SyncCommandKind::List;
+struct ParsedCloudCommand {
+    CloudCommandKind kind = CloudCommandKind::List;
     cauth::steam::cloud::SteamCloudRequest request;
     std::uint32_t count = 100;
     std::uint32_t start_index = 0;
@@ -30,10 +30,10 @@ struct ParsedSyncCommand {
     bool include_extra_local = false;
 };
 
-struct ParsedSyncResult {
+struct ParsedCloudResult {
     bool ok = false;
     int exit_code = 2;
-    ParsedSyncCommand command;
+    ParsedCloudCommand command;
 };
 
 std::optional<cauth::steam::cloud::SteamCloudConflictPolicy> parse_conflict_policy(
@@ -47,7 +47,7 @@ std::optional<cauth::steam::cloud::SteamCloudConflictPolicy> parse_conflict_poli
     return std::nullopt;
 }
 
-std::optional<cauth::steam::cloud::SteamCloudBackend> parse_sync_backend(std::string_view value) {
+std::optional<cauth::steam::cloud::SteamCloudBackend> parse_cloud_backend(std::string_view value) {
     using Backend = cauth::steam::cloud::SteamCloudBackend;
     if (value == "auto") return Backend::Auto;
     if (value == "web" || value == "web-api") return Backend::WebApi;
@@ -55,8 +55,8 @@ std::optional<cauth::steam::cloud::SteamCloudBackend> parse_sync_backend(std::st
     return std::nullopt;
 }
 
-ParsedSyncResult parse_sync_command(int argc, char** argv) {
-    ParsedSyncResult result;
+ParsedCloudResult parse_cloud_command(int argc, char** argv) {
+    ParsedCloudResult result;
     if (argc < 3) {
         std::cerr << "missing steam cloud command\n";
         cauth::cli::print_cli_usage();
@@ -65,13 +65,13 @@ ParsedSyncResult parse_sync_command(int argc, char** argv) {
 
     const std::string_view subcommand = argv[2];
     if (subcommand == "list") {
-        result.command.kind = SyncCommandKind::List;
+        result.command.kind = CloudCommandKind::List;
     } else if (subcommand == "verify") {
-        result.command.kind = SyncCommandKind::Verify;
+        result.command.kind = CloudCommandKind::Verify;
     } else if (subcommand == "pull") {
-        result.command.kind = SyncCommandKind::Pull;
+        result.command.kind = CloudCommandKind::Pull;
     } else if (subcommand == "push") {
-        result.command.kind = SyncCommandKind::Push;
+        result.command.kind = CloudCommandKind::Push;
     } else {
         std::cerr << "unknown steam cloud command: " << subcommand << '\n';
         cauth::cli::print_cli_usage();
@@ -139,7 +139,7 @@ ParsedSyncResult parse_sync_command(int argc, char** argv) {
             continue;
         }
         if (arg == "--backend" && index + 1 < argc) {
-            const auto parsed = parse_sync_backend(argv[++index]);
+            const auto parsed = parse_cloud_backend(argv[++index]);
             if (!parsed.has_value()) {
                 std::cerr << "unknown steam cloud backend\n";
                 return result;
@@ -160,9 +160,9 @@ ParsedSyncResult parse_sync_command(int argc, char** argv) {
         std::cerr << "steam cloud " << subcommand << " requires --steam-id <id>\n";
         return result;
     }
-    if ((result.command.kind == SyncCommandKind::Verify ||
-         result.command.kind == SyncCommandKind::Pull ||
-         result.command.kind == SyncCommandKind::Push) &&
+    if ((result.command.kind == CloudCommandKind::Verify ||
+         result.command.kind == CloudCommandKind::Pull ||
+         result.command.kind == CloudCommandKind::Push) &&
         result.command.request.local_root.empty()) {
         std::cerr << "steam cloud " << subcommand << " requires --local-root <path>\n";
         return result;
@@ -178,12 +178,12 @@ namespace cauth::cli {
 
 int run_steam_cloud(int argc, char** argv) {
     try {
-        const auto parsed = parse_sync_command(argc, argv);
+        const auto parsed = parse_cloud_command(argc, argv);
         if (!parsed.ok) return parsed.exit_code;
 
         const auto store = cauth::core::platform::make_platform_session_repository();
         switch (parsed.command.kind) {
-        case SyncCommandKind::List:
+        case CloudCommandKind::List:
             return cauth::steam::cloud::print_remote_files(
                 *store,
                 parsed.command.request,
@@ -192,20 +192,20 @@ int run_steam_cloud(int argc, char** argv) {
                 parsed.command.extended_details,
                 std::cout,
                 std::cerr);
-        case SyncCommandKind::Verify:
+        case CloudCommandKind::Verify:
             return cauth::steam::cloud::run_verify_cloud_local(
                 *store,
                 parsed.command.request,
                 parsed.command.include_extra_local,
                 std::cout,
                 std::cerr);
-        case SyncCommandKind::Pull:
+        case CloudCommandKind::Pull:
             return cauth::steam::cloud::run_pull_cloud_save(
                 *store,
                 parsed.command.request,
                 std::cout,
                 std::cerr);
-        case SyncCommandKind::Push:
+        case CloudCommandKind::Push:
             return cauth::steam::cloud::run_push_cloud_save(
                 *store,
                 parsed.command.request,

@@ -58,7 +58,7 @@ This module depends on `cauth_steam_auth`, and therefore transitively on `cauth_
 
 ### `cauth_steam_cloud`
 
-Owns Steam cloud-save synchronization workflows:
+Owns Steam cloud-save workflows:
 
 - remote file enumeration
 - cloud pull / push orchestration
@@ -91,7 +91,7 @@ src/core/            shared runtime and storage infrastructure
 src/steam/auth/      Steam auth-only logic
 src/steam/cm/        shared Steam CM protocol support used by Steam modules
 src/steam/depot/     depot/content workflows
-src/steam/cloud/     cloud-save sync workflows
+src/steam/cloud/     cloud-save workflows
 src/ffi/             split FFI implementations
 src/cli/             thin CLI frontend over application modules
 ```

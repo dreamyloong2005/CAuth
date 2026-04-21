@@ -15,7 +15,7 @@ std::string nullable_string(const char* value) {
     return value == nullptr ? std::string{} : std::string{value};
 }
 
-thread_local std::string g_last_sync_message;
+thread_local std::string g_last_cloud_message;
 thread_local std::vector<std::string> g_cloud_filenames;
 thread_local std::vector<std::string> g_cloud_urls;
 thread_local std::vector<std::string> g_cloud_platforms;
@@ -100,7 +100,7 @@ cauth_steam_cloud_conflict_policy_t to_ffi_conflict_policy(
     }
 }
 
-cauth_result_t run_sync_operation(
+cauth_result_t run_cloud_operation(
     cauth_client_t* client,
     const cauth_steam_cloud_request_t* request,
     cauth_steam_cloud_result_t* out_result,
@@ -126,7 +126,7 @@ cauth_result_t run_sync_operation(
     try {
         const auto native_request = build_native_request(client, request);
         const auto result = fn(native_request);
-        g_last_sync_message = result.message;
+        g_last_cloud_message = result.message;
 
         out_result->ok = result.ok ? 1 : 0;
         out_result->app_id = result.app_id;
@@ -139,7 +139,7 @@ cauth_result_t run_sync_operation(
         out_result->skipped_count = result.skipped_count;
         out_result->conflict_count = result.conflict_count;
         out_result->transferred_bytes = result.transferred_bytes;
-        out_result->message = g_last_sync_message.c_str();
+        out_result->message = g_last_cloud_message.c_str();
         return CAUTH_OK;
     } catch (const std::bad_alloc&) {
         return CAUTH_ERROR_OUT_OF_MEMORY;
@@ -171,7 +171,7 @@ cauth_result_t cauth_steam_cloud_list_remote_files(
     out_response->files = nullptr;
     out_response->message = "";
 
-    g_last_sync_message.clear();
+    g_last_cloud_message.clear();
     g_cloud_filenames.clear();
     g_cloud_urls.clear();
     g_cloud_platforms.clear();
@@ -182,7 +182,7 @@ cauth_result_t cauth_steam_cloud_list_remote_files(
         const auto native_request = build_native_request(client, request);
         const auto result = cauth::steam::cloud::list_remote_files(
             native_request, count, start_index, extended_details != 0);
-        g_last_sync_message = result.message;
+        g_last_cloud_message = result.message;
 
         g_cloud_filenames.reserve(result.files.size());
         g_cloud_urls.reserve(result.files.size());
@@ -219,7 +219,7 @@ cauth_result_t cauth_steam_cloud_list_remote_files(
         out_response->total_files = result.total_files;
         out_response->file_count = static_cast<unsigned long long>(g_cloud_entries.size());
         out_response->files = g_cloud_entries.empty() ? nullptr : g_cloud_entries.data();
-        out_response->message = g_last_sync_message.c_str();
+        out_response->message = g_last_cloud_message.c_str();
         return CAUTH_OK;
     } catch (const std::bad_alloc&) {
         return CAUTH_ERROR_OUT_OF_MEMORY;
@@ -231,13 +231,13 @@ cauth_result_t cauth_steam_cloud_list_remote_files(
 cauth_result_t cauth_steam_cloud_pull(cauth_client_t* client,
                                      const cauth_steam_cloud_request_t* request,
                                      cauth_steam_cloud_result_t* out_result) {
-    return run_sync_operation(client, request, out_result, &cauth::steam::cloud::pull_cloud_save);
+    return run_cloud_operation(client, request, out_result, &cauth::steam::cloud::pull_cloud_save);
 }
 
 cauth_result_t cauth_steam_cloud_push(cauth_client_t* client,
                                      const cauth_steam_cloud_request_t* request,
                                      cauth_steam_cloud_result_t* out_result) {
-    return run_sync_operation(client, request, out_result, &cauth::steam::cloud::push_cloud_save);
+    return run_cloud_operation(client, request, out_result, &cauth::steam::cloud::push_cloud_save);
 }
 
 cauth_result_t cauth_steam_cloud_verify_local_files(
@@ -268,7 +268,7 @@ cauth_result_t cauth_steam_cloud_verify_local_files(
         const auto native_request = build_native_request(client, request);
         const auto result = cauth::steam::cloud::verify_cloud_local_files(
             native_request, include_extra_local != 0);
-        g_last_sync_message = result.message;
+        g_last_cloud_message = result.message;
 
         out_result->present = 1;
         out_result->clean = result.clean() ? 1 : 0;
@@ -282,7 +282,7 @@ cauth_result_t cauth_steam_cloud_verify_local_files(
         out_result->filtered_out_count = result.filtered_out_count;
         out_result->extra_local_count = result.extra_local_count;
         out_result->total_count = result.total_count;
-        out_result->message = g_last_sync_message.c_str();
+        out_result->message = g_last_cloud_message.c_str();
         return CAUTH_OK;
     } catch (const std::bad_alloc&) {
         return CAUTH_ERROR_OUT_OF_MEMORY;

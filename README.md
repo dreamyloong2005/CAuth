@@ -1,7 +1,7 @@
 # CAuth
 
 CAuth is a native C/C++ toolkit for Steam authentication, Steam depot downloads, and Steam Cloud
-save synchronization. It is designed as a set of small modules that can be installed and consumed
+file workflows. It is designed as a set of small modules that can be installed and consumed
 independently.
 
 The current stack is:
@@ -44,12 +44,12 @@ for development and acceptance testing, but it is not required by library consum
 
 ## Current Version
 
-The current development version is `0.3.1`.
+The current development version is `0.3.2`.
 
 Native versioning is controlled by CMake:
 
 ```cmake
-project(CAuth VERSION 0.3.1)
+project(CAuth VERSION 0.3.2)
 ```
 
 CMake generates the native version header at configure time, and the CLI / C ABI read that same

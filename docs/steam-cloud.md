@@ -7,14 +7,14 @@ write Steam Cloud files for a game.
 
 ```powershell
 .\build\windows-msvc-debug\cauth.exe steam cloud list --steam-id 7656119... --app-id 440
-.\build\windows-msvc-debug\cauth.exe steam cloud verify --steam-id 7656119... --app-id 440 --local-root .\build\tf2-sync
-.\build\windows-msvc-debug\cauth.exe steam cloud pull --steam-id 7656119... --app-id 440 --local-root .\build\tf2-sync --dry-run
-.\build\windows-msvc-debug\cauth.exe steam cloud push --steam-id 7656119... --app-id 440 --local-root .\build\tf2-sync --dry-run
+.\build\windows-msvc-debug\cauth.exe steam cloud verify --steam-id 7656119... --app-id 440 --local-root .\build\tf2-cloud
+.\build\windows-msvc-debug\cauth.exe steam cloud pull --steam-id 7656119... --app-id 440 --local-root .\build\tf2-cloud --dry-run
+.\build\windows-msvc-debug\cauth.exe steam cloud push --steam-id 7656119... --app-id 440 --local-root .\build\tf2-cloud --dry-run
 ```
 
 Common flags:
 
-- `--remote-root <path>` narrows the sync scope to one subtree in Steam Cloud.
+- `--remote-root <path>` narrows the cloud scope to one subtree in Steam Cloud.
 - `--conflict-policy <default|local-wins|remote-wins|newer-wins|fail>` controls pull and push
   conflict handling. `fail-on-conflict` is also accepted as an alias.
 - `--backend <auto|web|cm>` chooses whether cloud calls use web-backed or CM-backed auth material.
@@ -60,7 +60,7 @@ in one shot:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\steam-cloud-acceptance.ps1 `
     -SteamId 7656119... `
     -AppId 440 `
-    -LocalRoot .\build\tf2-sync `
+    -LocalRoot .\build\tf2-cloud `
     -RemoteRoot remote `
     -PlanOnly
 ```
@@ -82,7 +82,7 @@ Useful examples:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\steam-cloud-acceptance.ps1 `
     -SteamId 7656119... `
     -AppId 2868840 `
-    -LocalRoot .\build\slay2-sync `
+    -LocalRoot .\build\slay2-cloud `
     -RemoteRoot savegames `
     -PlanOnly
 
@@ -90,7 +90,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\steam-cloud-accept
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\steam-cloud-acceptance.ps1 `
     -SteamId 7656119... `
     -AppId 2868840 `
-    -LocalRoot .\build\slay2-sync `
+    -LocalRoot .\build\slay2-cloud `
     -RemoteRoot savegames `
     -ConflictPolicy newer-wins
 
@@ -98,7 +98,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\steam-cloud-accept
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\steam-cloud-acceptance.ps1 `
     -SteamId 7656119... `
     -AppId 2868840 `
-    -LocalRoot .\build\slay2-sync `
+    -LocalRoot .\build\slay2-cloud `
     -RemoteRoot savegames `
     -DeleteRemoteOrphans `
     -RunPush

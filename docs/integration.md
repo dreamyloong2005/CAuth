@@ -222,9 +222,9 @@ If you already have a manifest and depot key:
 
 ```powershell
 .\build\windows-msvc-debug\cauth.exe steam cloud list --steam-id 7656119... --app-id 2868840 --remote-root savegames
-.\build\windows-msvc-debug\cauth.exe steam cloud verify --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames
-.\build\windows-msvc-debug\cauth.exe steam cloud pull --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --dry-run
-.\build\windows-msvc-debug\cauth.exe steam cloud push --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-sync --remote-root savegames --dry-run
+.\build\windows-msvc-debug\cauth.exe steam cloud verify --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-cloud --remote-root savegames
+.\build\windows-msvc-debug\cauth.exe steam cloud pull --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-cloud --remote-root savegames --dry-run
+.\build\windows-msvc-debug\cauth.exe steam cloud push --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-cloud --remote-root savegames --dry-run
 ```
 
 ## Android Integration

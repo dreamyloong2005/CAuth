@@ -74,7 +74,7 @@ path like:
 .\build\windows-msvc-debug\cauth.exe steam auth status
 ```
 
-`--version` should print the current native version, for example `CAuth 0.3.1`. If `doctor` and
+`--version` should print the current native version, for example `CAuth 0.3.2`. If `doctor` and
 `--version` work, the desktop toolchain is in decent shape.
 
 ## Steam auth quick test

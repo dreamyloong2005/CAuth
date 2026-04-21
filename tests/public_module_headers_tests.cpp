@@ -35,10 +35,10 @@ int main() {
         return 1;
     }
 
-    cauth::steam::cloud::SteamCloudRequest sync_request;
-    sync_request.app_id = 440;
-    if (sync_request.app_id != 440) {
-        std::cerr << "public steam cloud header should expose sync types\n";
+    cauth::steam::cloud::SteamCloudRequest cloud_request;
+    cloud_request.app_id = 440;
+    if (cloud_request.app_id != 440) {
+        std::cerr << "public steam cloud header should expose cloud types\n";
         return 1;
     }
 

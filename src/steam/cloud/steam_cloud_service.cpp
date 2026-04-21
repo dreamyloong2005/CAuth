@@ -543,7 +543,7 @@ std::uint32_t parse_x_eresult_header(const cauth::core::platform::HttpResponse& 
     return value;
 }
 
-SteamCloudBackend resolve_sync_backend(const SteamCloudRequest& request) {
+SteamCloudBackend resolve_cloud_backend(const SteamCloudRequest& request) {
     if (request.backend != SteamCloudBackend::Auto) {
         return request.backend;
     }
@@ -776,7 +776,7 @@ SteamCloudFileListResult fetch_remote_file_list(const SteamCloudRequest& request
                                                 std::uint32_t count,
                                                 std::uint32_t start_index,
                                                 bool extended_details) {
-    switch (resolve_sync_backend(request)) {
+    switch (resolve_cloud_backend(request)) {
     case SteamCloudBackend::WebApi:
         return fetch_remote_file_list_via_web_api(request, count, start_index, extended_details);
     case SteamCloudBackend::CmCloud:
@@ -785,7 +785,7 @@ SteamCloudFileListResult fetch_remote_file_list(const SteamCloudRequest& request
     default: {
         SteamCloudFileListResult result;
         result.app_id = request.app_id;
-        result.message = "sync backend resolution failed";
+        result.message = "cloud backend resolution failed";
         return result;
     }
     }
@@ -793,7 +793,7 @@ SteamCloudFileListResult fetch_remote_file_list(const SteamCloudRequest& request
 
 SteamCloudDownloadResult download_remote_file(const SteamCloudRequest& request,
                                               const SteamCloudFileEntry& file) {
-    switch (resolve_sync_backend(request)) {
+    switch (resolve_cloud_backend(request)) {
     case SteamCloudBackend::CmCloud:
         return download_remote_file_via_cm(request, file);
     case SteamCloudBackend::WebApi:

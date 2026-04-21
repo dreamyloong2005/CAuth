@@ -30,6 +30,6 @@ using UploadCloudFilesHook = SteamCloudUploadResult (*)(
 void set_list_remote_files_hook(ListRemoteFilesHook hook);
 void set_download_file_hook(DownloadFileHook hook);
 void set_upload_cloud_files_hook(UploadCloudFilesHook hook);
-void clear_sync_test_hooks();
+void clear_cloud_test_hooks();
 
 } // namespace cauth::steam::cloud::testing

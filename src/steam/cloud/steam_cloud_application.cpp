@@ -22,7 +22,7 @@ namespace cauth::steam::cloud {
 
 namespace {
 
-struct SyncProgress {
+struct CloudProgress {
     std::uint64_t local_file_count = 0;
     std::uint64_t remote_file_count = 0;
     std::uint64_t transferred_count = 0;
@@ -46,7 +46,7 @@ SteamCloudResult make_result(const SteamCloudRequest& request,
                             SteamCloudDirection direction,
                             bool ok,
                             std::string message,
-                            SyncProgress progress = {}) {
+                       CloudProgress progress = {}) {
     SteamCloudResult result;
     result.ok = ok;
     result.app_id = request.app_id;
@@ -65,7 +65,7 @@ SteamCloudResult make_result(const SteamCloudRequest& request,
 
 SteamCloudResult make_canceled_result(const SteamCloudRequest& request,
                                       SteamCloudDirection direction,
-                                      const SyncProgress& progress,
+    const CloudProgress& progress,
                                       std::string_view phase) {
     std::string message = "operation canceled";
     if (!phase.empty()) {
@@ -153,7 +153,7 @@ bool write_bytes_to_path(const std::filesystem::path& output_path,
     return static_cast<bool>(output);
 }
 
-std::string describe_skip_breakdown(const SyncProgress& progress) {
+std::string describe_skip_breakdown(const CloudProgress& progress) {
     std::string summary = std::to_string(progress.skipped_count) + " file(s)";
     if (progress.unchanged_count == 0 && progress.filtered_count == 0 &&
         progress.policy_skipped_count == 0) {
@@ -181,7 +181,7 @@ std::string describe_skip_breakdown(const SyncProgress& progress) {
     return summary;
 }
 
-std::string describe_download_summary(const SyncProgress& progress, bool dry_run) {
+std::string describe_download_summary(const CloudProgress& progress, bool dry_run) {
     return std::string{dry_run ? "would download " : "downloaded "} +
            std::to_string(progress.transferred_count) + " file(s), skipped " +
            describe_skip_breakdown(progress) + ", conflicts=" +
@@ -237,7 +237,7 @@ std::optional<std::vector<std::uint8_t>> read_file_bytes(const std::filesystem::
     return bytes;
 }
 
-std::string describe_push_summary(const SyncProgress& progress, bool dry_run) {
+std::string describe_push_summary(const CloudProgress& progress, bool dry_run) {
     return std::string{dry_run ? "would upload " : "uploaded "} +
            std::to_string(progress.transferred_count) + " file(s), deleted " +
            std::to_string(progress.deleted_count) + " remote file(s), skipped " +
@@ -508,7 +508,7 @@ const char* conflict_policy_name(SteamCloudConflictPolicy policy) {
     }
 }
 
-void print_sync_result_summary(const SteamCloudResult& result, std::ostream& out) {
+void print_cloud_result_summary(const SteamCloudResult& result, std::ostream& out) {
     out << "Steam cloud result: " << (result.ok ? "ok" : "failed") << '\n'
         << "AppID: " << result.app_id << '\n'
         << "Direction: " << (result.direction == SteamCloudDirection::Pull ? "pull" : "push") << '\n'
@@ -764,7 +764,7 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
 SteamCloudResult pull_cloud_save(const SteamCloudRequest& request) {
     std::string auth_error;
     const auto effective_request = materialize_cloud_web_api_auth(request, &auth_error);
-    SyncProgress progress;
+    CloudProgress progress;
     report_transfer_progress(
         SteamCloudTransferProgress{SteamCloudTransferKind::Pull, "Preparing pull", {}});
     if (effective_request.app_id == 0) {
@@ -938,7 +938,7 @@ SteamCloudResult pull_cloud_save(const SteamCloudRequest& request) {
 SteamCloudResult push_cloud_save(const SteamCloudRequest& request) {
     std::string auth_error;
     const auto effective_request = materialize_cloud_web_api_auth(request, &auth_error);
-    SyncProgress progress;
+    CloudProgress progress;
     report_transfer_progress(
         SteamCloudTransferProgress{SteamCloudTransferKind::Push, "Preparing push", {}});
     if (effective_request.app_id == 0) {
@@ -1296,7 +1296,7 @@ int run_pull_cloud_save(core::session::SessionRepository& store,
     if (!result.ok) {
         err << result.message << '\n';
     }
-    print_sync_result_summary(result, out);
+    print_cloud_result_summary(result, out);
     return result.ok ? 0 : 1;
 }
 
@@ -1312,7 +1312,7 @@ int run_push_cloud_save(core::session::SessionRepository& store,
     if (!result.ok) {
         err << result.message << '\n';
     }
-    print_sync_result_summary(result, out);
+    print_cloud_result_summary(result, out);
     return result.ok ? 0 : 1;
 }
 
@@ -1360,7 +1360,7 @@ namespace testing {
 void set_list_remote_files_hook(ListRemoteFilesHook hook) { g_list_remote_files_hook = hook; }
 void set_download_file_hook(DownloadFileHook hook) { g_download_file_hook = hook; }
 void set_upload_cloud_files_hook(UploadCloudFilesHook hook) { g_upload_cloud_files_hook = hook; }
-void clear_sync_test_hooks() {
+void clear_cloud_test_hooks() {
     g_list_remote_files_hook = nullptr;
     g_download_file_hook = nullptr;
     g_upload_cloud_files_hook = nullptr;

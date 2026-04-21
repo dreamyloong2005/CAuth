@@ -43,7 +43,7 @@ The root `.gitignore` excludes:
 3. Confirm that `reference/` stays local-only research material
 4. Confirm no account data, tokens, manifests, or downloaded content remain in the working tree
 5. Confirm the published version
-   - current development version is `0.3.1`
+   - current development version is `0.3.2`
    - version source of truth is `project(CAuth VERSION ...)` in `CMakeLists.txt`
 
 ## Suggested first push flow
@@ -61,8 +61,8 @@ git push -u origin main
 Use a leading `v` tag after validation:
 
 ```powershell
-git tag v0.3.1
-git push origin v0.3.1
+git tag v0.3.2
+git push origin v0.3.2
 ```
 
 Before tagging, run the checks in [versioning.md](versioning.md) and [testing.md](testing.md).

@@ -12,8 +12,8 @@
 
 namespace {
 
-struct ScopedSyncHooksReset {
-    ~ScopedSyncHooksReset() { cauth::steam::cloud::testing::clear_sync_test_hooks(); }
+struct ScopedCloudHooksReset {
+    ~ScopedCloudHooksReset() { cauth::steam::cloud::testing::clear_cloud_test_hooks(); }
 };
 
 cauth::steam::cloud::SteamCloudFileListResult g_mock_list_result;
@@ -159,7 +159,7 @@ int main() {
     cauth::steam::cloud::SteamCloudResult pull_result;
     cauth::steam::cloud::SteamCloudResult push_result;
     {
-        ScopedSyncHooksReset hooks_reset;
+        ScopedCloudHooksReset hooks_reset;
         g_mock_list_result = {};
         g_mock_list_result.ok = true;
         g_mock_list_result.app_id = 440;
@@ -187,12 +187,12 @@ int main() {
         return 1;
     }
     if (pull_result.deleted_count != 0 || push_result.deleted_count != 0) {
-        std::cerr << "dry-run placeholder sync results should keep delete counts stable\n";
+        std::cerr << "dry-run placeholder cloud results should keep delete counts stable\n";
         return 1;
     }
 
     {
-        ScopedSyncHooksReset hooks_reset;
+        ScopedCloudHooksReset hooks_reset;
         cauth::core::runtime::MemorySessionRepository store;
         g_mock_list_result = {};
         g_mock_list_result.ok = true;
@@ -227,8 +227,8 @@ int main() {
     }
 
     {
-        ScopedSyncHooksReset hooks_reset;
-        const auto temp_dir = make_temp_dir("cauth-sync-pull-newer");
+        ScopedCloudHooksReset hooks_reset;
+        const auto temp_dir = make_temp_dir("cauth-cloud-pull-newer");
         const auto local_path = temp_dir / "save1.sav";
         if (!write_text_file(local_path, "local")) {
             std::cerr << "failed to prepare local pull fixture\n";
@@ -263,7 +263,7 @@ int main() {
     }
 
     {
-        ScopedSyncHooksReset hooks_reset;
+        ScopedCloudHooksReset hooks_reset;
         cauth::core::runtime::MemorySessionRepository store;
         cauth::core::session::AuthSession saved;
         saved.provider = "steam";
@@ -289,13 +289,13 @@ int main() {
         }
         if (g_last_list_request.refresh_token != "refresh-token" ||
             g_last_list_request.steam_id != 76561198000000000ULL) {
-            std::cerr << "saved Steam session should flow into sync requests\n";
+            std::cerr << "saved Steam session should flow into cloud requests\n";
             return 1;
         }
     }
 
     {
-        ScopedSyncHooksReset hooks_reset;
+        ScopedCloudHooksReset hooks_reset;
         cauth::core::runtime::MemorySessionRepository store;
 
         cauth::core::session::AuthSession client_session;
@@ -351,7 +351,7 @@ int main() {
     }
 
     {
-        ScopedSyncHooksReset hooks_reset;
+        ScopedCloudHooksReset hooks_reset;
         const auto temp_dir = make_temp_dir("cauth-cloud-verify-basic");
         if (!write_text_file(temp_dir / "save1.sav", "same")) {
             std::cerr << "failed to prepare cloud verify fixture\n";
@@ -394,7 +394,7 @@ int main() {
     }
 
     {
-        ScopedSyncHooksReset hooks_reset;
+        ScopedCloudHooksReset hooks_reset;
         const auto temp_dir = make_temp_dir("cauth-cloud-verify-size-only");
         if (!write_text_file(temp_dir / "save1.sav", "same")) {
             std::cerr << "failed to prepare cloud size-only fixture\n";
@@ -423,7 +423,7 @@ int main() {
     }
 
     {
-        ScopedSyncHooksReset hooks_reset;
+        ScopedCloudHooksReset hooks_reset;
         const auto temp_dir = make_temp_dir("cauth-cloud-verify-extra-local");
         if (!write_text_file(temp_dir / "existing.sav", "same")) {
             std::cerr << "failed to prepare cloud extra-local fixture\n";
@@ -458,8 +458,8 @@ int main() {
     }
 
     {
-        ScopedSyncHooksReset hooks_reset;
-        const auto temp_dir = make_temp_dir("cauth-sync-pull-fail");
+        ScopedCloudHooksReset hooks_reset;
+        const auto temp_dir = make_temp_dir("cauth-cloud-pull-fail");
         const auto local_path = temp_dir / "save1.sav";
         if (!write_text_file(local_path, "local")) {
             std::cerr << "failed to prepare pull conflict fixture\n";
@@ -491,8 +491,8 @@ int main() {
     }
 
     {
-        ScopedSyncHooksReset hooks_reset;
-        const auto temp_dir = make_temp_dir("cauth-sync-push-upload");
+        ScopedCloudHooksReset hooks_reset;
+        const auto temp_dir = make_temp_dir("cauth-cloud-push-upload");
         const auto local_path = temp_dir / "save1.sav";
         if (!write_text_file(local_path, "local-new")) {
             std::cerr << "failed to prepare push fixture\n";
@@ -531,8 +531,8 @@ int main() {
     }
 
     {
-        ScopedSyncHooksReset hooks_reset;
-        const auto temp_dir = make_temp_dir("cauth-sync-push-remote-wins");
+        ScopedCloudHooksReset hooks_reset;
+        const auto temp_dir = make_temp_dir("cauth-cloud-push-remote-wins");
         const auto local_path = temp_dir / "save1.sav";
         if (!write_text_file(local_path, "local-old")) {
             std::cerr << "failed to prepare remote-wins fixture\n";
@@ -564,8 +564,8 @@ int main() {
     }
 
     {
-        ScopedSyncHooksReset hooks_reset;
-        const auto temp_dir = make_temp_dir("cauth-sync-pull-dry-run");
+        ScopedCloudHooksReset hooks_reset;
+        const auto temp_dir = make_temp_dir("cauth-cloud-pull-dry-run");
         const auto local_path = temp_dir / "save1.sav";
         if (!write_text_file(local_path, "local")) {
             std::cerr << "failed to prepare pull dry-run fixture\n";
@@ -605,8 +605,8 @@ int main() {
     }
 
     {
-        ScopedSyncHooksReset hooks_reset;
-        const auto temp_dir = make_temp_dir("cauth-sync-push-dry-run-delete");
+        ScopedCloudHooksReset hooks_reset;
+        const auto temp_dir = make_temp_dir("cauth-cloud-push-dry-run-delete");
         const auto local_path = temp_dir / "save1.sav";
         if (!write_text_file(local_path, "local-new")) {
             std::cerr << "failed to prepare push dry-run fixture\n";
@@ -666,8 +666,8 @@ int main() {
     }
 
     {
-        ScopedSyncHooksReset hooks_reset;
-        const auto temp_dir = make_temp_dir("cauth-sync-pull-local-wins");
+        ScopedCloudHooksReset hooks_reset;
+        const auto temp_dir = make_temp_dir("cauth-cloud-pull-local-wins");
         const auto local_path = temp_dir / "save1.sav";
         if (!write_text_file(local_path, "local")) {
             std::cerr << "failed to prepare pull local-wins fixture\n";
@@ -701,8 +701,8 @@ int main() {
     }
 
     {
-        ScopedSyncHooksReset hooks_reset;
-        const auto temp_dir = make_temp_dir("cauth-sync-push-fail");
+        ScopedCloudHooksReset hooks_reset;
+        const auto temp_dir = make_temp_dir("cauth-cloud-push-fail");
         const auto local_path = temp_dir / "save1.sav";
         if (!write_text_file(local_path, "local")) {
             std::cerr << "failed to prepare push fail-on-conflict fixture\n";

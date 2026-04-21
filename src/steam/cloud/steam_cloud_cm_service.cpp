@@ -1017,13 +1017,13 @@ SteamCloudFileListResult fetch_remote_file_list_via_cm(const SteamCloudRequest& 
         request.session_type != cauth::steam::auth::kSteamSessionTypeSteamClient) {
         return make_cm_auth_error(
             request.app_id,
-            "CM Cloud sync requires a steam-client session; sign in with `steam auth login`");
+            "CM Steam Cloud requires a steam-client session; sign in with `steam auth login`");
     }
     const auto session = make_cm_auth_session(request);
     if (!session.has_value()) {
         return make_cm_auth_error(
             request.app_id,
-            "refresh token is required for CM Cloud sync; sign in with steam auth login");
+            "refresh token is required for CM Steam Cloud; sign in with steam auth login");
     }
 
     SteamCloudFileListResult final_result;
@@ -1075,12 +1075,12 @@ SteamCloudDownloadResult download_remote_file_via_cm(const SteamCloudRequest& re
     if (!request.session_type.empty() &&
         request.session_type != cauth::steam::auth::kSteamSessionTypeSteamClient) {
         return make_download_error(
-            "CM Cloud sync requires a steam-client session; sign in with `steam auth login`");
+            "CM Steam Cloud requires a steam-client session; sign in with `steam auth login`");
     }
     const auto session = make_cm_auth_session(request);
     if (!session.has_value()) {
         return make_download_error(
-            "refresh token is required for CM Cloud sync; sign in with steam auth login");
+            "refresh token is required for CM Steam Cloud; sign in with steam auth login");
     }
     if (!cauth::core::platform::is_platform_http_client_available()) {
         return make_download_error("platform HTTP client is not available");
@@ -1156,12 +1156,12 @@ SteamCloudUploadResult upload_cloud_files_via_cm(const SteamCloudRequest& reques
     if (!request.session_type.empty() &&
         request.session_type != cauth::steam::auth::kSteamSessionTypeSteamClient) {
         return make_upload_error(
-            "CM Cloud sync requires a steam-client session; sign in with `steam auth login`");
+            "CM Steam Cloud requires a steam-client session; sign in with `steam auth login`");
     }
     const auto session = make_cm_auth_session(request);
     if (!session.has_value()) {
         return make_upload_error(
-            "refresh token is required for CM Cloud sync; sign in with steam auth login");
+            "refresh token is required for CM Steam Cloud; sign in with steam auth login");
     }
 
     for (const auto& file : files) {
