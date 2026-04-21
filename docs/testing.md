@@ -26,7 +26,7 @@ $cauth = ".\\build\\windows-msvc-debug\\cauth.exe"
 Expected version output for the current development line:
 
 ```text
-CAuth 0.3.0
+CAuth 0.3.1
 ```
 
 ## 2. Steam auth

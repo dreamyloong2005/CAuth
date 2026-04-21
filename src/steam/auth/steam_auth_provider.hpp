@@ -15,6 +15,17 @@ struct SteamAuthSessionLoadResult {
     std::optional<cauth::core::session::AuthSession> session;
 };
 
+enum class StoredSteamSessionSelection {
+    SteamClientOnly,
+    CloudAuto,
+    WebApiPreferred,
+};
+
+std::optional<cauth::core::session::AuthSession> select_stored_steam_session(
+    const cauth::core::session::SessionRepository& repository,
+    std::string_view subject_id,
+    StoredSteamSessionSelection selection);
+
 class SteamAuthProvider {
   public:
     virtual ~SteamAuthProvider() = default;

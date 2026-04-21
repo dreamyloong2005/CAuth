@@ -32,7 +32,8 @@ The core repository stores session records with generic fields:
 - token presence flags
 - creation timestamp
 
-Steam-specific decisions, such as preferring the `steam-client` session for CM/depot work, belong
+Steam-specific decisions, such as preferring the `steam-client` session for CM/depot/cloud auto
+work, belong
 to `cauth_steam_auth`.
 
 ## Steam Session Types
@@ -41,7 +42,7 @@ Steam auth can create different session flavors:
 
 - `steam-client`
   - produced by `steam auth login`
-  - preferred for CM, depot, and most native Steam flows
+  - preferred for CM, depot, and cloud `--backend auto`
 - `web-browser`
   - produced by `steam auth login-web`
   - useful for web-cookie and finalize-login validation

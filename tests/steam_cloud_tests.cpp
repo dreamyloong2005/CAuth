@@ -1,6 +1,7 @@
 #include "cauth/steam_cloud.hpp"
 #include "core/hash/sha1.hpp"
 #include "core/runtime/session/memory_session_repository.hpp"
+#include "steam/auth/steam_session_identity.hpp"
 #include "steam/cloud/steam_cloud_test_hooks.hpp"
 #include "steam/cloud/steam_cloud_upload_service.hpp"
 
@@ -289,6 +290,62 @@ int main() {
         if (g_last_list_request.refresh_token != "refresh-token" ||
             g_last_list_request.steam_id != 76561198000000000ULL) {
             std::cerr << "saved Steam session should flow into sync requests\n";
+            return 1;
+        }
+    }
+
+    {
+        ScopedSyncHooksReset hooks_reset;
+        cauth::core::runtime::MemorySessionRepository store;
+
+        cauth::core::session::AuthSession client_session;
+        client_session.provider = "steam";
+        client_session.subject_id = "76561198000000000";
+        client_session.account_name = "test-account";
+        client_session.refresh_token = "client-refresh";
+        client_session.access_token = "client-access";
+        client_session.session_type = std::string{cauth::steam::auth::kSteamSessionTypeSteamClient};
+        client_session.created_at = std::chrono::system_clock::time_point{std::chrono::seconds{100}};
+        store.save_auth_session(client_session);
+
+        cauth::core::session::AuthSession web_session = client_session;
+        web_session.refresh_token = "web-refresh";
+        web_session.access_token = "web-access";
+        web_session.session_type = std::string{cauth::steam::auth::kSteamSessionTypeWebBrowser};
+        web_session.created_at = std::chrono::system_clock::time_point{std::chrono::seconds{200}};
+        store.save_auth_session(web_session);
+
+        g_mock_list_result = {};
+        g_mock_list_result.ok = true;
+        g_mock_list_result.app_id = 440;
+        g_mock_list_result.eresult = 1;
+        cauth::steam::cloud::testing::set_list_remote_files_hook(&mock_list_remote_files);
+
+        std::ostringstream out;
+        std::ostringstream err;
+        cauth::steam::cloud::SteamCloudRequest list_request;
+        list_request.app_id = 440;
+        list_request.steam_id = 76561198000000000ULL;
+        if (cauth::steam::cloud::print_remote_files(store, list_request, 10, 0, true, out, err) != 0) {
+            std::cerr << "cloud auto backend should succeed when client and web sessions coexist\n";
+            return 1;
+        }
+        if (g_last_list_request.refresh_token != "client-refresh" ||
+            g_last_list_request.access_token != "client-access" ||
+            g_last_list_request.session_type != cauth::steam::auth::kSteamSessionTypeSteamClient) {
+            std::cerr << "cloud auto backend should prefer steam-client session when available\n";
+            return 1;
+        }
+
+        list_request.backend = cauth::steam::cloud::SteamCloudBackend::WebApi;
+        if (cauth::steam::cloud::print_remote_files(store, list_request, 10, 0, true, out, err) != 0) {
+            std::cerr << "cloud web backend should succeed when client and web sessions coexist\n";
+            return 1;
+        }
+        if (g_last_list_request.refresh_token != "web-refresh" ||
+            !g_last_list_request.access_token.empty() ||
+            g_last_list_request.session_type != cauth::steam::auth::kSteamSessionTypeWebBrowser) {
+            std::cerr << "cloud web backend should prefer web session and avoid saved access token copy\n";
             return 1;
         }
     }

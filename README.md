@@ -44,12 +44,12 @@ for development and acceptance testing, but it is not required by library consum
 
 ## Current Version
 
-The current development version is `0.3.0`.
+The current development version is `0.3.1`.
 
 Native versioning is controlled by CMake:
 
 ```cmake
-project(CAuth VERSION 0.3.0)
+project(CAuth VERSION 0.3.1)
 ```
 
 CMake generates the native version header at configure time, and the CLI / C ABI read that same
@@ -179,6 +179,10 @@ Depot and cloud smoke checks:
 & $cauth steam depot preflight --steam-id 7656119... --app-id 2868840 --branch public --max-count 20
 & $cauth steam cloud list --steam-id 7656119... --app-id 2868840 --remote-root savegames --backend auto
 ```
+
+When one Steam account has multiple saved session types, depot flows and Steam Cloud `--backend auto`
+prefer the `steam-client` session automatically. If you explicitly choose `--backend web`, CAuth
+prefers a web-capable saved session instead.
 
 For a full validation path, use [docs/testing.md](docs/testing.md).
 

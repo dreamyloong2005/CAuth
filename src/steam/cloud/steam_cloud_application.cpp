@@ -3,6 +3,7 @@
 #include "core/platform/http_client.hpp"
 #include "core/session/auth_session.hpp"
 #include "core/hash/sha1.hpp"
+#include "steam/auth/steam_auth_provider.hpp"
 #include "steam/auth/steam_session_identity.hpp"
 #include "steam/cloud/steam_cloud_cm_service.hpp"
 #include "steam/cloud/steam_cloud_service.hpp"
@@ -441,9 +442,18 @@ SteamCloudRequest with_saved_auth_session(core::session::SessionRepository& stor
     if (effective.steam_id == 0) {
         return effective;
     }
-    const auto session = store.load_auth_session(
-        cauth::steam::auth::kSteamAuthProvider,
-        std::to_string(effective.steam_id));
+
+    auto selection = cauth::steam::auth::StoredSteamSessionSelection::CloudAuto;
+    if (effective.backend == SteamCloudBackend::CmCloud) {
+        selection = cauth::steam::auth::StoredSteamSessionSelection::SteamClientOnly;
+    } else if (effective.backend == SteamCloudBackend::WebApi) {
+        selection = cauth::steam::auth::StoredSteamSessionSelection::WebApiPreferred;
+    }
+
+    const auto session = cauth::steam::auth::select_stored_steam_session(
+        store,
+        std::to_string(effective.steam_id),
+        selection);
     if (session.has_value()) {
         const bool is_web_browser_session =
             session->session_type == cauth::steam::auth::kSteamSessionTypeWebBrowser;

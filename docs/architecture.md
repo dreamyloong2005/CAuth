@@ -39,7 +39,7 @@ Owns Steam account authentication and authenticated CM access:
 - CM directory lookup, probe, logon, and auth-oriented service calls
 - Steam session persistence through `cauth_core`
 - Steam-specific session selection rules, such as preferring `steam-client` auth material for CM,
-  depot, and most native Steam workflows
+  depot, cloud auto-selection, and most native Steam workflows
 
 This module depends on `cauth_core`.
 

@@ -18,6 +18,8 @@ Common flags:
 - `--conflict-policy <default|local-wins|remote-wins|newer-wins|fail>` controls pull and push
   conflict handling. `fail-on-conflict` is also accepted as an alias.
 - `--backend <auto|web|cm>` chooses whether cloud calls use web-backed or CM-backed auth material.
+  In `auto` mode, CAuth prefers a saved `steam-client` session when the same Steam account also has
+  web/mobile sessions saved.
 - `--steam-id <id>` selects which saved Steam account to use. It is required even when an
   `--access-token` override is supplied.
 - `--access-token <token>` overrides the saved login session token for web-backed calls.
@@ -46,7 +48,8 @@ When several Steam accounts are saved, inspect the repository and pass the desir
 ```
 
 Use `--backend auto` unless you are debugging a specific path. `--backend cm` forces CM Cloud
-service calls. `--backend web` forces web-backed auth material.
+service calls. `--backend web` forces web-backed auth material and prefers a saved web-capable
+session when one exists.
 
 ## Acceptance Script
 
