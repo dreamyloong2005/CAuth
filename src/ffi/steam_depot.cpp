@@ -3,6 +3,7 @@
 #include "ffi/client_internal.hpp"
 #include "steam/auth/steam_auth_provider.hpp"
 #include "steam/cm/cm_message.hpp"
+#include "steam/depot/depot_file.hpp"
 #include "steam/depot/depot_preflight.hpp"
 #include "steam/depot/depot_resolver.hpp"
 #include "steam/depot/steam_depot_application.hpp"
@@ -571,16 +572,17 @@ cauth_result_t cauth_depot_list_manifest_files(const char* input_path,
             if (cauth::core::depot::depot_file_is_directory(file)) {
                 continue;
             }
+            const auto display_name = cauth::core::depot::depot_manifest_path_for_display(file.filename);
             ++total_count;
             if (!filter.empty() &&
-                file.filename.find(filter) == std::string::npos) {
+                display_name.find(filter) == std::string::npos) {
                 continue;
             }
             ++matched_count;
             if (g_manifest_file_entries.size() >= limit) {
                 continue;
             }
-            g_manifest_file_names.push_back(file.filename);
+            g_manifest_file_names.push_back(display_name);
         }
 
         g_manifest_file_entries.reserve(g_manifest_file_names.size());
@@ -589,8 +591,9 @@ cauth_result_t cauth_depot_list_manifest_files(const char* input_path,
             if (cauth::core::depot::depot_file_is_directory(file)) {
                 continue;
             }
+            const auto display_name = cauth::core::depot::depot_manifest_path_for_display(file.filename);
             if (!filter.empty() &&
-                file.filename.find(filter) == std::string::npos) {
+                display_name.find(filter) == std::string::npos) {
                 continue;
             }
             if (printed_index >= g_manifest_file_names.size()) {

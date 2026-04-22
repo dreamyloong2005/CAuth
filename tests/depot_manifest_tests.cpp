@@ -183,6 +183,25 @@ int main() {
         std::cerr << "depot file path lookup should normalize separators and case\n";
         return 1;
     }
+    const auto normalized_path =
+        cauth::core::depot::normalize_depot_manifest_path("folder//./Sub Folder\\\\File.bin");
+    if (!normalized_path.ok ||
+        normalized_path.normalized_path != "folder/Sub Folder/File.bin" ||
+        normalized_path.relative_path !=
+            (std::filesystem::path{"folder"} / "Sub Folder" / "File.bin")) {
+        std::cerr << "manifest path normalization should collapse separators and dot segments\n";
+        return 1;
+    }
+    const auto parent_path =
+        cauth::core::depot::normalize_depot_manifest_path("folder/../file.bin");
+    const auto drive_path =
+        cauth::core::depot::normalize_depot_manifest_path("C:\\folder\\file.bin");
+    const auto absolute_path =
+        cauth::core::depot::normalize_depot_manifest_path("/folder/file.bin");
+    if (parent_path.ok || drive_path.ok || absolute_path.ok) {
+        std::cerr << "manifest path normalization should reject unsafe relative paths\n";
+        return 1;
+    }
     std::stringstream output{std::ios::in | std::ios::out | std::ios::binary};
     output.write(std::string(depot_file.size, '\0').data(),
                  static_cast<std::streamsize>(depot_file.size));
@@ -269,9 +288,9 @@ int main() {
         verify_missing_err);
     std::filesystem::remove_all(verify_root);
     if (verify_ok != 0 || verify_bad == 0 || verify_missing == 0 ||
-        verify_out.str().find("OK file=folder\\file.bin") == std::string::npos ||
-        verify_bad_out.str().find("MISMATCH file=folder\\file.bin") == std::string::npos ||
-        verify_missing_out.str().find("MISSING file=folder\\file.bin") == std::string::npos) {
+        verify_out.str().find("OK file=folder/file.bin") == std::string::npos ||
+        verify_bad_out.str().find("MISMATCH file=folder/file.bin") == std::string::npos ||
+        verify_missing_out.str().find("MISSING file=folder/file.bin") == std::string::npos) {
         std::cerr << "manifest local verification should report ok, mismatch, and missing files\n";
         return 1;
     }
@@ -290,7 +309,7 @@ int main() {
         directory_list_out);
     if (directory_list_exit != 0 ||
         directory_list_out.str().find("file[0]=folder") != std::string::npos ||
-        directory_list_out.str().find("file[1]=folder\\file.bin") == std::string::npos ||
+        directory_list_out.str().find("file[1]=folder/file.bin") == std::string::npos ||
         directory_list_out.str().find("total=1") == std::string::npos) {
         std::cerr << "manifest file list should skip directory entries\n";
         return 1;

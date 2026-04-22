@@ -3,7 +3,7 @@
 The current development version is:
 
 ```text
-0.3.2
+0.3.3
 ```
 
 ## Native Source Of Truth
@@ -11,7 +11,7 @@ The current development version is:
 The native C/C++ version is controlled by the CMake project declaration:
 
 ```cmake
-project(CAuth VERSION 0.3.2)
+project(CAuth VERSION 0.3.3)
 ```
 
 During configure, CMake expands:
@@ -41,8 +41,8 @@ Do not edit generated headers in `build/`.
 The Android example app has separate APK packaging metadata:
 
 ```kotlin
-versionCode = 5
-versionName = "0.3.2"
+versionCode = 6
+versionName = "0.3.3"
 ```
 
 That value lives in:
@@ -86,7 +86,7 @@ cd .\android
 Use Git tags with a leading `v`:
 
 ```text
-v0.3.2
+v0.3.3
 ```
 
 Do not tag until the repository is clean of local manifests, downloaded depot files, cloud-save

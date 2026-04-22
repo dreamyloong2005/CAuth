@@ -14,10 +14,21 @@
 
 namespace cauth::core::depot {
 
+struct DepotManifestPathResult {
+    bool ok = false;
+    std::string error_message;
+    std::string normalized_path;
+    std::filesystem::path relative_path;
+};
+
 struct DepotFileResult {
     bool ok = false;
     std::string error_message;
 };
+
+DepotManifestPathResult normalize_depot_manifest_path(std::string_view path);
+
+std::string depot_manifest_path_for_display(std::string_view path);
 
 DepotFileResult validate_depot_file_layout(const DepotManifestFile& file);
 

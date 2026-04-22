@@ -72,6 +72,10 @@ bool ensure_parent_directory_exists(const std::string& output_path, std::ostream
     return false;
 }
 
+std::string display_manifest_filename(std::string_view manifest_filename) {
+    return cauth::core::depot::depot_manifest_path_for_display(manifest_filename);
+}
+
 std::optional<std::filesystem::path> make_safe_manifest_output_path(
     const std::string& output_root,
     std::string_view manifest_filename,
@@ -81,39 +85,13 @@ std::optional<std::filesystem::path> make_safe_manifest_output_path(
         return std::nullopt;
     }
 
-    std::filesystem::path relative_path;
-    std::string segment;
-    const auto flush_segment = [&]() -> bool {
-        if (segment.empty() || segment == ".") {
-            segment.clear();
-            return true;
-        }
-        if (segment == "..") {
-            err << "Unsafe manifest file path: " << manifest_filename << '\n';
-            return false;
-        }
-        relative_path /= segment;
-        segment.clear();
-        return true;
-    };
-
-    for (const char ch : manifest_filename) {
-        if (ch == '/' || ch == '\\') {
-            if (!flush_segment()) {
-                return std::nullopt;
-            }
-            continue;
-        }
-        segment.push_back(ch);
-    }
-    if (!flush_segment()) {
+    const auto normalized = cauth::core::depot::normalize_depot_manifest_path(manifest_filename);
+    if (!normalized.ok) {
+        err << "Unsafe manifest file path: " << manifest_filename
+            << " (" << normalized.error_message << ")\n";
         return std::nullopt;
     }
-    if (relative_path.empty()) {
-        err << "Manifest file path is empty: " << manifest_filename << '\n';
-        return std::nullopt;
-    }
-    return std::filesystem::path{output_root} / relative_path;
+    return std::filesystem::path{output_root} / normalized.relative_path;
 }
 
 bool is_download_canceled() {
@@ -438,7 +416,7 @@ int print_manifest_info(const LoadedDepotManifest& loaded_manifest, std::ostream
     const auto preview_count = std::min<std::size_t>(manifest.files.size(), 5);
     for (std::size_t index = 0; index < preview_count; ++index) {
         const auto& file = manifest.files[index];
-        out << "  file[" << index << "]=" << file.filename
+        out << "  file[" << index << "]=" << display_manifest_filename(file.filename)
             << " size=" << file.size
             << " chunks=" << file.chunks.size() << '\n';
     }
@@ -455,10 +433,11 @@ int print_file_list(const LoadedDepotManifest& loaded_manifest,
     for (std::size_t index = 0; index < manifest.files.size(); ++index) {
         const auto& file = manifest.files[index];
         if (cauth::core::depot::depot_file_is_directory(file)) continue;
-        if (!contains_ascii_case_insensitive(file.filename, filter_text)) continue;
+        const auto display_name = display_manifest_filename(file.filename);
+        if (!contains_ascii_case_insensitive(display_name, filter_text)) continue;
         ++matched;
         if (printed >= list_limit) continue;
-        out << "file[" << index << "]=" << file.filename
+        out << "file[" << index << "]=" << display_name
             << " size=" << file.size
             << " chunks=" << file.chunks.size() << '\n';
         ++printed;
@@ -532,7 +511,8 @@ int verify_local_files_against_manifest(const LoadedDepotManifest& loaded_manife
         if (cauth::core::depot::depot_file_is_directory(file)) {
             continue;
         }
-        if (!contains_ascii_case_insensitive(file.filename, filter_text)) {
+        const auto display_name = display_manifest_filename(file.filename);
+        if (!contains_ascii_case_insensitive(display_name, filter_text)) {
             ++filtered_out;
             continue;
         }
@@ -550,10 +530,10 @@ int verify_local_files_against_manifest(const LoadedDepotManifest& loaded_manife
             ++matched;
             if (!cauth::core::depot::depot_file_has_binary_verification(file)) {
                 ++size_only;
-                out << "SIZE_ONLY file=" << file.filename
+                out << "SIZE_ONLY file=" << display_name
                     << " path=" << output_path->string() << '\n';
             } else {
-                out << "OK file=" << file.filename
+                out << "OK file=" << display_name
                     << " path=" << output_path->string() << '\n';
             }
             continue;
@@ -561,13 +541,13 @@ int verify_local_files_against_manifest(const LoadedDepotManifest& loaded_manife
 
         if (verify_result.error_message.find("missing") != std::string::npos) {
             ++missing;
-            out << "MISSING file=" << file.filename
+            out << "MISSING file=" << display_name
                 << " path=" << output_path->string() << '\n';
             continue;
         }
 
         ++mismatched;
-        out << "MISMATCH file=" << file.filename
+        out << "MISMATCH file=" << display_name
             << " path=" << output_path->string()
             << " reason=" << verify_result.error_message << '\n';
     }
@@ -707,6 +687,7 @@ int download_chunk_from_manifest(const LoadedDepotManifest& loaded_manifest,
                                  std::ostream& out,
                                  std::ostream& err) {
     const auto& file = loaded_manifest.manifest.files[file_index];
+    const auto display_name = display_manifest_filename(file.filename);
     const auto cdn_servers = fetch_cdn_servers_for_download(max_count, err);
     if (!cdn_servers.has_value()) return 1;
 
@@ -716,7 +697,7 @@ int download_chunk_from_manifest(const LoadedDepotManifest& loaded_manifest,
     report_download_progress(DepotDownloadProgress{
         DepotDownloadKind::Chunk,
         "Preparing chunk download",
-        file.filename,
+        display_name,
         0,
         1,
         0,
@@ -730,7 +711,7 @@ int download_chunk_from_manifest(const LoadedDepotManifest& loaded_manifest,
         report_download_progress(DepotDownloadProgress{
             DepotDownloadKind::Chunk,
             "Downloading chunk from " + server.vhost,
-            file.filename,
+            display_name,
             static_cast<std::uint64_t>(server_index),
             total_servers,
             0,
@@ -778,7 +759,7 @@ int download_chunk_from_manifest(const LoadedDepotManifest& loaded_manifest,
         report_download_progress(DepotDownloadProgress{
             DepotDownloadKind::Chunk,
             "Chunk downloaded",
-            file.filename,
+            display_name,
             1,
             1,
             static_cast<std::uint64_t>(output_bytes.size()),
@@ -804,6 +785,7 @@ int download_file_from_manifest(const LoadedDepotManifest& loaded_manifest,
     }
 
     const auto& file = loaded_manifest.manifest.files[file_index];
+    const auto display_name = display_manifest_filename(file.filename);
     const auto cdn_servers = fetch_cdn_servers_for_download(max_count, err);
     if (!cdn_servers.has_value()) return 1;
 
@@ -818,7 +800,7 @@ int download_file_from_manifest(const LoadedDepotManifest& loaded_manifest,
     report_download_progress(DepotDownloadProgress{
         DepotDownloadKind::File,
         "Preparing file download",
-        file.filename,
+        display_name,
         0,
         static_cast<std::uint64_t>(file.chunks.size()),
         0,
@@ -837,7 +819,7 @@ int download_file_from_manifest(const LoadedDepotManifest& loaded_manifest,
                 DepotDownloadKind::File,
                 "Downloading chunk " + std::to_string(current_chunk_index + 1) + "/" +
                     std::to_string(file.chunks.size()) + " from " + server.vhost,
-                file.filename,
+                display_name,
                 static_cast<std::uint64_t>(current_chunk_index),
                 static_cast<std::uint64_t>(file.chunks.size()),
                 completed_bytes,
@@ -875,7 +857,7 @@ int download_file_from_manifest(const LoadedDepotManifest& loaded_manifest,
                 DepotDownloadKind::File,
                 "Downloaded chunk " + std::to_string(current_chunk_index + 1) + "/" +
                     std::to_string(file.chunks.size()),
-                file.filename,
+                display_name,
                 static_cast<std::uint64_t>(current_chunk_index + 1),
                 static_cast<std::uint64_t>(file.chunks.size()),
                 completed_bytes,
@@ -893,13 +875,13 @@ int download_file_from_manifest(const LoadedDepotManifest& loaded_manifest,
     report_download_progress(DepotDownloadProgress{
         DepotDownloadKind::File,
         "File downloaded",
-        file.filename,
+        display_name,
         static_cast<std::uint64_t>(file.chunks.size()),
         static_cast<std::uint64_t>(file.chunks.size()),
         completed_bytes,
         file.size,
     });
-    out << "File downloaded: " << file.filename << " -> " << output_path << '\n';
+    out << "File downloaded: " << display_name << " -> " << output_path << '\n';
     return 0;
 }
 
@@ -940,11 +922,12 @@ int download_all_files_from_manifest(const LoadedDepotManifest& loaded_manifest,
             return 1;
         }
         const auto& file = files[file_index];
+        const auto display_name = display_manifest_filename(file.filename);
         if (cauth::core::depot::depot_file_is_directory(file)) {
             if (!ensure_manifest_directory_exists(output_root, file.filename, err)) {
                 return 1;
             }
-            out << "Created manifest directory: " << file.filename << '\n';
+            out << "Created manifest directory: " << display_name << '\n';
             continue;
         }
         const auto output_path = make_safe_manifest_output_path(output_root, file.filename, err);
@@ -957,14 +940,14 @@ int download_all_files_from_manifest(const LoadedDepotManifest& loaded_manifest,
             DepotDownloadKind::AllFiles,
             "Downloading file " + std::to_string(file_index + 1) + "/" +
                 std::to_string(files.size()),
-            file.filename,
+            display_name,
             completed_files_before,
             total_files,
             completed_bytes,
             total_bytes,
         });
         out << "Downloading manifest file " << (file_index + 1) << '/' << files.size()
-            << ": " << file.filename << " -> " << output_path->string() << '\n';
+            << ": " << display_name << " -> " << output_path->string() << '\n';
 
         const auto exit_code = download_file_from_manifest(
             loaded_manifest,
@@ -974,7 +957,7 @@ int download_all_files_from_manifest(const LoadedDepotManifest& loaded_manifest,
             out,
             err);
         if (exit_code != 0) {
-            err << "All-files download failed at file " << file.filename << '\n';
+            err << "All-files download failed at file " << display_name << '\n';
             return exit_code;
         }
 
@@ -989,7 +972,7 @@ int download_all_files_from_manifest(const LoadedDepotManifest& loaded_manifest,
             DepotDownloadKind::AllFiles,
             "Downloaded file " + std::to_string(file_index + 1) + "/" +
                 std::to_string(files.size()),
-            file.filename,
+            display_name,
             completed_files,
             total_files,
             completed_bytes,

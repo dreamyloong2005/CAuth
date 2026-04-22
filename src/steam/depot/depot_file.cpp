@@ -13,14 +13,30 @@
 namespace cauth::core::depot {
 namespace {
 
-std::string normalize_depot_path(std::string_view path) {
+bool is_ascii_alpha(const char ch) {
+    const auto unsigned_ch = static_cast<unsigned char>(ch);
+    return (unsigned_ch >= 'a' && unsigned_ch <= 'z') ||
+           (unsigned_ch >= 'A' && unsigned_ch <= 'Z');
+}
+
+bool is_path_separator(const char ch) {
+    return ch == '/' || ch == '\\';
+}
+
+bool contains_invalid_path_character(std::string_view segment) {
+    for (const auto ch : segment) {
+        const auto unsigned_ch = static_cast<unsigned char>(ch);
+        if (unsigned_ch < 0x20U || unsigned_ch == 0x7fU) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string lowercase_ascii(std::string_view path) {
     std::string normalized;
     normalized.reserve(path.size());
     for (const auto ch : path) {
-        if (ch == '/') {
-            normalized.push_back('\\');
-            continue;
-        }
         normalized.push_back(static_cast<char>(
             std::tolower(static_cast<unsigned char>(ch))));
     }
@@ -28,6 +44,79 @@ std::string normalize_depot_path(std::string_view path) {
 }
 
 } // namespace
+
+DepotManifestPathResult normalize_depot_manifest_path(std::string_view path) {
+    DepotManifestPathResult result;
+    if (path.empty()) {
+        result.error_message = "manifest path is empty";
+        return result;
+    }
+    if (is_path_separator(path.front())) {
+        result.error_message = "manifest path must be relative";
+        return result;
+    }
+    if (path.size() >= 2 && is_ascii_alpha(path[0]) && path[1] == ':') {
+        result.error_message = "manifest path must not include a drive prefix";
+        return result;
+    }
+
+    std::vector<std::string> segments;
+    std::string segment;
+    const auto flush_segment = [&]() -> bool {
+        if (segment.empty() || segment == ".") {
+            segment.clear();
+            return true;
+        }
+        if (segment == "..") {
+            result.error_message = "manifest path must not contain parent traversal";
+            segment.clear();
+            return false;
+        }
+        if (contains_invalid_path_character(segment)) {
+            result.error_message = "manifest path contains invalid control characters";
+            segment.clear();
+            return false;
+        }
+        segments.push_back(segment);
+        segment.clear();
+        return true;
+    };
+
+    for (const auto ch : path) {
+        if (is_path_separator(ch)) {
+            if (!flush_segment()) {
+                return result;
+            }
+            continue;
+        }
+        segment.push_back(ch);
+    }
+    if (!flush_segment()) {
+        return result;
+    }
+    if (segments.empty()) {
+        result.error_message = "manifest path is empty";
+        return result;
+    }
+
+    for (std::size_t index = 0; index < segments.size(); ++index) {
+        if (index != 0) {
+            result.normalized_path.push_back('/');
+        }
+        result.normalized_path += segments[index];
+        result.relative_path /= segments[index];
+    }
+    result.ok = true;
+    return result;
+}
+
+std::string depot_manifest_path_for_display(std::string_view path) {
+    const auto normalized = normalize_depot_manifest_path(path);
+    if (normalized.ok) {
+        return normalized.normalized_path;
+    }
+    return std::string(path);
+}
 
 DepotFileResult validate_depot_file_layout(const DepotManifestFile& file) {
     std::uint64_t covered_size = 0;
@@ -54,9 +143,17 @@ DepotFileResult validate_depot_file_layout(const DepotManifestFile& file) {
 
 std::optional<std::size_t> find_depot_file_index(const DepotManifest& manifest,
                                                  std::string_view filename) {
-    const auto normalized_filename = normalize_depot_path(filename);
+    const auto normalized_filename = normalize_depot_manifest_path(filename);
+    if (!normalized_filename.ok) {
+        return std::nullopt;
+    }
+    const auto lookup_key = lowercase_ascii(normalized_filename.normalized_path);
     for (std::size_t index = 0; index < manifest.files.size(); ++index) {
-        if (normalize_depot_path(manifest.files[index].filename) == normalized_filename) {
+        const auto normalized_manifest_path = normalize_depot_manifest_path(manifest.files[index].filename);
+        if (!normalized_manifest_path.ok) {
+            continue;
+        }
+        if (lowercase_ascii(normalized_manifest_path.normalized_path) == lookup_key) {
             return index;
         }
     }
