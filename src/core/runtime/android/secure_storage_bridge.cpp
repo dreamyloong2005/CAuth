@@ -16,9 +16,6 @@
 namespace cauth::core::runtime {
 namespace {
 
-constexpr const char* kPreferencesName = "cauth_secure_store";
-constexpr const char* kSessionKey = "auth_session_v1";
-
 std::mutex g_bridge_mutex;
 JavaVM* g_java_vm = nullptr;
 jobject g_application_context = nullptr;
@@ -112,6 +109,9 @@ class ScopedEnvAttachment {
 
 class JniAndroidSecureStorageBridge final : public AndroidSecureStorageBridge {
   public:
+    explicit JniAndroidSecureStorageBridge(AndroidSecureStorageConfig config)
+        : config_(std::move(config)) {}
+
     void save_bytes(std::vector<std::uint8_t> bytes) override {
         const auto value = bytes_to_hex(bytes);
         with_preferences_editor([&](JNIEnv* env, jobject editor, jclass editor_class) {
@@ -124,7 +124,7 @@ class JniAndroidSecureStorageBridge final : public AndroidSecureStorageBridge {
                 return false;
             }
 
-            jstring key = env->NewStringUTF(kSessionKey);
+            jstring key = env->NewStringUTF(config_.session_key.c_str());
             jstring stored = env->NewStringUTF(value.c_str());
             if (key == nullptr || stored == nullptr) {
                 if (key != nullptr) {
@@ -180,7 +180,7 @@ class JniAndroidSecureStorageBridge final : public AndroidSecureStorageBridge {
             return std::nullopt;
         }
 
-        jstring key = env->NewStringUTF(kSessionKey);
+        jstring key = env->NewStringUTF(config_.session_key.c_str());
         if (key == nullptr) {
             env->DeleteLocalRef(prefs_class);
             env->DeleteLocalRef(prefs);
@@ -224,7 +224,7 @@ class JniAndroidSecureStorageBridge final : public AndroidSecureStorageBridge {
                 return false;
             }
 
-            jstring key = env->NewStringUTF(kSessionKey);
+            jstring key = env->NewStringUTF(config_.session_key.c_str());
             if (key == nullptr) {
                 clear_pending_exception(env);
                 return false;
@@ -265,7 +265,7 @@ class JniAndroidSecureStorageBridge final : public AndroidSecureStorageBridge {
             return nullptr;
         }
 
-        jstring prefs_name = env->NewStringUTF(kPreferencesName);
+        jstring prefs_name = env->NewStringUTF(config_.preferences_name.c_str());
         if (prefs_name == nullptr) {
             env->DeleteLocalRef(context_class);
             clear_pending_exception(env);
@@ -337,9 +337,12 @@ class JniAndroidSecureStorageBridge final : public AndroidSecureStorageBridge {
         env->DeleteLocalRef(prefs);
         return ok;
     }
+
+  private:
+    AndroidSecureStorageConfig config_;
 };
 
-JniAndroidSecureStorageBridge g_bridge;
+JniAndroidSecureStorageBridge g_bridge{AndroidSecureStorageConfig{}};
 bool g_bridge_ready = false;
 
 bool initialize_android_secure_storage_bridge(JNIEnv* env, jobject application_context) {
@@ -392,6 +395,15 @@ AndroidSecureStorageBridge* get_android_secure_storage_bridge() {
     return g_bridge_ready ? &g_bridge : nullptr;
 }
 
+std::unique_ptr<AndroidSecureStorageBridge> create_android_secure_storage_bridge(
+    AndroidSecureStorageConfig config) {
+    std::lock_guard lock{g_bridge_mutex};
+    if (!g_bridge_ready || g_application_context == nullptr || g_java_vm == nullptr) {
+        return nullptr;
+    }
+    return std::make_unique<JniAndroidSecureStorageBridge>(std::move(config));
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_cauth_android_CAuthAndroidRuntime_nativeOnAttachedToRuntime(JNIEnv* env,
                                                                      jclass,
@@ -417,6 +429,11 @@ bool is_android_secure_storage_bridge_available() {
 }
 
 AndroidSecureStorageBridge* get_android_secure_storage_bridge() {
+    return nullptr;
+}
+
+std::unique_ptr<AndroidSecureStorageBridge> create_android_secure_storage_bridge(
+    AndroidSecureStorageConfig) {
     return nullptr;
 }
 

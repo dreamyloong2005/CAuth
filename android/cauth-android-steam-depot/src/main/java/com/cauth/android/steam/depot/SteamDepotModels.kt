@@ -109,6 +109,7 @@ data class ManifestFileListSnapshot(
 data class DepotLocalVerifySnapshot(
     val present: Boolean,
     val clean: Boolean,
+    val moduleStatus: String,
     val checkedCount: Long,
     val okCount: Long,
     val missingCount: Long,
@@ -118,6 +119,14 @@ data class DepotLocalVerifySnapshot(
     val totalCount: Long,
 )
 
+data class DepotModuleTaskSnapshot(
+    val label: String,
+    val active: Boolean,
+    val moduleStatus: String,
+    val message: String,
+    val downloadTask: DepotDownloadTaskSnapshot? = null,
+)
+
 data class DepotDownloadTaskSnapshot(
     val handle: Long,
     val kindCode: Int,
@@ -125,6 +134,7 @@ data class DepotDownloadTaskSnapshot(
     val finished: Boolean,
     val canceled: Boolean,
     val succeeded: Boolean,
+    val moduleStatus: String,
     val phase: String,
     val completedSteps: Long,
     val totalSteps: Long,
@@ -132,6 +142,7 @@ data class DepotDownloadTaskSnapshot(
     val totalBytes: Long,
     val target: String,
     val message: String,
+    val verifyResult: DepotLocalVerifySnapshot?,
 ) {
     val kindLabel: String
         get() = when (kindCode) {
@@ -139,6 +150,7 @@ data class DepotDownloadTaskSnapshot(
             2 -> "Chunk"
             3 -> "File"
             4 -> "All Files"
+            5 -> "Verify"
             else -> "Download"
         }
 
@@ -153,6 +165,6 @@ data class DepotDownloadTaskSnapshot(
         get() = when {
             totalBytes > 0L -> "${completedBytes}/${totalBytes} bytes"
             totalSteps > 0L -> "${completedSteps}/${totalSteps} steps"
-            else -> phase
+            else -> moduleStatus.ifBlank { phase }
         }
 }

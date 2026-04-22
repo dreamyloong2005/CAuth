@@ -74,7 +74,7 @@ path like:
 .\build\windows-msvc-debug\cauth.exe steam auth status
 ```
 
-`--version` should print the current native version, for example `CAuth 0.4.0`. If `doctor` and
+`--version` should print the current native version, for example `CAuth 0.5.0`. If `doctor` and
 `--version` work, the desktop toolchain is in decent shape.
 
 ## Steam auth quick test
@@ -120,6 +120,13 @@ adb logcat -s CAuthNative CAuthCompose
 ```
 
 The example app is a real diagnostic console for auth, depot, and cloud, not just a thin demo.
+
+Its controller state now follows a clearer task lifecycle:
+
+- busy states like `reading`, `writing`, `downloading`, `uploading`, and `verifying`
+- terminal states like `succeeded`, `failed`, and `canceled`
+- automatic return to `idle`
+- guaranteed `moduleTask == null` once the controller settles back to `idle`
 
 ## Where to go next
 

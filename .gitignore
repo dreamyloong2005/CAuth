@@ -89,6 +89,7 @@ manifest_*.zip
 downloaded_file.bin
 chunk.bin
 files.bin
+*.cauthdownload
 depot-out/
 cloud-test/
 tmp-cloud-upload-web/

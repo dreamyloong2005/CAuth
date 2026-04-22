@@ -4,6 +4,7 @@
 #include "steam/depot/depot_manifest.hpp"
 #include "steam/depot/depot_key.hpp"
 #include "steam/depot/manifest_request_code.hpp"
+#include "core/platform/file_write.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -20,6 +21,7 @@ enum class DepotDownloadKind {
     Chunk = 2,
     File = 3,
     AllFiles = 4,
+    VerifyLocal = 5,
 };
 
 struct DepotDownloadProgress {
@@ -30,6 +32,7 @@ struct DepotDownloadProgress {
     std::uint64_t total_steps = 0;
     std::uint64_t completed_bytes = 0;
     std::uint64_t total_bytes = 0;
+    std::string module_status = "idle";
 };
 
 using DepotDownloadProgressHook = void (*)(const DepotDownloadProgress& progress, void* user_data);
@@ -42,6 +45,7 @@ struct LoadedDepotManifest {
 
 struct LocalVerifyReport {
     bool fatal_error = false;
+    std::string module_status = "idle";
     std::uint64_t checked_count = 0;
     std::uint64_t ok_count = 0;
     std::uint64_t missing_count = 0;
@@ -139,6 +143,7 @@ int download_manifest_to_path(std::uint32_t depot_id,
                               std::uint64_t request_code,
                               std::uint32_t max_count,
                               const std::string& output_path,
+                              const cauth::core::platform::FileWriteOptions& write_options,
                               std::ostream& out,
                               std::ostream& err);
 int download_chunk_from_manifest(const LoadedDepotManifest& loaded_manifest,
@@ -147,17 +152,20 @@ int download_chunk_from_manifest(const LoadedDepotManifest& loaded_manifest,
                                  bool process_chunk,
                                  std::uint32_t max_count,
                                  const std::string& output_path,
+                                 const cauth::core::platform::FileWriteOptions& write_options,
                                  std::ostream& out,
                                  std::ostream& err);
 int download_file_from_manifest(const LoadedDepotManifest& loaded_manifest,
                                 std::size_t file_index,
                                 std::uint32_t max_count,
                                 const std::string& output_path,
+                                const cauth::core::platform::FileWriteOptions& write_options,
                                 std::ostream& out,
                                 std::ostream& err);
 int download_all_files_from_manifest(const LoadedDepotManifest& loaded_manifest,
                                      std::uint32_t max_count,
                                      const std::string& output_root,
+                                     const cauth::core::platform::FileWriteOptions& write_options,
                                      std::ostream& out,
                                      std::ostream& err);
 

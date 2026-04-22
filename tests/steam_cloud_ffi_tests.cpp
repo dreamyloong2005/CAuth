@@ -22,6 +22,17 @@ int main() {
         return 1;
     }
 
+    if (cauth_steam_cloud_start_pull(nullptr, nullptr, nullptr) != CAUTH_ERROR_INVALID_ARGUMENT) {
+        std::cerr << "steam cloud start pull should reject null arguments\n";
+        return 1;
+    }
+
+    if (cauth_steam_cloud_start_verify_local_files(nullptr, nullptr, 0, nullptr) !=
+        CAUTH_ERROR_INVALID_ARGUMENT) {
+        std::cerr << "steam cloud start verify should reject null arguments\n";
+        return 1;
+    }
+
     cauth_client_t* client = nullptr;
     if (cauth_client_create(&client) != CAUTH_OK || client == nullptr) {
         std::cerr << "client creation failed\n";
@@ -37,6 +48,8 @@ int main() {
     request.dry_run = 1;
     request.delete_remote_orphans = 1;
     request.conflict_policy = CAUTH_STEAM_CLOUD_CONFLICT_NEWER_WINS;
+    request.local_write_mode = CAUTH_FILE_WRITE_SKIP_EXISTING;
+    request.atomic_write = 1;
 
     cauth_steam_cloud_request_t invalid_list_request{};
     invalid_list_request.app_id = 440;
@@ -114,6 +127,12 @@ int main() {
     }
     if (verify_report.present != 1 || verify_report.clean != 0 || verify_report.message == nullptr) {
         std::cerr << "steam cloud verify should fill report metadata\n";
+        cauth_client_destroy(client);
+        return 1;
+    }
+
+    if (cauth_steam_cloud_poll_task(0, nullptr) != CAUTH_ERROR_INVALID_ARGUMENT) {
+        std::cerr << "steam cloud poll should reject null snapshot\n";
         cauth_client_destroy(client);
         return 1;
     }

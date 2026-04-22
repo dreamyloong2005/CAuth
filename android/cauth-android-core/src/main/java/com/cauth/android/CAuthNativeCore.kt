@@ -10,7 +10,12 @@ internal object CAuthNativeCore {
     external fun nativeGetVersionString(): String
 
     @JvmStatic
-    external fun nativeCreateClient(): Long
+    external fun nativeCreateClientWithOptions(
+        sessionStorageKind: Int,
+        sessionStoragePath: String?,
+        sessionStorageNamespace: String?,
+        sessionStorageKey: String?,
+    ): Long
 
     @JvmStatic
     external fun nativeDestroyClient(handle: Long)

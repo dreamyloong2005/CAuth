@@ -332,7 +332,7 @@ ParsedAuthResult parse_auth_command(int argc, char** argv) {
 
     request.options.authenticator_options.on_poll_waiting =
         [](int attempt, int max_attempts, double interval_seconds) {
-            std::cerr << "Waiting for Steam confirmation... poll " << attempt << '/'
+            std::cerr << "[polling] Waiting for Steam confirmation... poll " << attempt << '/'
                       << max_attempts << ", next check in " << interval_seconds << "s\n";
         };
 

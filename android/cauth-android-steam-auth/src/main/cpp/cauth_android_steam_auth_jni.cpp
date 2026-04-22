@@ -83,16 +83,20 @@ jobject make_login_result(JNIEnv* env, const cauth_login_result_t& result) {
     if (cls == nullptr) {
         return nullptr;
     }
-    jmethodID ctor = env->GetMethodID(cls, "<init>", "(IILjava/lang/String;JLjava/lang/String;)V");
+    jmethodID ctor =
+        env->GetMethodID(cls, "<init>", "(IILjava/lang/String;Ljava/lang/String;JLjava/lang/String;)V");
     if (ctor == nullptr) {
         return nullptr;
     }
+    jstring module_status =
+        env->NewStringUTF(result.module_status == nullptr ? "idle" : result.module_status);
     jstring message = env->NewStringUTF(result.message == nullptr ? "" : result.message);
     jstring account_name = result.account_name == nullptr ? nullptr
                                                           : env->NewStringUTF(result.account_name);
     jobject instance = env->NewObject(cls, ctor, static_cast<jint>(result.status),
-                                      static_cast<jint>(result.result), message,
+                                      static_cast<jint>(result.result), module_status, message,
                                       static_cast<jlong>(result.steam_id), account_name);
+    env->DeleteLocalRef(module_status);
     env->DeleteLocalRef(message);
     if (account_name != nullptr) {
         env->DeleteLocalRef(account_name);
@@ -168,16 +172,22 @@ jobject make_cm_probe(JNIEnv* env, const cauth_cm_probe_result_t& result) {
     if (cls == nullptr) {
         return nullptr;
     }
-    jmethodID ctor = env->GetMethodID(cls, "<init>", "(ZLjava/lang/String;Ljava/lang/String;)V");
+    jmethodID ctor =
+        env->GetMethodID(cls, "<init>", "(ZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
     if (ctor == nullptr) {
         return nullptr;
     }
     jstring endpoint = result.endpoint == nullptr ? nullptr : env->NewStringUTF(result.endpoint);
+    jstring module_status =
+        result.module_status == nullptr ? nullptr : env->NewStringUTF(result.module_status);
     jstring status = result.status == nullptr ? nullptr : env->NewStringUTF(result.status);
-    jobject instance = env->NewObject(cls, ctor, static_cast<jboolean>(result.ok != 0), endpoint,
-                                      status);
+    jobject instance = env->NewObject(
+        cls, ctor, static_cast<jboolean>(result.ok != 0), endpoint, module_status, status);
     if (endpoint != nullptr) {
         env->DeleteLocalRef(endpoint);
+    }
+    if (module_status != nullptr) {
+        env->DeleteLocalRef(module_status);
     }
     if (status != nullptr) {
         env->DeleteLocalRef(status);
@@ -191,19 +201,24 @@ jobject make_cm_logon(JNIEnv* env, const cauth_cm_logon_result_t& result) {
         return nullptr;
     }
     jmethodID ctor =
-        env->GetMethodID(cls, "<init>", "(ZLjava/lang/String;Ljava/lang/String;IIIJ)V");
+        env->GetMethodID(cls, "<init>", "(ZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;IIIJ)V");
     if (ctor == nullptr) {
         return nullptr;
     }
     jstring endpoint = result.endpoint == nullptr ? nullptr : env->NewStringUTF(result.endpoint);
+    jstring module_status =
+        result.module_status == nullptr ? nullptr : env->NewStringUTF(result.module_status);
     jstring status = result.status == nullptr ? nullptr : env->NewStringUTF(result.status);
     jobject instance = env->NewObject(cls, ctor, static_cast<jboolean>(result.ok != 0), endpoint,
-                                      status, static_cast<jint>(result.eresult),
+                                      module_status, status, static_cast<jint>(result.eresult),
                                       static_cast<jint>(result.eresult_extended),
                                       static_cast<jint>(result.heartbeat_seconds),
                                       static_cast<jlong>(result.steam_id));
     if (endpoint != nullptr) {
         env->DeleteLocalRef(endpoint);
+    }
+    if (module_status != nullptr) {
+        env->DeleteLocalRef(module_status);
     }
     if (status != nullptr) {
         env->DeleteLocalRef(status);

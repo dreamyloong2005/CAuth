@@ -4,6 +4,7 @@
 #include "core/session/session_repository.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <vector>
@@ -22,6 +23,7 @@ class AndroidSecureStorageBridge {
 class AndroidSessionRepository final : public session::SessionRepository {
   public:
     explicit AndroidSessionRepository(AndroidSecureStorageBridge& bridge);
+    explicit AndroidSessionRepository(std::unique_ptr<AndroidSecureStorageBridge> bridge);
 
     void save_auth_session(const session::AuthSession& session) override;
     std::vector<session::AuthSession> list_auth_sessions() const override;
@@ -34,6 +36,7 @@ class AndroidSessionRepository final : public session::SessionRepository {
     session::AuthSessionRepositoryState load_repository_state() const;
     void save_repository_state(const session::AuthSessionRepositoryState& state);
 
+    std::unique_ptr<AndroidSecureStorageBridge> owned_bridge_;
     AndroidSecureStorageBridge* bridge_;
 };
 

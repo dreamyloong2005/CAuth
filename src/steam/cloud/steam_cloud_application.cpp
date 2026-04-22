@@ -33,6 +33,7 @@ struct CloudProgress {
     std::uint64_t unchanged_count = 0;
     std::uint64_t filtered_count = 0;
     std::uint64_t policy_skipped_count = 0;
+    std::uint64_t existing_skipped_count = 0;
 };
 
 testing::ListRemoteFilesHook g_list_remote_files_hook = nullptr;
@@ -41,6 +42,44 @@ testing::UploadCloudFilesHook g_upload_cloud_files_hook = nullptr;
 thread_local SteamCloudTransferProgressHook g_transfer_progress_hook = nullptr;
 thread_local SteamCloudTransferCancelHook g_transfer_cancel_hook = nullptr;
 thread_local void* g_transfer_hook_user_data = nullptr;
+
+std::string lowercase_ascii(std::string_view value) {
+    std::string lowered;
+    lowered.reserve(value.size());
+    for (const auto ch : value) {
+        lowered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+    }
+    return lowered;
+}
+
+bool contains_ascii_case_insensitive(std::string_view value, std::string_view needle) {
+    if (needle.empty()) return true;
+    return lowercase_ascii(value).find(lowercase_ascii(needle)) != std::string::npos;
+}
+
+std::string infer_cloud_module_status(SteamCloudTransferKind kind, std::string_view phase) {
+    if (contains_ascii_case_insensitive(phase, "cancel")) {
+        return "canceled";
+    }
+    if (contains_ascii_case_insensitive(phase, "prepare")) {
+        return "preparing";
+    }
+    if (contains_ascii_case_insensitive(phase, "list")) {
+        return "listing";
+    }
+    if (contains_ascii_case_insensitive(phase, "scan")) {
+        return "scanning";
+    }
+    if (kind == SteamCloudTransferKind::Verify ||
+        contains_ascii_case_insensitive(phase, "verify")) {
+        return "verifying";
+    }
+    if (kind == SteamCloudTransferKind::Push ||
+        contains_ascii_case_insensitive(phase, "upload")) {
+        return "uploading";
+    }
+    return "downloading";
+}
 
 SteamCloudResult make_result(const SteamCloudRequest& request,
                             SteamCloudDirection direction,
@@ -52,6 +91,7 @@ SteamCloudResult make_result(const SteamCloudRequest& request,
     result.app_id = request.app_id;
     result.direction = direction;
     result.conflict_policy = request.conflict_policy;
+    result.module_status = ok ? "succeeded" : "failed";
     result.local_file_count = progress.local_file_count;
     result.remote_file_count = progress.remote_file_count;
     result.transferred_count = progress.transferred_count;
@@ -72,16 +112,21 @@ SteamCloudResult make_canceled_result(const SteamCloudRequest& request,
         message += " during ";
         message += phase;
     }
-    return make_result(request, direction, false, std::move(message), progress);
+    auto result = make_result(request, direction, false, std::move(message), progress);
+    result.module_status = "canceled";
+    return result;
 }
 
 bool is_transfer_canceled() {
     return g_transfer_cancel_hook != nullptr && g_transfer_cancel_hook(g_transfer_hook_user_data);
 }
 
-void report_transfer_progress(const SteamCloudTransferProgress& progress) {
+void report_transfer_progress(SteamCloudTransferProgress progress) {
     if (g_transfer_progress_hook == nullptr) {
         return;
+    }
+    if (progress.module_status.empty() || progress.module_status == "idle") {
+        progress.module_status = infer_cloud_module_status(progress.kind, progress.phase);
     }
     g_transfer_progress_hook(progress, g_transfer_hook_user_data);
 }
@@ -217,29 +262,10 @@ bool is_safe_relative_path(const std::filesystem::path& path) {
     return true;
 }
 
-bool write_bytes_to_path(const std::filesystem::path& output_path,
-                         const std::vector<std::uint8_t>& bytes) {
-    std::error_code ec;
-    std::filesystem::create_directories(output_path.parent_path(), ec);
-    if (ec) {
-        return false;
-    }
-
-    std::ofstream output{output_path, std::ios::binary};
-    if (!output) {
-        return false;
-    }
-    if (!bytes.empty()) {
-        output.write(reinterpret_cast<const char*>(bytes.data()),
-                     static_cast<std::streamsize>(bytes.size()));
-    }
-    return static_cast<bool>(output);
-}
-
 std::string describe_skip_breakdown(const CloudProgress& progress) {
     std::string summary = std::to_string(progress.skipped_count) + " file(s)";
     if (progress.unchanged_count == 0 && progress.filtered_count == 0 &&
-        progress.policy_skipped_count == 0) {
+        progress.policy_skipped_count == 0 && progress.existing_skipped_count == 0) {
         return summary;
     }
 
@@ -260,6 +286,7 @@ std::string describe_skip_breakdown(const CloudProgress& progress) {
     append_part(progress.unchanged_count, "unchanged");
     append_part(progress.filtered_count, "filtered");
     append_part(progress.policy_skipped_count, "skipped by policy");
+    append_part(progress.existing_skipped_count, "existing");
     summary += ")";
     return summary;
 }
@@ -628,9 +655,17 @@ SteamCloudFileListResult list_remote_files(const SteamCloudRequest& request,
                                            std::uint32_t start_index,
                                            bool extended_details) {
     if (g_list_remote_files_hook != nullptr) {
-        return g_list_remote_files_hook(request, count, start_index, extended_details);
+        auto result = g_list_remote_files_hook(request, count, start_index, extended_details);
+        if (result.module_status == "idle") {
+            result.module_status = result.ok ? "succeeded" : "failed";
+        }
+        return result;
     }
-    return fetch_remote_file_list(request, count, start_index, extended_details);
+    auto result = fetch_remote_file_list(request, count, start_index, extended_details);
+    if (result.module_status == "idle") {
+        result.module_status = result.ok ? "succeeded" : "failed";
+    }
+    return result;
 }
 
 SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request,
@@ -640,6 +675,7 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
     SteamCloudVerifyResult result;
     result.app_id = request.app_id;
     result.include_extra_local = include_extra_local;
+    result.module_status = "verifying";
 
     std::string auth_error;
     const auto effective_request = materialize_cloud_web_api_auth(request, &auth_error);
@@ -647,12 +683,20 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
 
     if (effective_request.app_id == 0) {
         result.fatal_error = true;
+        result.module_status = "failed";
         result.message = "app_id is required";
         return result;
     }
     if (effective_request.local_root.empty()) {
         result.fatal_error = true;
+        result.module_status = "failed";
         result.message = "local_root is required";
+        return result;
+    }
+    if (is_transfer_canceled()) {
+        result.fatal_error = true;
+        result.module_status = "canceled";
+        result.message = "operation canceled during preparation";
         return result;
     }
 
@@ -660,6 +704,7 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
     const std::filesystem::path local_root{effective_request.local_root};
     if (!std::filesystem::exists(local_root, ec)) {
         result.fatal_error = true;
+        result.module_status = "failed";
         result.message = "local_root does not exist";
         if (ec) {
             result.message += ": " + ec.message();
@@ -668,6 +713,7 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
     }
     if (!std::filesystem::is_directory(local_root, ec) || ec) {
         result.fatal_error = true;
+        result.module_status = "failed";
         result.message = "local_root must be a directory";
         if (ec) {
             result.message += ": " + ec.message();
@@ -680,19 +726,53 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
         list_all_remote_files(effective_request, page_size, extended_details, list_error);
     if (!remote_files.has_value()) {
         result.fatal_error = true;
+        result.module_status =
+            contains_ascii_case_insensitive(list_error, "cancel") ? "canceled" : "failed";
         result.message = list_error.empty() ? auth_error : list_error;
         return result;
     }
 
     result.total_count = remote_files->size();
+    std::uint64_t completed_steps = 0;
+    std::uint64_t completed_bytes = 0;
+    std::uint64_t total_bytes = 0;
+    for (const auto& remote_file : *remote_files) {
+        total_bytes += remote_file.file_size;
+    }
+    report_transfer_progress(SteamCloudTransferProgress{
+        SteamCloudTransferKind::Verify,
+        "Verifying local files",
+        effective_request.local_root,
+        0,
+        result.total_count,
+        0,
+        total_bytes,
+    });
     std::unordered_set<std::string> matched_remote_names;
     matched_remote_names.reserve(remote_files->size());
 
     const auto remote_prefix = normalize_slashes(effective_request.remote_root);
     for (const auto& remote_file : *remote_files) {
+        if (is_transfer_canceled()) {
+            result.fatal_error = true;
+            result.module_status = "canceled";
+            result.message = "operation canceled during verify";
+            return result;
+        }
         const auto normalized_name = normalize_slashes(remote_file.filename);
         if (!starts_with_path_prefix(normalized_name, remote_prefix)) {
             ++result.filtered_out_count;
+            ++completed_steps;
+            completed_bytes += remote_file.file_size;
+            report_transfer_progress(SteamCloudTransferProgress{
+                SteamCloudTransferKind::Verify,
+                "Verifying local files",
+                normalized_name,
+                completed_steps,
+                result.total_count,
+                completed_bytes,
+                total_bytes,
+            });
             continue;
         }
 
@@ -700,6 +780,17 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
                                                    : strip_path_prefix(normalized_name, remote_prefix);
         if (relative_name.empty()) {
             ++result.filtered_out_count;
+            ++completed_steps;
+            completed_bytes += remote_file.file_size;
+            report_transfer_progress(SteamCloudTransferProgress{
+                SteamCloudTransferKind::Verify,
+                "Verifying local files",
+                normalized_name,
+                completed_steps,
+                result.total_count,
+                completed_bytes,
+                total_bytes,
+            });
             continue;
         }
 
@@ -718,6 +809,17 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
             });
             ++result.mismatched_count;
             ++result.checked_count;
+            ++completed_steps;
+            completed_bytes += remote_file.file_size;
+            report_transfer_progress(SteamCloudTransferProgress{
+                SteamCloudTransferKind::Verify,
+                "Verifying local files",
+                normalized_name,
+                completed_steps,
+                result.total_count,
+                completed_bytes,
+                total_bytes,
+            });
             continue;
         }
 
@@ -737,6 +839,17 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
             result.entries.push_back(std::move(entry));
             ++result.checked_count;
             ++result.mismatched_count;
+            ++completed_steps;
+            completed_bytes += remote_file.file_size;
+            report_transfer_progress(SteamCloudTransferProgress{
+                SteamCloudTransferKind::Verify,
+                "Verifying local files",
+                normalized_name,
+                completed_steps,
+                result.total_count,
+                completed_bytes,
+                total_bytes,
+            });
             continue;
         }
 
@@ -746,6 +859,17 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
             entry.reason = "local file missing";
             result.entries.push_back(std::move(entry));
             ++result.missing_count;
+            ++completed_steps;
+            completed_bytes += remote_file.file_size;
+            report_transfer_progress(SteamCloudTransferProgress{
+                SteamCloudTransferKind::Verify,
+                "Verifying local files",
+                normalized_name,
+                completed_steps,
+                result.total_count,
+                completed_bytes,
+                total_bytes,
+            });
             continue;
         }
 
@@ -757,6 +881,17 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
             ec.clear();
             result.entries.push_back(std::move(entry));
             ++result.mismatched_count;
+            ++completed_steps;
+            completed_bytes += remote_file.file_size;
+            report_transfer_progress(SteamCloudTransferProgress{
+                SteamCloudTransferKind::Verify,
+                "Verifying local files",
+                normalized_name,
+                completed_steps,
+                result.total_count,
+                completed_bytes,
+                total_bytes,
+            });
             continue;
         }
         entry.local_size = local_size;
@@ -767,6 +902,17 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
             entry.reason = "file size differs";
             result.entries.push_back(std::move(entry));
             ++result.mismatched_count;
+            ++completed_steps;
+            completed_bytes += remote_file.file_size;
+            report_transfer_progress(SteamCloudTransferProgress{
+                SteamCloudTransferKind::Verify,
+                "Verifying local files",
+                normalized_name,
+                completed_steps,
+                result.total_count,
+                completed_bytes,
+                total_bytes,
+            });
             continue;
         }
 
@@ -776,6 +922,17 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
             result.entries.push_back(std::move(entry));
             ++result.ok_count;
             ++result.size_only_count;
+            ++completed_steps;
+            completed_bytes += remote_file.file_size;
+            report_transfer_progress(SteamCloudTransferProgress{
+                SteamCloudTransferKind::Verify,
+                "Verifying local files",
+                normalized_name,
+                completed_steps,
+                result.total_count,
+                completed_bytes,
+                total_bytes,
+            });
             continue;
         }
 
@@ -784,6 +941,17 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
             entry.reason = "SHA-1 differs";
             result.entries.push_back(std::move(entry));
             ++result.mismatched_count;
+            ++completed_steps;
+            completed_bytes += remote_file.file_size;
+            report_transfer_progress(SteamCloudTransferProgress{
+                SteamCloudTransferKind::Verify,
+                "Verifying local files",
+                normalized_name,
+                completed_steps,
+                result.total_count,
+                completed_bytes,
+                total_bytes,
+            });
             continue;
         }
 
@@ -791,12 +959,30 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
         entry.reason = "sha matched";
         result.entries.push_back(std::move(entry));
         ++result.ok_count;
+        ++completed_steps;
+        completed_bytes += remote_file.file_size;
+        report_transfer_progress(SteamCloudTransferProgress{
+            SteamCloudTransferKind::Verify,
+            "Verifying local files",
+            normalized_name,
+            completed_steps,
+            result.total_count,
+            completed_bytes,
+            total_bytes,
+        });
     }
 
     if (include_extra_local) {
         for (const auto& disk_entry : std::filesystem::recursive_directory_iterator(local_root, ec)) {
+            if (is_transfer_canceled()) {
+                result.fatal_error = true;
+                result.module_status = "canceled";
+                result.message = "operation canceled during verify";
+                return result;
+            }
             if (ec) {
                 result.fatal_error = true;
+                result.module_status = "failed";
                 result.message = "failed to enumerate local_root: " + ec.message();
                 return result;
             }
@@ -807,6 +993,7 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
             const auto relative = std::filesystem::relative(disk_entry.path(), local_root, ec);
             if (ec || relative.empty()) {
                 result.fatal_error = true;
+                result.module_status = "failed";
                 result.message = "failed to resolve local file path";
                 if (ec) {
                     result.message += ": " + ec.message();
@@ -840,6 +1027,7 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
     }
 
     result.ok = true;
+    result.module_status = result.clean() ? "succeeded" : "failed";
     result.message = describe_verify_summary(result);
     return result;
 }
@@ -926,8 +1114,9 @@ SteamCloudResult pull_cloud_save(const SteamCloudRequest& request) {
         }
 
         const auto output_path = output_root / relative_path;
-        const auto local_state = load_existing_local_file_state(output_path);
-        if (!local_state.has_value()) {
+        std::error_code exists_error;
+        const auto local_exists = std::filesystem::exists(output_path, exists_error);
+        if (exists_error) {
             return make_result(
                 effective_request,
                 SteamCloudDirection::Pull,
@@ -936,8 +1125,36 @@ SteamCloudResult pull_cloud_save(const SteamCloudRequest& request) {
                 progress);
         }
 
-        if (local_state->exists) {
+        if (local_exists) {
             ++progress.local_file_count;
+            switch (effective_request.local_write_options.mode) {
+            case cauth::core::platform::FileWriteMode::SkipExisting:
+                ++progress.existing_skipped_count;
+                ++progress.skipped_count;
+                report_pull_state("Skipping existing file", normalized_name);
+                continue;
+            case cauth::core::platform::FileWriteMode::FailIfExists:
+                return make_result(
+                    effective_request,
+                    SteamCloudDirection::Pull,
+                    false,
+                    "local target already exists: " + output_path.string(),
+                    progress);
+            case cauth::core::platform::FileWriteMode::Overwrite:
+            default:
+                break;
+            }
+
+            const auto local_state = load_existing_local_file_state(output_path);
+            if (!local_state.has_value()) {
+                return make_result(
+                    effective_request,
+                    SteamCloudDirection::Pull,
+                    false,
+                    "failed to inspect local file " + output_path.string(),
+                    progress);
+            }
+
             if (!file.file_sha.empty() &&
                 lowercase_ascii(local_state->file_sha) == lowercase_ascii(file.file_sha)) {
                 ++progress.unchanged_count;
@@ -966,6 +1183,23 @@ SteamCloudResult pull_cloud_save(const SteamCloudRequest& request) {
             ++progress.transferred_count;
             progress.transferred_bytes += file.file_size;
             report_pull_state("Dry-run scheduled download", normalized_name);
+            continue;
+        }
+
+        auto prepared_output = cauth::core::platform::prepare_file_write(
+            output_path, effective_request.local_write_options);
+        if (!prepared_output.ok()) {
+            return make_result(
+                effective_request,
+                SteamCloudDirection::Pull,
+                false,
+                prepared_output.error_message(),
+                progress);
+        }
+        if (prepared_output.skipped()) {
+            ++progress.existing_skipped_count;
+            ++progress.skipped_count;
+            report_pull_state("Skipping existing file", normalized_name);
             continue;
         }
 
@@ -1003,12 +1237,13 @@ SteamCloudResult pull_cloud_save(const SteamCloudRequest& request) {
                 effective_request, SteamCloudDirection::Pull, progress, normalized_name);
         }
         report_pull_state("Writing file", normalized_name);
-        if (!write_bytes_to_path(output_path, download_result.bytes)) {
+        std::string write_error;
+        if (!prepared_output.write_all(download_result.bytes, write_error)) {
             return make_result(
                 effective_request,
                 SteamCloudDirection::Pull,
                 false,
-                "failed to write " + output_path.string(),
+                write_error.empty() ? "failed to write " + output_path.string() : write_error,
                 progress);
         }
 

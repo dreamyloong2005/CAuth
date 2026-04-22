@@ -23,9 +23,17 @@ int main() {
         return 1;
     }
 
-    if (cauth_depot_download_manifest(441, 123, 456, 5, nullptr) !=
+    if (cauth_depot_download_manifest(
+            441, 123, 456, 5, nullptr, CAUTH_FILE_WRITE_OVERWRITE, 0) !=
         CAUTH_ERROR_INVALID_ARGUMENT) {
         std::cerr << "manifest download should reject null output path\n";
+        return 1;
+    }
+
+    if (cauth_depot_start_manifest_download(
+            441, 123, 456, 5, "manifest.bin", CAUTH_FILE_WRITE_OVERWRITE, 1, nullptr) !=
+        CAUTH_ERROR_INVALID_ARGUMENT) {
+        std::cerr << "manifest start download should reject null handle output\n";
         return 1;
     }
 
@@ -108,7 +116,8 @@ int main() {
         return 1;
     }
 
-    if (cauth_depot_download_manifest(0, 123, 456, 5, "manifest.bin") !=
+    if (cauth_depot_download_manifest(
+            0, 123, 456, 5, "manifest.bin", CAUTH_FILE_WRITE_OVERWRITE, 0) !=
         CAUTH_ERROR_INVALID_ARGUMENT) {
         std::cerr << "manifest download should reject zero depot id\n";
         cauth_client_destroy(client);
@@ -135,6 +144,20 @@ int main() {
     if (cauth_depot_verify_local_files("", "", "", "", &verify_report) !=
         CAUTH_ERROR_INVALID_ARGUMENT) {
         std::cerr << "verify local files should reject empty inputs\n";
+        cauth_client_destroy(client);
+        return 1;
+    }
+
+    unsigned long long task_handle = 0;
+    if (cauth_depot_start_verify_local_files("", "", "", "", &task_handle) !=
+        CAUTH_ERROR_INVALID_ARGUMENT) {
+        std::cerr << "verify local task should reject empty inputs\n";
+        cauth_client_destroy(client);
+        return 1;
+    }
+
+    if (cauth_depot_poll_task(0, nullptr) != CAUTH_ERROR_INVALID_ARGUMENT) {
+        std::cerr << "depot task poll should reject null snapshot\n";
         cauth_client_destroy(client);
         return 1;
     }

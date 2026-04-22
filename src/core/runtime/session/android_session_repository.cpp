@@ -11,6 +11,11 @@ namespace cauth::core::runtime {
 AndroidSessionRepository::AndroidSessionRepository(AndroidSecureStorageBridge& bridge)
     : bridge_(&bridge) {}
 
+AndroidSessionRepository::AndroidSessionRepository(
+    std::unique_ptr<AndroidSecureStorageBridge> bridge)
+    : owned_bridge_(std::move(bridge)),
+      bridge_(owned_bridge_.get()) {}
+
 void AndroidSessionRepository::save_auth_session(const session::AuthSession& session) {
     auto state = load_repository_state();
     session::upsert_auth_session(state, session);

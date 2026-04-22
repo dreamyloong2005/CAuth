@@ -223,6 +223,7 @@ cauth_login_status_t to_cauth_login_status(cauth::core::auth::AuthStatus status)
 }
 
 thread_local std::string g_last_login_message;
+thread_local std::string g_last_login_module_status;
 thread_local std::string g_last_login_account_name;
 thread_local std::string g_last_webapi_form_body;
 thread_local std::string g_last_webapi_request_id_base64;
@@ -233,8 +234,10 @@ thread_local std::string g_last_webapi_refresh_token;
 thread_local std::string g_last_webapi_access_token;
 thread_local std::string g_last_webapi_account_name;
 thread_local std::string g_last_cm_probe_endpoint;
+thread_local std::string g_last_cm_probe_module_status;
 thread_local std::string g_last_cm_probe_status;
 thread_local std::string g_last_cm_logon_endpoint;
+thread_local std::string g_last_cm_logon_module_status;
 thread_local std::string g_last_cm_logon_status;
 thread_local std::string g_auth_saved_provider;
 thread_local std::string g_auth_saved_subject_id;
@@ -250,6 +253,7 @@ cauth_result_t cauth_auth_login_password(cauth_client_t* client,
 
     out_result->status = CAUTH_LOGIN_FAILED;
     out_result->result = CAUTH_ERROR_INTERNAL;
+    out_result->module_status = "";
     out_result->message = "";
     out_result->steam_id = 0;
     out_result->account_name = "";
@@ -267,12 +271,22 @@ cauth_result_t cauth_auth_login_password(cauth_client_t* client,
             cauth::steam::auth::login_with_steam_platform_auth(*client->session_repository, login_request);
 
         g_last_login_message = login_result.message;
+        g_last_login_module_status =
+            login_result.status == cauth::steam::auth::SteamLoginStatus::Succeeded
+                ? "succeeded"
+                : login_result.status ==
+                          cauth::steam::auth::SteamLoginStatus::SteamGuardRequired
+                      ? "action_required"
+                      : login_result.status == cauth::steam::auth::SteamLoginStatus::Unsupported
+                            ? "unsupported"
+                            : "failed";
         g_last_login_account_name =
             login_result.session.has_value() ? login_result.session->account_name : "";
 
         out_result->status =
             to_cauth_login_status(cauth::steam::auth::to_core_auth_status(login_result.status));
         out_result->result = CAUTH_OK;
+        out_result->module_status = g_last_login_module_status.c_str();
         out_result->message = g_last_login_message.c_str();
         out_result->steam_id =
             login_result.session.has_value() ? cauth::steam::auth::steam_id(*login_result.session)
@@ -282,11 +296,13 @@ cauth_result_t cauth_auth_login_password(cauth_client_t* client,
     } catch (const std::bad_alloc&) {
         out_result->status = CAUTH_LOGIN_FAILED;
         out_result->result = CAUTH_ERROR_OUT_OF_MEMORY;
+        out_result->module_status = "failed";
         out_result->message = "out of memory";
         return CAUTH_ERROR_OUT_OF_MEMORY;
     } catch (...) {
         out_result->status = CAUTH_LOGIN_FAILED;
         out_result->result = CAUTH_ERROR_INTERNAL;
+        out_result->module_status = "failed";
         out_result->message = "internal error";
         return CAUTH_ERROR_INTERNAL;
     }
@@ -627,6 +643,7 @@ cauth_result_t cauth_cm_probe(cauth_cm_probe_result_t* out_probe) {
 
     out_probe->ok = 0;
     out_probe->endpoint = "";
+    out_probe->module_status = "";
     out_probe->status = "";
 
     try {
@@ -638,7 +655,9 @@ cauth_result_t cauth_cm_probe(cauth_cm_probe_result_t* out_probe) {
         const auto servers = directory.get_cm_servers(query);
         if (!servers.ok) {
             g_last_cm_probe_endpoint.clear();
+            g_last_cm_probe_module_status = "failed";
             g_last_cm_probe_status = "CM directory lookup failed: " + servers.error_message;
+            out_probe->module_status = g_last_cm_probe_module_status.c_str();
             out_probe->status = g_last_cm_probe_status.c_str();
             return CAUTH_OK;
         }
@@ -649,15 +668,19 @@ cauth_result_t cauth_cm_probe(cauth_cm_probe_result_t* out_probe) {
             const auto result = transport.probe(server);
             if (result.ok) {
                 g_last_cm_probe_status = "connected";
+                g_last_cm_probe_module_status = "connected";
                 out_probe->ok = 1;
                 out_probe->endpoint = g_last_cm_probe_endpoint.c_str();
+                out_probe->module_status = g_last_cm_probe_module_status.c_str();
                 out_probe->status = g_last_cm_probe_status.c_str();
                 return CAUTH_OK;
             }
             g_last_cm_probe_status = result.error_message;
         }
 
+        g_last_cm_probe_module_status = "failed";
         out_probe->endpoint = g_last_cm_probe_endpoint.c_str();
+        out_probe->module_status = g_last_cm_probe_module_status.c_str();
         out_probe->status = g_last_cm_probe_status.empty()
                                 ? "CM websocket probe failed for all endpoints"
                                 : g_last_cm_probe_status.c_str();
@@ -676,6 +699,7 @@ cauth_result_t cauth_cm_logon(cauth_client_t* client,
 
     out_result->ok = 0;
     out_result->endpoint = "";
+    out_result->module_status = "";
     out_result->status = "";
     out_result->eresult = 0;
     out_result->eresult_extended = 0;
@@ -688,14 +712,18 @@ cauth_result_t cauth_cm_logon(cauth_client_t* client,
             std::to_string(steam_id));
         if (!session.has_value()) {
             g_last_cm_logon_endpoint.clear();
+            g_last_cm_logon_module_status = "failed";
             g_last_cm_logon_status = "Auth session: not signed in";
+            out_result->module_status = g_last_cm_logon_module_status.c_str();
             out_result->status = g_last_cm_logon_status.c_str();
             return CAUTH_OK;
         }
         if (session->refresh_token.empty()) {
             g_last_cm_logon_endpoint.clear();
+            g_last_cm_logon_module_status = "failed";
             g_last_cm_logon_status =
                 "Auth session: refresh token missing; please log in again with the current build";
+            out_result->module_status = g_last_cm_logon_module_status.c_str();
             out_result->status = g_last_cm_logon_status.c_str();
             out_result->steam_id = cauth::steam::auth::steam_id(*session);
             return CAUTH_OK;
@@ -705,8 +733,10 @@ cauth_result_t cauth_cm_logon(cauth_client_t* client,
         if (!audiences.empty() && !has_audience(audiences, "client") &&
             has_audience(audiences, "web")) {
             g_last_cm_logon_endpoint.clear();
+            g_last_cm_logon_module_status = "failed";
             g_last_cm_logon_status =
                 "Saved session looks web-only (aud=web); CM logon requires a client-capable session";
+            out_result->module_status = g_last_cm_logon_module_status.c_str();
             out_result->status = g_last_cm_logon_status.c_str();
             out_result->steam_id = cauth::steam::auth::steam_id(*session);
             return CAUTH_OK;
@@ -719,7 +749,9 @@ cauth_result_t cauth_cm_logon(cauth_client_t* client,
         const auto servers = directory.get_cm_servers(query);
         if (!servers.ok) {
             g_last_cm_logon_endpoint.clear();
+            g_last_cm_logon_module_status = "failed";
             g_last_cm_logon_status = "CM directory lookup failed: " + servers.error_message;
+            out_result->module_status = g_last_cm_logon_module_status.c_str();
             out_result->status = g_last_cm_logon_status.c_str();
             out_result->steam_id = cauth::steam::auth::steam_id(*session);
             return CAUTH_OK;
@@ -753,15 +785,19 @@ cauth_result_t cauth_cm_logon(cauth_client_t* client,
                 out_result->eresult = logon.logon_response.eresult;
                 out_result->eresult_extended = logon.logon_response.eresult_extended;
                 out_result->heartbeat_seconds = logon.logon_response.heartbeat_seconds;
+                g_last_cm_logon_module_status = "failed";
                 g_last_cm_logon_status =
                     "CM heartbeat send failed: " + heartbeat_result.error_message;
+                out_result->module_status = g_last_cm_logon_module_status.c_str();
                 out_result->status = g_last_cm_logon_status.c_str();
                 return CAUTH_OK;
             }
 
             g_last_cm_logon_status = "logged on";
+            g_last_cm_logon_module_status = "succeeded";
             out_result->ok = 1;
             out_result->endpoint = g_last_cm_logon_endpoint.c_str();
+            out_result->module_status = g_last_cm_logon_module_status.c_str();
             out_result->status = g_last_cm_logon_status.c_str();
             out_result->eresult = logon.logon_response.eresult;
             out_result->eresult_extended = logon.logon_response.eresult_extended;
@@ -770,7 +806,9 @@ cauth_result_t cauth_cm_logon(cauth_client_t* client,
             return CAUTH_OK;
         }
 
+        g_last_cm_logon_module_status = "failed";
         out_result->endpoint = g_last_cm_logon_endpoint.c_str();
+        out_result->module_status = g_last_cm_logon_module_status.c_str();
         out_result->status = g_last_cm_logon_status.empty()
                                  ? "CM logon failed for all endpoints"
                                  : g_last_cm_logon_status.c_str();

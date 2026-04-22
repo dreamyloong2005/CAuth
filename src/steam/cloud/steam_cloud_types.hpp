@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/platform/file_write.hpp"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -39,6 +41,7 @@ struct SteamCloudRequest {
     bool delete_remote_orphans = false;
     SteamCloudConflictPolicy conflict_policy = SteamCloudConflictPolicy::Default;
     SteamCloudBackend backend = SteamCloudBackend::Auto;
+    cauth::core::platform::FileWriteOptions local_write_options{};
 };
 
 struct SteamCloudFileEntry {
@@ -59,6 +62,7 @@ struct SteamCloudFileListResult {
     std::uint32_t app_id = 0;
     std::uint32_t total_files = 0;
     std::uint32_t eresult = 0;
+    std::string module_status = "idle";
     std::vector<SteamCloudFileEntry> files;
     std::string message;
 };
@@ -77,6 +81,7 @@ struct SteamCloudResult {
     std::uint32_t app_id = 0;
     SteamCloudDirection direction = SteamCloudDirection::Pull;
     SteamCloudConflictPolicy conflict_policy = SteamCloudConflictPolicy::Default;
+    std::string module_status = "idle";
     std::uint64_t local_file_count = 0;
     std::uint64_t remote_file_count = 0;
     std::uint64_t transferred_count = 0;
@@ -112,6 +117,7 @@ struct SteamCloudVerifyResult {
     bool fatal_error = false;
     bool include_extra_local = false;
     std::uint32_t app_id = 0;
+    std::string module_status = "idle";
     std::uint64_t checked_count = 0;
     std::uint64_t ok_count = 0;
     std::uint64_t missing_count = 0;

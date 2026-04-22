@@ -60,6 +60,8 @@ internal object CAuthNativeSteamDepot {
         requestCode: Long,
         maxCount: Int,
         outputPath: String,
+        writeMode: Int,
+        atomicWrite: Boolean,
     )
 
     @JvmStatic
@@ -95,6 +97,8 @@ internal object CAuthNativeSteamDepot {
         processChunk: Boolean,
         maxCount: Int,
         outputPath: String,
+        writeMode: Int,
+        atomicWrite: Boolean,
     )
 
     @JvmStatic
@@ -106,6 +110,8 @@ internal object CAuthNativeSteamDepot {
         hasFileIndex: Boolean,
         maxCount: Int,
         outputPath: String,
+        writeMode: Int,
+        atomicWrite: Boolean,
     )
 
     @JvmStatic
@@ -114,6 +120,8 @@ internal object CAuthNativeSteamDepot {
         depotKeyHex: String,
         maxCount: Int,
         outputRoot: String,
+        writeMode: Int,
+        atomicWrite: Boolean,
     )
 
     @JvmStatic
@@ -123,6 +131,8 @@ internal object CAuthNativeSteamDepot {
         requestCode: Long,
         maxCount: Int,
         outputPath: String,
+        writeMode: Int,
+        atomicWrite: Boolean,
     ): Long
 
     @JvmStatic
@@ -136,6 +146,8 @@ internal object CAuthNativeSteamDepot {
         processChunk: Boolean,
         maxCount: Int,
         outputPath: String,
+        writeMode: Int,
+        atomicWrite: Boolean,
     ): Long
 
     @JvmStatic
@@ -147,6 +159,8 @@ internal object CAuthNativeSteamDepot {
         hasFileIndex: Boolean,
         maxCount: Int,
         outputPath: String,
+        writeMode: Int,
+        atomicWrite: Boolean,
     ): Long
 
     @JvmStatic
@@ -155,6 +169,16 @@ internal object CAuthNativeSteamDepot {
         depotKeyHex: String,
         maxCount: Int,
         outputRoot: String,
+        writeMode: Int,
+        atomicWrite: Boolean,
+    ): Long
+
+    @JvmStatic
+    external fun nativeStartDepotVerifyLocal(
+        inputPath: String,
+        depotKeyHex: String?,
+        localRoot: String,
+        filterText: String?,
     ): Long
 
     @JvmStatic

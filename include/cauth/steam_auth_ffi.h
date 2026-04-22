@@ -39,6 +39,7 @@ typedef struct cauth_login_request {
 typedef struct cauth_login_result {
     cauth_login_status_t status;
     cauth_result_t result;
+    const char* module_status;
     const char* message;
     unsigned long long steam_id;
     const char* account_name;
@@ -55,12 +56,14 @@ typedef struct cauth_capabilities {
 typedef struct cauth_cm_probe_result {
     int ok;
     const char* endpoint;
+    const char* module_status;
     const char* status;
 } cauth_cm_probe_result_t;
 
 typedef struct cauth_cm_logon_result {
     int ok;
     const char* endpoint;
+    const char* module_status;
     const char* status;
     unsigned int eresult;
     unsigned int eresult_extended;

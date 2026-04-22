@@ -39,18 +39,19 @@ cauth_core
   - conflict policy handling
   - live transfer progress in the desktop CLI
   - progress and cancellation support on Android
+  - controller-facing `moduleStatus` / `moduleTask` state with automatic return to `idle`
 
 The command-line tool under `cauth.exe` is a diagnostic frontend over those modules. It is useful
 for development and acceptance testing, but it is not required by library consumers.
 
 ## Current Version
 
-The current development version is `0.4.0`.
+The current development version is `0.5.0`.
 
 Native versioning is controlled by CMake:
 
 ```cmake
-project(CAuth VERSION 0.4.0)
+project(CAuth VERSION 0.5.0)
 ```
 
 CMake generates the native version header at configure time, and the CLI / C ABI read that same
@@ -187,6 +188,14 @@ Depot and cloud smoke checks:
 When one Steam account has multiple saved session types, depot flows and Steam Cloud `--backend auto`
 prefer the `steam-client` session automatically. If you explicitly choose `--backend web`, CAuth
 prefers a web-capable saved session instead.
+
+On Android, the feature controllers now expose a higher-level lifecycle on top of the raw native
+results:
+
+- `moduleStatus` carries the module-defined busy or terminal state string
+- `moduleTask` carries the current task summary while work is active or briefly after it completes
+- terminal states such as `succeeded`, `failed`, and `canceled` automatically settle back to `idle`
+- when a controller returns to `idle`, its public `moduleTask` is cleared back to `null`
 
 For a full validation path, use [docs/testing.md](docs/testing.md).
 

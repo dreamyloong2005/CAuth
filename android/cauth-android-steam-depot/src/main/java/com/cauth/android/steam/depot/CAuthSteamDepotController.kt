@@ -31,6 +31,7 @@ data class CAuthSteamDepotState(
     val allFilesOutputRoot: String = "",
     val verifyLocalRoot: String = "",
     val processChunk: Boolean = true,
+    val moduleStatus: String = "idle",
     val statusText: String = "Ready",
     val busy: Boolean = false,
     val branches: AppBranchListSnapshot? = null,
@@ -41,6 +42,7 @@ data class CAuthSteamDepotState(
     val manifestInfo: ManifestInfoSnapshot? = null,
     val manifestFiles: ManifestFileListSnapshot? = null,
     val localVerify: DepotLocalVerifySnapshot? = null,
+    val moduleTask: DepotModuleTaskSnapshot? = null,
     val downloadTask: DepotDownloadTaskSnapshot? = null,
     val traceLines: List<String> = emptyList(),
 )
@@ -53,6 +55,7 @@ class CAuthSteamDepotController(
     private val _state = MutableStateFlow(CAuthSteamDepotState())
     val state: StateFlow<CAuthSteamDepotState> = _state
     private var downloadPollingJob: Job? = null
+    private var idleResetJob: Job? = null
 
     fun setAppIdText(value: String) = _state.update { it.copy(appIdText = sanitizeCompact(value)) }
     fun setSteamIdText(value: String) = _state.update { it.copy(steamIdText = sanitizeCompact(value)) }
@@ -79,14 +82,29 @@ class CAuthSteamDepotController(
         val handle = _state.value.downloadTask?.handle ?: return
         scope.launch {
             runCatching { api.cancelDownloadTask(handle) }
-            _state.update {
-                it.copy(statusText = "Cancel requested...", busy = true)
+            cancelIdleReset()
+            _state.update { current ->
+                val currentTask = current.downloadTask
+                current.copy(
+                    statusText = "Cancel requested...",
+                    moduleStatus = "canceling",
+                    busy = true,
+                    moduleTask = DepotModuleTaskSnapshot(
+                        label = current.moduleTask?.label ?: currentTask?.kindLabel ?: "Depot Task",
+                        active = true,
+                        moduleStatus = "canceling",
+                        message = "Cancel requested...",
+                        downloadTask = currentTask?.copy(moduleStatus = "canceling"),
+                    ),
+                    downloadTask = currentTask?.copy(moduleStatus = "canceling"),
+                )
             }
             appendTrace("Download cancel requested handle=$handle")
         }
     }
 
     fun useManifestSelection(depotId: Int, manifestGid: Long) {
+        cancelIdleReset()
         _state.update {
             it.copy(
                 depotIdText = depotId.toString(),
@@ -94,12 +112,17 @@ class CAuthSteamDepotController(
                 requestCodeText = "",
                 manifestRequestCode = null,
                 statusText = "Selected depot=$depotId manifest=$manifestGid",
+                moduleStatus = "idle",
+                busy = false,
+                moduleTask = null,
+                downloadTask = null,
             )
         }
         appendTrace("Manifest selected depotId=$depotId manifestGid=$manifestGid")
     }
 
     fun prepareKeyAndCodeSelection(depotId: Int, manifestGid: Long) {
+        cancelIdleReset()
         _state.update {
             it.copy(
                 depotIdText = depotId.toString(),
@@ -113,6 +136,9 @@ class CAuthSteamDepotController(
                 localVerify = null,
                 downloadTask = null,
                 statusText = "Prepared depot=$depotId manifest=$manifestGid for key/code fetch",
+                moduleStatus = "idle",
+                busy = false,
+                moduleTask = null,
             )
         }
         appendTrace("Prepared key/code selection depotId=$depotId manifestGid=$manifestGid")
@@ -123,11 +149,16 @@ class CAuthSteamDepotController(
             manifestPath = _state.value.manifestPath,
             selectedFilePath = path,
         )
+        cancelIdleReset()
         _state.update {
             it.copy(
                 selectedFilePath = path,
                 fileOutputPath = suggestedOutputPath ?: it.fileOutputPath,
+                moduleStatus = "idle",
                 statusText = "Selected file $path",
+                busy = false,
+                moduleTask = null,
+                downloadTask = null,
             )
         }
         appendTrace(
@@ -139,16 +170,16 @@ class CAuthSteamDepotController(
     fun fetchBranches() {
         runAction("Fetch Branches") { steamId, appId, maxCount, _ ->
             val result = api.fetchBranches(steamId = steamId, appId = appId, maxCount = maxCount)
-            _state.update {
-                it.copy(
-                    statusText = when {
-                        !result.present -> "No branch list was returned for app $appId"
-                        result.branches.isEmpty() -> "App $appId returned 0 branches"
-                        else -> "Fetched ${result.branches.size} branch(es)"
-                    },
-                    busy = false,
-                    branches = result,
-                )
+            finishModuleTask(
+                label = "Fetch Branches",
+                moduleStatus = if (result.present) "succeeded" else "failed",
+                message = when {
+                    !result.present -> "No branch list was returned for app $appId"
+                    result.branches.isEmpty() -> "App $appId returned 0 branches"
+                    else -> "Fetched ${result.branches.size} branch(es)"
+                },
+            ) {
+                it.copy(branches = result)
             }
             appendTrace("Branches returned count=${result.branches.size} present=${result.present}")
         }
@@ -162,16 +193,16 @@ class CAuthSteamDepotController(
                 branch = branch,
                 maxCount = maxCount,
             )
-            _state.update {
-                it.copy(
-                    statusText = when {
-                        !result.present -> "No manifests were returned for branch $branch"
-                        result.manifests.isEmpty() -> "Branch $branch returned 0 manifests"
-                        else -> "Fetched ${result.manifests.size} manifest(s) for $branch"
-                    },
-                    busy = false,
-                    manifests = result,
-                )
+            finishModuleTask(
+                label = "Fetch Manifests",
+                moduleStatus = if (result.present) "succeeded" else "failed",
+                message = when {
+                    !result.present -> "No manifests were returned for branch $branch"
+                    result.manifests.isEmpty() -> "Branch $branch returned 0 manifests"
+                    else -> "Fetched ${result.manifests.size} manifest(s) for $branch"
+                },
+            ) {
+                it.copy(manifests = result)
             }
             appendTrace("Manifests returned count=${result.manifests.size} branch=$branch present=${result.present}")
         }
@@ -186,16 +217,16 @@ class CAuthSteamDepotController(
                 branch = branch,
                 maxCount = maxCount,
             )
-            _state.update {
-                it.copy(
-                    statusText = when {
-                        !result.present -> "No preflight result was returned for branch $branch"
-                        result.depots.isEmpty() -> "Preflight returned 0 depots for branch $branch"
-                        else -> "Fetched ${result.depots.size} depot preflight entr${if (result.depots.size == 1) "y" else "ies"}"
-                    },
-                    busy = false,
-                    preflight = result,
-                )
+            finishModuleTask(
+                label = "Fetch Preflight",
+                moduleStatus = if (result.present) "succeeded" else "failed",
+                message = when {
+                    !result.present -> "No preflight result was returned for branch $branch"
+                    result.depots.isEmpty() -> "Preflight returned 0 depots for branch $branch"
+                    else -> "Fetched ${result.depots.size} depot preflight entr${if (result.depots.size == 1) "y" else "ies"}"
+                },
+            ) {
+                it.copy(preflight = result)
             }
             appendTrace("Preflight returned count=${result.depots.size} branch=$branch build=${result.buildId}")
         }
@@ -211,14 +242,16 @@ class CAuthSteamDepotController(
                 depotId = depotId,
                 maxCount = maxCount,
             )
-            _state.update {
+            finishModuleTask(
+                label = "Fetch Depot Key",
+                moduleStatus = if (result.present && result.keyHex.isNotBlank()) "succeeded" else "failed",
+                message = if (result.present && result.keyHex.isNotBlank()) {
+                    "Fetched depot key for $depotId"
+                } else {
+                    "Depot key was not returned for $depotId"
+                },
+            ) {
                 it.copy(
-                    statusText = if (result.present && result.keyHex.isNotBlank()) {
-                        "Fetched depot key for $depotId"
-                    } else {
-                        "Depot key was not returned for $depotId"
-                    },
-                    busy = false,
                     depotKey = result,
                     depotKeyHex = if (result.present && result.keyHex.isNotBlank()) result.keyHex else "",
                 )
@@ -243,14 +276,16 @@ class CAuthSteamDepotController(
                 branchPasswordHash = _state.value.branchPasswordHash.ifBlank { null },
                 maxCount = maxCount,
             )
-            _state.update {
+            finishModuleTask(
+                label = "Fetch Manifest Code",
+                moduleStatus = if (result.present && result.requestCode.toULong() > 0uL) "succeeded" else "failed",
+                message = if (result.present && result.requestCode.toULong() > 0uL) {
+                    "Fetched manifest request code"
+                } else {
+                    "Manifest request code was not returned; check depot, manifest, branch, and ownership"
+                },
+            ) {
                 it.copy(
-                    statusText = if (result.present && result.requestCode.toULong() > 0uL) {
-                        "Fetched manifest request code"
-                    } else {
-                        "Manifest request code was not returned; check depot, manifest, branch, and ownership"
-                    },
-                    busy = false,
                     manifestRequestCode = result,
                     requestCodeText = if (result.present && result.requestCode.toULong() > 0uL) {
                         formatUnsignedDecimal(result.requestCode)
@@ -288,7 +323,7 @@ class CAuthSteamDepotController(
                     maxCount = maxCount,
                 )
             },
-            onSuccess = { onManifestDownloadCompleted(outputPath) },
+            onSuccess = { _ -> onManifestDownloadCompleted(outputPath) },
         )
     }
 
@@ -343,7 +378,13 @@ class CAuthSteamDepotController(
             return
         }
         appendTrace("Manifest Info clicked path=$manifestPath")
-        _state.update { it.copy(statusText = "Manifest info in progress...", busy = true, manifestInfo = null) }
+        beginModuleTask(
+            label = "Manifest Info",
+            moduleStatus = "reading",
+            message = "Manifest info in progress...",
+        ) {
+            it.copy(manifestInfo = null, downloadTask = null)
+        }
         scope.launch {
             runCatching {
                 api.loadManifestInfo(
@@ -351,25 +392,24 @@ class CAuthSteamDepotController(
                     depotKeyHex = snapshot.depotKeyHex.ifBlank { null },
                 )
             }.onSuccess { result ->
-                _state.update {
-                    it.copy(
-                        statusText = if (result.present) {
-                            "Manifest info loaded for depot ${result.depotId}"
-                        } else {
-                            "Manifest info was not returned"
-                        },
-                        busy = false,
-                        manifestInfo = result,
-                    )
+                finishModuleTask(
+                    label = "Manifest Info",
+                    moduleStatus = if (result.present) "succeeded" else "failed",
+                    message = if (result.present) {
+                        "Manifest info loaded for depot ${result.depotId}"
+                    } else {
+                        "Manifest info was not returned"
+                    },
+                ) {
+                    it.copy(manifestInfo = result)
                 }
                 appendTrace("Manifest info returned present=${result.present} files=${result.fileCount} chunks=${result.chunkCount}")
             }.onFailure { failure ->
-                _state.update {
-                    it.copy(
-                        statusText = failure.message ?: "Manifest info failed",
-                        busy = false,
-                    )
-                }
+                finishModuleTask(
+                    label = "Manifest Info",
+                    moduleStatus = "failed",
+                    message = failure.message ?: "Manifest info failed",
+                )
                 appendTrace("Manifest Info failed: ${failure::class.simpleName}: ${failure.message ?: "(no message)"}")
             }
         }
@@ -384,7 +424,13 @@ class CAuthSteamDepotController(
         }
         val limit = snapshot.fileLimitText.toIntOrNull()?.coerceIn(1, 500) ?: 50
         appendTrace("Manifest Files clicked path=$manifestPath limit=$limit filter=${snapshot.filterText.ifBlank { "(none)" }}")
-        _state.update { it.copy(statusText = "Manifest file list in progress...", busy = true, manifestFiles = null) }
+        beginModuleTask(
+            label = "Manifest Files",
+            moduleStatus = "reading",
+            message = "Manifest file list in progress...",
+        ) {
+            it.copy(manifestFiles = null, downloadTask = null)
+        }
         scope.launch {
             runCatching {
                 api.listManifestFiles(
@@ -394,25 +440,24 @@ class CAuthSteamDepotController(
                     limit = limit,
                 )
             }.onSuccess { result ->
-                _state.update {
-                    it.copy(
-                        statusText = when {
-                            !result.present -> "Manifest file list was not returned"
-                            result.matchedCount == 0L -> "Manifest file list returned 0 matches"
-                            else -> "Listed ${result.printedCount} manifest file(s)"
-                        },
-                        busy = false,
-                        manifestFiles = result,
-                    )
+                finishModuleTask(
+                    label = "Manifest Files",
+                    moduleStatus = if (result.present) "succeeded" else "failed",
+                    message = when {
+                        !result.present -> "Manifest file list was not returned"
+                        result.matchedCount == 0L -> "Manifest file list returned 0 matches"
+                        else -> "Listed ${result.printedCount} manifest file(s)"
+                    },
+                ) {
+                    it.copy(manifestFiles = result)
                 }
                 appendTrace("Manifest files returned printed=${result.printedCount} matched=${result.matchedCount} total=${result.totalCount}")
             }.onFailure { failure ->
-                _state.update {
-                    it.copy(
-                        statusText = failure.message ?: "Manifest file list failed",
-                        busy = false,
-                    )
-                }
+                finishModuleTask(
+                    label = "Manifest Files",
+                    moduleStatus = "failed",
+                    message = failure.message ?: "Manifest file list failed",
+                )
                 appendTrace("Manifest Files failed: ${failure::class.simpleName}: ${failure.message ?: "(no message)"}")
             }
         }
@@ -433,46 +478,18 @@ class CAuthSteamDepotController(
         appendTrace(
             "Verify Local clicked path=$manifestPath localRoot=$localRoot filter=${snapshot.filterText.ifBlank { "(none)" }}",
         )
-        _state.update {
-            it.copy(
-                statusText = "Local verify in progress...",
-                busy = true,
-                localVerify = null,
-            )
-        }
-        scope.launch {
-            runCatching {
-                api.verifyLocalFiles(
+        _state.update { it.copy(localVerify = null) }
+        startDownloadAction(
+            label = "Verify Local Files",
+            start = { _, _, _ ->
+                api.startVerifyLocalFiles(
                     inputPath = manifestPath,
                     localRoot = localRoot,
                     depotKeyHex = snapshot.depotKeyHex.ifBlank { null },
                     filterText = snapshot.filterText.ifBlank { null },
                 )
-            }.onSuccess { result ->
-                _state.update {
-                    it.copy(
-                        statusText = if (result.clean) {
-                            "Local verify clean: ${result.okCount}/${result.checkedCount}"
-                        } else {
-                            "Local verify found ${result.missingCount} missing and ${result.mismatchedCount} mismatched"
-                        },
-                        busy = false,
-                        localVerify = result,
-                    )
-                }
-                appendTrace(
-                    "Local verify returned clean=${result.clean} checked=${result.checkedCount} ok=${result.okCount} missing=${result.missingCount} mismatched=${result.mismatchedCount} sizeOnly=${result.sizeOnlyCount}",
-                )
-            }.onFailure { failure ->
-                _state.update {
-                    it.copy(
-                        statusText = failure.message ?: "Local verify failed",
-                        busy = false,
-                    )
-                }
-                appendTrace("Verify Local failed: ${failure::class.simpleName}: ${failure.message ?: "(no message)"}")
-            }
-        }
+            },
+        )
     }
 
     fun downloadChunk() {
@@ -512,7 +529,7 @@ class CAuthSteamDepotController(
                     maxCount = maxCount,
                 )
             },
-            onSuccess = {
+            onSuccess = { _ ->
                 onChunkDownloadCompleted(outputPath, selectedFilePath, chunkIndex, snapshot.processChunk)
             },
         )
@@ -552,7 +569,7 @@ class CAuthSteamDepotController(
                     maxCount = maxCount,
                 )
             },
-            onSuccess = { onFileDownloadCompleted(outputPath, selectedFilePath) },
+            onSuccess = { _ -> onFileDownloadCompleted(outputPath, selectedFilePath) },
         )
     }
 
@@ -584,14 +601,14 @@ class CAuthSteamDepotController(
                     maxCount = maxCount,
                 )
             },
-            onSuccess = { onAllFilesDownloadCompleted(outputRoot) },
+            onSuccess = { _ -> onAllFilesDownloadCompleted(outputRoot) },
         )
     }
 
     private fun startDownloadAction(
         label: String,
         start: suspend (appId: Int, maxCount: Int, branch: String) -> Long,
-        onSuccess: (() -> Unit)? = null,
+        onSuccess: ((DepotDownloadTaskSnapshot) -> Unit)? = null,
     ) {
         val snapshot = _state.value
         val appId = snapshot.appIdText.toIntOrNull()
@@ -606,24 +623,25 @@ class CAuthSteamDepotController(
 
         downloadPollingJob?.cancel()
         appendTrace("$label clicked appId=$appId branch=$branch maxCount=$maxCount")
-        _state.update {
-            it.copy(
-                statusText = "$label in progress...",
-                busy = true,
-                downloadTask = null,
-            )
+        beginModuleTask(
+            label = label,
+            moduleStatus = "queued",
+            message = "$label in progress...",
+        ) {
+            it.copy(downloadTask = null)
         }
         scope.launch {
             runCatching {
                 val handle = start(appId, maxCount, branch)
+                appendTrace("$label started handle=$handle")
                 pollDownloadTask(handle, label, onSuccess)
             }.onFailure { failure ->
-                _state.update {
-                    it.copy(
-                        statusText = failure.message ?: "$label failed",
-                        busy = false,
-                        downloadTask = null,
-                    )
+                finishModuleTask(
+                    label = label,
+                    moduleStatus = "failed",
+                    message = failure.message ?: "$label failed",
+                ) {
+                    it.copy(downloadTask = null)
                 }
                 appendTrace("$label failed: ${failure::class.simpleName}: ${failure.message ?: "(no message)"}")
             }
@@ -652,17 +670,22 @@ class CAuthSteamDepotController(
         val branch = snapshot.branch.ifBlank { "public" }
 
         appendTrace("$label clicked steamId=$steamId appId=$appId branch=$branch maxCount=$maxCount")
-        _state.update { it.copy(statusText = "$label in progress...", busy = true) }
+        beginModuleTask(
+            label = label,
+            moduleStatus = "reading",
+            message = "$label in progress...",
+        ) {
+            it.copy(downloadTask = null)
+        }
         scope.launch {
             runCatching {
                 action(steamId, appId, maxCount, branch)
             }.onFailure { failure ->
-                _state.update {
-                    it.copy(
-                        statusText = failure.message ?: "$label failed",
-                        busy = false,
-                    )
-                }
+                finishModuleTask(
+                    label = label,
+                    moduleStatus = "failed",
+                    message = failure.message ?: "$label failed",
+                )
                 appendTrace("$label failed: ${failure::class.simpleName}: ${failure.message ?: "(no message)"}")
             }
         }
@@ -722,41 +745,78 @@ class CAuthSteamDepotController(
     private suspend fun pollDownloadTask(
         handle: Long,
         label: String,
-        onSuccess: (() -> Unit)?,
+        onSuccess: ((DepotDownloadTaskSnapshot) -> Unit)?,
     ) {
         downloadPollingJob?.cancel()
         downloadPollingJob = scope.launch {
             while (true) {
                 val snapshot = api.pollDownloadTask(handle)
+                val progressMessage = buildDownloadStatusText(label, snapshot)
+                val snapshotStatus = snapshot.moduleStatus.ifBlank {
+                    if (snapshot.active) "running" else "idle"
+                }
                 _state.update {
                     it.copy(
                         busy = snapshot.active,
-                        statusText = buildDownloadStatusText(label, snapshot),
+                        moduleStatus = snapshotStatus,
+                        statusText = progressMessage,
+                        moduleTask = DepotModuleTaskSnapshot(
+                            label = label,
+                            active = snapshot.active,
+                            moduleStatus = snapshotStatus,
+                            message = progressMessage,
+                            downloadTask = snapshot,
+                        ),
                         downloadTask = snapshot,
                     )
                 }
                 if (snapshot.finished) {
                     try {
                         when {
-                            snapshot.succeeded -> onSuccess?.invoke()
-                            snapshot.canceled -> {
-                                _state.update { state ->
-                                    state.copy(
-                                        statusText = "Download canceled",
-                                        busy = false,
+                            snapshot.succeeded -> {
+                                snapshot.verifyResult?.let { verifyResult ->
+                                    finishModuleTask(
+                                        label = label,
+                                        moduleStatus = verifyResult.moduleStatus.ifBlank { if (verifyResult.clean) "succeeded" else "failed" },
+                                        message = if (verifyResult.clean) {
+                                            "Local verify clean: ${verifyResult.okCount}/${verifyResult.checkedCount}"
+                                        } else {
+                                            "Local verify found ${verifyResult.missingCount} missing and ${verifyResult.mismatchedCount} mismatched"
+                                        },
+                                        downloadTask = snapshot,
+                                    ) {
+                                        it.copy(localVerify = verifyResult)
+                                    }
+                                    appendTrace(
+                                        "$label returned clean=${verifyResult.clean} checked=${verifyResult.checkedCount} ok=${verifyResult.okCount} missing=${verifyResult.missingCount} mismatched=${verifyResult.mismatchedCount} sizeOnly=${verifyResult.sizeOnlyCount}",
+                                    )
+                                }
+                                if (snapshot.verifyResult == null) {
+                                    onSuccess?.invoke(snapshot)
+                                    finishModuleTask(
+                                        label = label,
+                                        moduleStatus = snapshot.moduleStatus.ifBlank { "succeeded" },
+                                        message = _state.value.statusText,
                                         downloadTask = snapshot,
                                     )
                                 }
+                            }
+                            snapshot.canceled -> {
+                                finishModuleTask(
+                                    label = label,
+                                    moduleStatus = "canceled",
+                                    message = "${snapshot.kindLabel} canceled",
+                                    downloadTask = snapshot,
+                                )
                                 appendTrace("$label canceled")
                             }
                             else -> {
-                                _state.update { state ->
-                                    state.copy(
-                                        statusText = snapshot.message.ifBlank { "$label failed" },
-                                        busy = false,
-                                        downloadTask = snapshot,
-                                    )
-                                }
+                                finishModuleTask(
+                                    label = label,
+                                    moduleStatus = snapshot.moduleStatus.ifBlank { "failed" },
+                                    message = snapshot.message.ifBlank { "$label failed" },
+                                    downloadTask = snapshot,
+                                )
                                 appendTrace("$label failed: ${snapshot.message.ifBlank { "(no detail)" }}")
                             }
                         }
@@ -776,7 +836,7 @@ class CAuthSteamDepotController(
         if (snapshot.finished) {
             return when {
                 snapshot.succeeded -> "$label complete"
-                snapshot.canceled -> "Download canceled"
+                snapshot.canceled -> "${snapshot.kindLabel} canceled"
                 else -> snapshot.message.ifBlank { "$label failed" }
             }
         }
@@ -793,6 +853,94 @@ class CAuthSteamDepotController(
         }
     }
 
+    private fun beginModuleTask(
+        label: String,
+        moduleStatus: String,
+        message: String,
+        transform: (CAuthSteamDepotState) -> CAuthSteamDepotState = { it },
+    ) {
+        cancelIdleReset()
+        _state.update { current ->
+            transform(
+                current.copy(
+                    statusText = message,
+                    moduleStatus = moduleStatus,
+                    busy = true,
+                    moduleTask = DepotModuleTaskSnapshot(
+                        label = label,
+                        active = true,
+                        moduleStatus = moduleStatus,
+                        message = message,
+                        downloadTask = current.downloadTask,
+                    ),
+                ),
+            )
+        }
+    }
+
+    private fun finishModuleTask(
+        label: String,
+        moduleStatus: String,
+        message: String,
+        downloadTask: DepotDownloadTaskSnapshot? = _state.value.downloadTask,
+        transform: (CAuthSteamDepotState) -> CAuthSteamDepotState = { it },
+    ) {
+        cancelIdleReset()
+        _state.update { current ->
+            transform(
+                current.copy(
+                    statusText = message,
+                    moduleStatus = moduleStatus,
+                    busy = false,
+                    moduleTask = DepotModuleTaskSnapshot(
+                        label = label,
+                        active = false,
+                        moduleStatus = moduleStatus,
+                        message = message,
+                        downloadTask = downloadTask,
+                    ),
+                    downloadTask = downloadTask,
+                ),
+            )
+        }
+        if (shouldAutoResetToIdle(moduleStatus)) {
+            scheduleIdleReset()
+        }
+    }
+
+    private fun shouldAutoResetToIdle(moduleStatus: String): Boolean = moduleStatus.lowercase() !in setOf(
+        "",
+        "idle",
+        "queued",
+        "downloading",
+        "reading",
+        "writing",
+        "verifying",
+        "canceling",
+        "running",
+    )
+
+    private fun cancelIdleReset() {
+        idleResetJob?.cancel()
+        idleResetJob = null
+    }
+
+    private fun scheduleIdleReset() {
+        cancelIdleReset()
+        idleResetJob = scope.launch {
+            delay(IDLE_RESET_DELAY_MS)
+            _state.update { current ->
+                current.copy(
+                    moduleStatus = "idle",
+                    busy = false,
+                    moduleTask = null,
+                    downloadTask = null,
+                )
+            }
+            idleResetJob = null
+        }
+    }
+
     private fun appendTrace(message: String) {
         _state.update { current ->
             current.copy(
@@ -802,5 +950,9 @@ class CAuthSteamDepotController(
                 },
             )
         }
+    }
+
+    private companion object {
+        const val IDLE_RESET_DELAY_MS = 2500L
     }
 }

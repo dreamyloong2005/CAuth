@@ -21,11 +21,13 @@ data class CAuthSteamCloudState(
     val deleteRemoteOrphans: Boolean = false,
     val verifyIncludeExtraLocal: Boolean = false,
     val conflictPolicy: SteamCloudConflictPolicy = SteamCloudConflictPolicy.Default,
+    val moduleStatus: String = "idle",
     val statusText: String = "Ready",
     val busy: Boolean = false,
     val fileList: SteamCloudFileListSnapshot? = null,
     val verifyResult: SteamCloudVerifySnapshot? = null,
     val operationResult: SteamCloudResultSnapshot? = null,
+    val moduleTask: SteamCloudModuleTaskSnapshot? = null,
     val transferTask: SteamCloudTransferTaskSnapshot? = null,
     val traceLines: List<String> = emptyList(),
 )
@@ -38,6 +40,7 @@ class CAuthSteamCloudController(
     private val _state = MutableStateFlow(CAuthSteamCloudState())
     val state: StateFlow<CAuthSteamCloudState> = _state
     private var transferPollingJob: Job? = null
+    private var idleResetJob: Job? = null
 
     fun setAppIdText(value: String) = _state.update { it.copy(appIdText = sanitizeCompact(value)) }
     fun setSteamIdText(value: String) = _state.update { it.copy(steamIdText = sanitizeCompact(value)) }
@@ -55,8 +58,22 @@ class CAuthSteamCloudController(
         val handle = _state.value.transferTask?.handle ?: return
         scope.launch {
             runCatching { api.cancelTransferTask(handle) }
-            _state.update {
-                it.copy(statusText = "Cancel requested...", busy = true)
+            cancelIdleReset()
+            _state.update { current ->
+                val currentTask = current.transferTask
+                current.copy(
+                    statusText = "Cancel requested...",
+                    moduleStatus = "canceling",
+                    busy = true,
+                    moduleTask = SteamCloudModuleTaskSnapshot(
+                        label = current.moduleTask?.label ?: currentTask?.kindLabel ?: "Cloud Task",
+                        active = true,
+                        moduleStatus = "canceling",
+                        message = "Cancel requested...",
+                        transferTask = currentTask?.copy(moduleStatus = "canceling"),
+                    ),
+                    transferTask = currentTask?.copy(moduleStatus = "canceling"),
+                )
             }
             appendTrace("Cloud transfer cancel requested handle=$handle")
         }
@@ -70,12 +87,12 @@ class CAuthSteamCloudController(
                 startIndex = startIndex,
                 extendedDetails = true,
             )
-            _state.update {
-                it.copy(
-                    statusText = result.message.ifBlank { "Listed ${result.files.size} file(s)" },
-                    busy = false,
-                    fileList = result,
-                )
+            finishModuleTask(
+                label = "Cloud List",
+                moduleStatus = result.moduleStatus.ifBlank { if (result.ok) "succeeded" else "failed" },
+                message = result.message.ifBlank { "Listed ${result.files.size} file(s)" },
+            ) {
+                it.copy(fileList = result)
             }
             appendTrace("Cloud List returned ok=${result.ok} files=${result.files.size} total=${result.totalFiles} eresult=${result.eresult}")
         }
@@ -90,25 +107,11 @@ class CAuthSteamCloudController(
     }
 
     fun verifyLocalFiles() {
-        runAction("Cloud Verify") { request, _, _ ->
-            val includeExtraLocal = _state.value.verifyIncludeExtraLocal
-            val result = api.verifyLocalFiles(
+        val includeExtraLocal = _state.value.verifyIncludeExtraLocal
+        startTransferAction("Cloud Verify") { request ->
+            api.startVerifyLocalFiles(
                 request = request,
                 includeExtraLocal = includeExtraLocal,
-            )
-            _state.update {
-                it.copy(
-                    statusText = if (result.clean) {
-                        "Cloud verify clean: ${result.okCount}/${result.checkedCount}"
-                    } else {
-                        "Cloud verify found ${result.missingCount} missing and ${result.mismatchedCount} mismatched"
-                    },
-                    busy = false,
-                    verifyResult = result,
-                )
-            }
-            appendTrace(
-                "Cloud Verify returned clean=${result.clean} checked=${result.checkedCount} ok=${result.okCount} missing=${result.missingCount} mismatched=${result.mismatchedCount} extraLocal=${result.extraLocalCount}",
             )
         }
     }
@@ -148,17 +151,22 @@ class CAuthSteamCloudController(
             "$label clicked steamId=$steamId appId=$appId localRoot=${request.localRoot ?: "(none)"} " +
                 "remoteRoot=${request.remoteRoot ?: "(none)"} dryRun=${request.dryRun}",
         )
-        _state.update { it.copy(statusText = "$label in progress...", busy = true) }
+        beginModuleTask(
+            label = label,
+            moduleStatus = "reading",
+            message = "$label in progress...",
+        ) {
+            it.copy(transferTask = null)
+        }
         scope.launch {
             runCatching {
                 action(request, count, startIndex)
             }.onFailure { failure ->
-                _state.update {
-                    it.copy(
-                        statusText = failure.message ?: "$label failed",
-                        busy = false,
-                    )
-                }
+                finishModuleTask(
+                    label = label,
+                    moduleStatus = "failed",
+                    message = failure.message ?: "$label failed",
+                )
                 appendTrace("$label failed: ${failure::class.simpleName}: ${failure.message ?: "(no message)"}")
             }
         }
@@ -198,10 +206,12 @@ class CAuthSteamCloudController(
                 "remoteRoot=${request.remoteRoot ?: "(none)"} dryRun=${request.dryRun}",
         )
         transferPollingJob?.cancel()
-        _state.update {
+        beginModuleTask(
+            label = label,
+            moduleStatus = "queued",
+            message = "$label in progress...",
+        ) {
             it.copy(
-                statusText = "$label in progress...",
-                busy = true,
                 verifyResult = null,
                 operationResult = null,
                 transferTask = null,
@@ -213,12 +223,11 @@ class CAuthSteamCloudController(
                 appendTrace("$label started handle=$handle")
                 pollTransferTask(handle, label)
             }.onFailure { failure ->
-                _state.update {
-                    it.copy(
-                        statusText = failure.message ?: "$label failed",
-                        busy = false,
-                    )
-                }
+                finishModuleTask(
+                    label = label,
+                    moduleStatus = "failed",
+                    message = failure.message ?: "$label failed",
+                )
                 appendTrace("$label failed: ${failure::class.simpleName}: ${failure.message ?: "(no message)"}")
             }
         }
@@ -230,25 +239,65 @@ class CAuthSteamCloudController(
             try {
                 while (true) {
                     val snapshot = api.pollTransferTask(handle)
+                    val message = snapshot.message.ifBlank {
+                        snapshot.phase.ifBlank { "$label in progress..." }
+                    }
+                    val snapshotStatus = snapshot.moduleStatus.ifBlank {
+                        if (snapshot.active) "running" else "idle"
+                    }
                     _state.update {
                         it.copy(
-                            statusText = snapshot.message.ifBlank {
-                                snapshot.phase.ifBlank { "$label in progress..." }
-                            },
+                            statusText = message,
+                            moduleStatus = snapshotStatus,
                             busy = snapshot.active,
+                            moduleTask = SteamCloudModuleTaskSnapshot(
+                                label = label,
+                                active = snapshot.active,
+                                moduleStatus = snapshotStatus,
+                                message = message,
+                                transferTask = snapshot,
+                            ),
                             transferTask = snapshot,
                             operationResult = snapshot.result ?: it.operationResult,
+                            verifyResult = snapshot.verifyResult ?: it.verifyResult,
                         )
                     }
                     if (!snapshot.active) {
                         val result = snapshot.result
+                        val verifyResult = snapshot.verifyResult
                         if (result != null) {
                             appendTrace(
                                 "$label returned ok=${result.ok} transferred=${result.transferredCount} conflicts=${result.conflictCount}",
                             )
+                        } else if (verifyResult != null) {
+                            appendTrace(
+                                "$label returned clean=${verifyResult.clean} checked=${verifyResult.checkedCount} ok=${verifyResult.okCount} missing=${verifyResult.missingCount} mismatched=${verifyResult.mismatchedCount} extraLocal=${verifyResult.extraLocalCount}",
+                            )
                         } else {
                             appendTrace(
                                 "$label finished active=${snapshot.active} succeeded=${snapshot.succeeded} canceled=${snapshot.canceled}",
+                            )
+                        }
+                        finishModuleTask(
+                            label = label,
+                            moduleStatus = snapshot.moduleStatus.ifBlank {
+                                when {
+                                    snapshot.canceled -> "canceled"
+                                    snapshot.succeeded -> "succeeded"
+                                    else -> "failed"
+                                }
+                            },
+                            message = when {
+                                snapshot.canceled -> "${snapshot.kindLabel} canceled"
+                                snapshot.message.isNotBlank() -> snapshot.message
+                                snapshot.succeeded -> "$label complete"
+                                else -> "$label failed"
+                            },
+                            transferTask = snapshot,
+                        ) { state ->
+                            state.copy(
+                                operationResult = snapshot.result ?: state.operationResult,
+                                verifyResult = snapshot.verifyResult ?: state.verifyResult,
                             )
                         }
                         break
@@ -272,7 +321,100 @@ class CAuthSteamCloudController(
         }
     }
 
+    private fun beginModuleTask(
+        label: String,
+        moduleStatus: String,
+        message: String,
+        transform: (CAuthSteamCloudState) -> CAuthSteamCloudState = { it },
+    ) {
+        cancelIdleReset()
+        _state.update { current ->
+            transform(
+                current.copy(
+                    statusText = message,
+                    moduleStatus = moduleStatus,
+                    busy = true,
+                    moduleTask = SteamCloudModuleTaskSnapshot(
+                        label = label,
+                        active = true,
+                        moduleStatus = moduleStatus,
+                        message = message,
+                        transferTask = current.transferTask,
+                    ),
+                ),
+            )
+        }
+    }
+
+    private fun finishModuleTask(
+        label: String,
+        moduleStatus: String,
+        message: String,
+        transferTask: SteamCloudTransferTaskSnapshot? = _state.value.transferTask,
+        transform: (CAuthSteamCloudState) -> CAuthSteamCloudState = { it },
+    ) {
+        cancelIdleReset()
+        _state.update { current ->
+            transform(
+                current.copy(
+                    statusText = message,
+                    moduleStatus = moduleStatus,
+                    busy = false,
+                    moduleTask = SteamCloudModuleTaskSnapshot(
+                        label = label,
+                        active = false,
+                        moduleStatus = moduleStatus,
+                        message = message,
+                        transferTask = transferTask,
+                    ),
+                    transferTask = transferTask,
+                ),
+            )
+        }
+        if (shouldAutoResetToIdle(moduleStatus)) {
+            scheduleIdleReset()
+        }
+    }
+
+    private fun shouldAutoResetToIdle(moduleStatus: String): Boolean = moduleStatus.lowercase() !in setOf(
+        "",
+        "idle",
+        "queued",
+        "listing",
+        "reading",
+        "downloading",
+        "uploading",
+        "verifying",
+        "canceling",
+        "running",
+    )
+
+    private fun cancelIdleReset() {
+        idleResetJob?.cancel()
+        idleResetJob = null
+    }
+
+    private fun scheduleIdleReset() {
+        cancelIdleReset()
+        idleResetJob = scope.launch {
+            delay(IDLE_RESET_DELAY_MS)
+            _state.update { current ->
+                current.copy(
+                    moduleStatus = "idle",
+                    busy = false,
+                    moduleTask = null,
+                    transferTask = null,
+                )
+            }
+            idleResetJob = null
+        }
+    }
+
     private fun sanitizeCompact(value: String): String = value.filterNot { it.isWhitespace() }
 
     private fun sanitizeTrimmed(value: String): String = value.trim()
+
+    private companion object {
+        const val IDLE_RESET_DELAY_MS = 2500L
+    }
 }

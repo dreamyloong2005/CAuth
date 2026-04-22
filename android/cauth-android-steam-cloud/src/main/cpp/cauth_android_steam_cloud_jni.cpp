@@ -43,6 +43,7 @@ jclass g_steam_cloud_transfer_task_snapshot_class = nullptr;
 enum class CloudTransferTaskKind : jint {
     Pull = 1,
     Push = 2,
+    Verify = 3,
 };
 
 struct CloudTransferRequestParams {
@@ -54,6 +55,9 @@ struct CloudTransferRequestParams {
     bool dry_run = false;
     bool delete_remote_orphans = false;
     cauth_steam_cloud_conflict_policy_t conflict_policy = CAUTH_STEAM_CLOUD_CONFLICT_DEFAULT;
+    cauth_file_write_mode_t local_write_mode = CAUTH_FILE_WRITE_OVERWRITE;
+    bool atomic_write = false;
+    bool include_extra_local = false;
 };
 
 struct CloudTransferTask {
@@ -66,15 +70,21 @@ struct CloudTransferTask {
     bool succeeded = false;
     bool canceled = false;
     bool has_result = false;
+    bool has_verify_report = false;
+    std::string module_status = "idle";
     std::string phase = "Queued";
     std::string target;
     std::string message;
     std::string result_message;
+    std::string verify_message;
     std::uint64_t completed_steps = 0;
     std::uint64_t total_steps = 0;
     std::uint64_t completed_bytes = 0;
     std::uint64_t total_bytes = 0;
+    std::string result_module_status;
     cauth_steam_cloud_result_t result{};
+    std::string verify_module_status;
+    cauth_steam_cloud_verify_report_t verify_report{};
 };
 
 std::mutex g_transfer_tasks_mutex;
@@ -170,6 +180,19 @@ cauth::steam::cloud::SteamCloudConflictPolicy from_ffi_conflict_policy(
     }
 }
 
+cauth::core::platform::FileWriteMode from_ffi_file_write_mode(cauth_file_write_mode_t mode) {
+    using WriteMode = cauth::core::platform::FileWriteMode;
+    switch (mode) {
+    case CAUTH_FILE_WRITE_SKIP_EXISTING:
+        return WriteMode::SkipExisting;
+    case CAUTH_FILE_WRITE_FAIL_IF_EXISTS:
+        return WriteMode::FailIfExists;
+    case CAUTH_FILE_WRITE_OVERWRITE:
+    default:
+        return WriteMode::Overwrite;
+    }
+}
+
 cauth_steam_cloud_direction_t to_ffi_direction(cauth::steam::cloud::SteamCloudDirection direction) {
     switch (direction) {
     case cauth::steam::cloud::SteamCloudDirection::Push:
@@ -204,7 +227,9 @@ cauth_steam_cloud_request_t make_request(const char* access_token,
                                          jlong steam_id,
                                          jboolean dry_run,
                                          jboolean delete_remote_orphans,
-                                         jint conflict_policy) {
+                                         jint conflict_policy,
+                                         jint local_write_mode,
+                                         jboolean atomic_write) {
     cauth_steam_cloud_request_t request{};
     request.app_id = static_cast<unsigned int>(app_id);
     request.steam_id = static_cast<unsigned long long>(steam_id);
@@ -214,6 +239,8 @@ cauth_steam_cloud_request_t make_request(const char* access_token,
     request.dry_run = dry_run ? 1 : 0;
     request.delete_remote_orphans = delete_remote_orphans ? 1 : 0;
     request.conflict_policy = static_cast<cauth_steam_cloud_conflict_policy_t>(conflict_policy);
+    request.local_write_mode = static_cast<cauth_file_write_mode_t>(local_write_mode);
+    request.atomic_write = atomic_write ? 1 : 0;
     return request;
 }
 
@@ -225,7 +252,9 @@ CloudTransferRequestParams make_request_params(JNIEnv* env,
                                                jstring remote_root,
                                                jboolean dry_run,
                                                jboolean delete_remote_orphans,
-                                               jint conflict_policy) {
+                                               jint conflict_policy,
+                                               jint local_write_mode,
+                                               jboolean atomic_write) {
     CloudTransferRequestParams params;
     params.app_id = static_cast<unsigned int>(app_id);
     params.steam_id = static_cast<unsigned long long>(steam_id);
@@ -235,6 +264,8 @@ CloudTransferRequestParams make_request_params(JNIEnv* env,
     params.dry_run = dry_run == JNI_TRUE;
     params.delete_remote_orphans = delete_remote_orphans == JNI_TRUE;
     params.conflict_policy = static_cast<cauth_steam_cloud_conflict_policy_t>(conflict_policy);
+    params.local_write_mode = static_cast<cauth_file_write_mode_t>(local_write_mode);
+    params.atomic_write = atomic_write == JNI_TRUE;
     return params;
 }
 
@@ -254,6 +285,9 @@ cauth::steam::cloud::SteamCloudRequest build_native_request(cauth_client_t* clie
     native_request.delete_remote_orphans = params.delete_remote_orphans;
     native_request.conflict_policy = from_ffi_conflict_policy(params.conflict_policy);
     native_request.backend = cauth::steam::cloud::SteamCloudBackend::Auto;
+    native_request.local_write_options.mode = from_ffi_file_write_mode(params.local_write_mode);
+    native_request.local_write_options.atomic_write = params.atomic_write;
+    native_request.local_write_options.temp_suffix = ".cauthdownload";
 
     if (native_request.access_token.empty() || native_request.refresh_token.empty()) {
         const auto session = native_request.steam_id == 0
@@ -278,7 +312,9 @@ cauth::steam::cloud::SteamCloudRequest build_native_request(cauth_client_t* clie
 }
 
 void fill_ffi_result(const cauth::steam::cloud::SteamCloudResult& result,
-                     cauth_steam_cloud_result_t& out_result) {
+                     cauth_steam_cloud_result_t& out_result,
+                     std::string& module_status_storage) {
+    module_status_storage = result.module_status;
     out_result.ok = result.ok ? 1 : 0;
     out_result.app_id = result.app_id;
     out_result.direction = to_ffi_direction(result.direction);
@@ -290,6 +326,26 @@ void fill_ffi_result(const cauth::steam::cloud::SteamCloudResult& result,
     out_result.skipped_count = result.skipped_count;
     out_result.conflict_count = result.conflict_count;
     out_result.transferred_bytes = result.transferred_bytes;
+    out_result.module_status = module_status_storage.c_str();
+}
+
+void fill_ffi_verify_report(const cauth::steam::cloud::SteamCloudVerifyResult& result,
+                            cauth_steam_cloud_verify_report_t& out_result,
+                            std::string& module_status_storage) {
+    module_status_storage = result.module_status;
+    out_result.present = 1;
+    out_result.clean = result.clean() ? 1 : 0;
+    out_result.include_extra_local = result.include_extra_local ? 1 : 0;
+    out_result.app_id = result.app_id;
+    out_result.checked_count = result.checked_count;
+    out_result.ok_count = result.ok_count;
+    out_result.missing_count = result.missing_count;
+    out_result.mismatched_count = result.mismatched_count;
+    out_result.size_only_count = result.size_only_count;
+    out_result.filtered_out_count = result.filtered_out_count;
+    out_result.extra_local_count = result.extra_local_count;
+    out_result.total_count = result.total_count;
+    out_result.module_status = module_status_storage.c_str();
 }
 
 jobject make_steam_cloud_file_entry(JNIEnv* env, const cauth_steam_cloud_file_entry_t& entry) {
@@ -327,7 +383,7 @@ jobject make_steam_cloud_file_list(JNIEnv* env, const cauth_steam_cloud_file_lis
     }
     jmethodID ctor = env->GetMethodID(
         cls, "<init>",
-        "(ZZIIJ[Lcom/cauth/android/steam/cloud/SteamCloudFileEntrySnapshot;Ljava/lang/String;)V");
+        "(ZZIILjava/lang/String;J[Lcom/cauth/android/steam/cloud/SteamCloudFileEntrySnapshot;Ljava/lang/String;)V");
     if (ctor == nullptr) {
         return nullptr;
     }
@@ -338,12 +394,15 @@ jobject make_steam_cloud_file_list(JNIEnv* env, const cauth_steam_cloud_file_lis
         env->SetObjectArrayElement(entries, index, item);
         env->DeleteLocalRef(item);
     }
+    jstring module_status =
+        env->NewStringUTF(result.module_status == nullptr ? "idle" : result.module_status);
     jstring message = env->NewStringUTF(result.message == nullptr ? "" : result.message);
     jobject instance = env->NewObject(
         cls, ctor, static_cast<jboolean>(result.ok != 0), static_cast<jboolean>(result.present != 0),
         static_cast<jint>(result.app_id), static_cast<jint>(result.eresult),
-        static_cast<jlong>(result.total_files), entries, message);
+        module_status, static_cast<jlong>(result.total_files), entries, message);
     env->DeleteLocalRef(entries);
+    env->DeleteLocalRef(module_status);
     env->DeleteLocalRef(message);
     return instance;
 }
@@ -353,18 +412,22 @@ jobject make_steam_cloud_result(JNIEnv* env, const cauth_steam_cloud_result_t& r
     if (cls == nullptr) {
         return nullptr;
     }
-    jmethodID ctor = env->GetMethodID(cls, "<init>", "(ZIIIJJJJJJJLjava/lang/String;)V");
+    jmethodID ctor =
+        env->GetMethodID(cls, "<init>", "(ZIIILjava/lang/String;JJJJJJJLjava/lang/String;)V");
     if (ctor == nullptr) {
         return nullptr;
     }
+    jstring module_status =
+        env->NewStringUTF(result.module_status == nullptr ? "idle" : result.module_status);
     jstring message = env->NewStringUTF(result.message == nullptr ? "" : result.message);
     jobject instance = env->NewObject(
         cls, ctor, static_cast<jboolean>(result.ok != 0), static_cast<jint>(result.app_id),
-        static_cast<jint>(result.direction), static_cast<jint>(result.conflict_policy),
+        static_cast<jint>(result.direction), static_cast<jint>(result.conflict_policy), module_status,
         static_cast<jlong>(result.local_file_count), static_cast<jlong>(result.remote_file_count),
         static_cast<jlong>(result.transferred_count), static_cast<jlong>(result.deleted_count),
         static_cast<jlong>(result.skipped_count), static_cast<jlong>(result.conflict_count),
         static_cast<jlong>(result.transferred_bytes), message);
+    env->DeleteLocalRef(module_status);
     env->DeleteLocalRef(message);
     return instance;
 }
@@ -375,16 +438,20 @@ jobject make_steam_cloud_verify_snapshot(JNIEnv* env,
     if (cls == nullptr) {
         return nullptr;
     }
-    jmethodID ctor = env->GetMethodID(cls, "<init>", "(ZZZIJJJJJJJJLjava/lang/String;)V");
+    jmethodID ctor =
+        env->GetMethodID(cls, "<init>", "(ZZZILjava/lang/String;JJJJJJJJLjava/lang/String;)V");
     if (ctor == nullptr) {
         return nullptr;
     }
+    jstring module_status =
+        env->NewStringUTF(result.module_status == nullptr ? "idle" : result.module_status);
     jstring message = env->NewStringUTF(result.message == nullptr ? "" : result.message);
     jobject instance = env->NewObject(
         cls, ctor, static_cast<jboolean>(result.present != 0),
         static_cast<jboolean>(result.clean != 0),
         static_cast<jboolean>(result.include_extra_local != 0),
         static_cast<jint>(result.app_id),
+        module_status,
         static_cast<jlong>(result.checked_count),
         static_cast<jlong>(result.ok_count),
         static_cast<jlong>(result.missing_count),
@@ -394,6 +461,7 @@ jobject make_steam_cloud_verify_snapshot(JNIEnv* env,
         static_cast<jlong>(result.extra_local_count),
         static_cast<jlong>(result.total_count),
         message);
+    env->DeleteLocalRef(module_status);
     env->DeleteLocalRef(message);
     return instance;
 }
@@ -408,7 +476,7 @@ jobject make_steam_cloud_transfer_task(JNIEnv* env,
     jmethodID ctor = env->GetMethodID(
         cls,
         "<init>",
-        "(JIZZZZLjava/lang/String;JJJJLjava/lang/String;Ljava/lang/String;Lcom/cauth/android/steam/cloud/SteamCloudResultSnapshot;)V");
+        "(JIZZZZLjava/lang/String;Ljava/lang/String;JJJJLjava/lang/String;Ljava/lang/String;Lcom/cauth/android/steam/cloud/SteamCloudResultSnapshot;Lcom/cauth/android/steam/cloud/SteamCloudVerifySnapshot;)V");
     if (ctor == nullptr) {
         return nullptr;
     }
@@ -419,21 +487,27 @@ jobject make_steam_cloud_transfer_task(JNIEnv* env,
     bool succeeded = false;
     bool canceled = false;
     bool has_result = false;
+    bool has_verify_report = false;
+    std::string module_status_value;
     std::string phase;
     std::string target;
     std::string message;
     std::string result_message;
+    std::string verify_message;
     std::uint64_t completed_steps = 0;
     std::uint64_t total_steps = 0;
     std::uint64_t completed_bytes = 0;
     std::uint64_t total_bytes = 0;
     cauth_steam_cloud_result_t result_snapshot{};
+    cauth_steam_cloud_verify_report_t verify_snapshot{};
     {
         std::lock_guard<std::mutex> lock(task->mutex);
         kind = task->kind;
         succeeded = task->succeeded;
         canceled = task->canceled;
         has_result = task->has_result;
+        has_verify_report = task->has_verify_report;
+        module_status_value = task->module_status;
         phase = task->phase;
         target = task->target;
         message = task->message;
@@ -442,15 +516,21 @@ jobject make_steam_cloud_transfer_task(JNIEnv* env,
         completed_bytes = task->completed_bytes;
         total_bytes = task->total_bytes;
         result_message = task->result_message;
+        verify_message = task->verify_message;
         result_snapshot = task->result;
+        verify_snapshot = task->verify_report;
         result_snapshot.message = result_message.empty() ? "" : result_message.c_str();
+        verify_snapshot.message = verify_message.empty() ? "" : verify_message.c_str();
     }
 
+    jstring module_status = env->NewStringUTF(module_status_value.c_str());
     jstring phase_string = env->NewStringUTF(phase.c_str());
     jstring target_string = env->NewStringUTF(target.c_str());
     jstring message_string = env->NewStringUTF(message.c_str());
     jobject result =
         has_result ? make_steam_cloud_result(env, result_snapshot) : nullptr;
+    jobject verify_result =
+        has_verify_report ? make_steam_cloud_verify_snapshot(env, verify_snapshot) : nullptr;
     jobject instance = env->NewObject(
         cls,
         ctor,
@@ -460,6 +540,7 @@ jobject make_steam_cloud_transfer_task(JNIEnv* env,
         static_cast<jboolean>(finished),
         static_cast<jboolean>(canceled),
         static_cast<jboolean>(succeeded),
+        module_status,
         phase_string,
         static_cast<jlong>(completed_steps),
         static_cast<jlong>(total_steps),
@@ -467,12 +548,17 @@ jobject make_steam_cloud_transfer_task(JNIEnv* env,
         static_cast<jlong>(total_bytes),
         target_string,
         message_string,
-        result);
+        result,
+        verify_result);
+    env->DeleteLocalRef(module_status);
     env->DeleteLocalRef(phase_string);
     env->DeleteLocalRef(target_string);
     env->DeleteLocalRef(message_string);
     if (result != nullptr) {
         env->DeleteLocalRef(result);
+    }
+    if (verify_result != nullptr) {
+        env->DeleteLocalRef(verify_result);
     }
     return instance;
 }
@@ -498,6 +584,18 @@ void on_transfer_progress(const cauth::steam::cloud::SteamCloudTransferProgress&
         return;
     }
     std::lock_guard<std::mutex> lock(task->mutex);
+    task->module_status = progress.module_status.empty() ? "idle" : progress.module_status;
+    switch (progress.kind) {
+    case cauth::steam::cloud::SteamCloudTransferKind::Pull:
+        task->kind = CloudTransferTaskKind::Pull;
+        break;
+    case cauth::steam::cloud::SteamCloudTransferKind::Push:
+        task->kind = CloudTransferTaskKind::Push;
+        break;
+    case cauth::steam::cloud::SteamCloudTransferKind::Verify:
+        task->kind = CloudTransferTaskKind::Verify;
+        break;
+    }
     task->phase = progress.phase;
     task->target = progress.target;
     task->completed_steps = progress.completed_steps;
@@ -523,21 +621,32 @@ void run_cloud_transfer_task(jlong client_handle,
 
     cauth_result_t native_result = CAUTH_ERROR_INTERNAL;
     cauth_steam_cloud_result_t ffi_result{};
+    cauth_steam_cloud_verify_report_t ffi_verify{};
     std::string result_message;
+    std::string verify_message;
 
     try {
         auto* client = client_from_handle(client_handle);
         const auto native_request = build_native_request(client, params);
         cauth::steam::cloud::set_current_thread_steam_cloud_transfer_hooks(
             &on_transfer_progress, &is_transfer_cancel_requested, task.get());
-        const auto result =
-            kind == CloudTransferTaskKind::Pull ? cauth::steam::cloud::pull_cloud_save(native_request)
-                                                : cauth::steam::cloud::push_cloud_save(native_request);
+        if (kind == CloudTransferTaskKind::Verify) {
+            const auto verify_result =
+                cauth::steam::cloud::verify_cloud_local_files(native_request, params.include_extra_local);
+            fill_ffi_verify_report(verify_result, ffi_verify, task->verify_module_status);
+            verify_message = verify_result.message;
+            ffi_verify.message = verify_message.empty() ? "" : verify_message.c_str();
+            native_result = CAUTH_OK;
+        } else {
+            const auto result =
+                kind == CloudTransferTaskKind::Pull ? cauth::steam::cloud::pull_cloud_save(native_request)
+                                                    : cauth::steam::cloud::push_cloud_save(native_request);
+            fill_ffi_result(result, ffi_result, task->result_module_status);
+            result_message = result.message;
+            ffi_result.message = result_message.empty() ? "" : result_message.c_str();
+            native_result = CAUTH_OK;
+        }
         cauth::steam::cloud::clear_current_thread_steam_cloud_transfer_hooks();
-        fill_ffi_result(result, ffi_result);
-        result_message = result.message;
-        ffi_result.message = result_message.empty() ? "" : result_message.c_str();
-        native_result = CAUTH_OK;
     } catch (const std::bad_alloc&) {
         native_result = CAUTH_ERROR_OUT_OF_MEMORY;
         cauth::steam::cloud::clear_current_thread_steam_cloud_transfer_hooks();
@@ -548,22 +657,39 @@ void run_cloud_transfer_task(jlong client_handle,
 
     {
         std::lock_guard<std::mutex> lock(task->mutex);
-        task->has_result = native_result == CAUTH_OK;
+        task->has_result = kind != CloudTransferTaskKind::Verify && native_result == CAUTH_OK;
+        task->has_verify_report = kind == CloudTransferTaskKind::Verify && native_result == CAUTH_OK;
         task->result = ffi_result;
+        task->verify_report = ffi_verify;
         task->result_message = std::move(result_message);
+        task->verify_message = std::move(verify_message);
         task->result.message =
             task->result_message.empty() ? "" : task->result_message.c_str();
-        task->succeeded = native_result == CAUTH_OK && task->result.ok != 0;
+        task->verify_report.message =
+            task->verify_message.empty() ? "" : task->verify_message.c_str();
+        task->succeeded = native_result == CAUTH_OK &&
+            (kind == CloudTransferTaskKind::Verify ? task->verify_report.present != 0 : task->result.ok != 0);
         task->canceled =
             task->cancel_requested.load() &&
-            ((task->has_result && task->result_message.find("operation canceled") != std::string::npos) ||
+            (((task->has_result && task->result_message.find("operation canceled") != std::string::npos) ||
+              (task->has_verify_report && task->verify_message.find("operation canceled") != std::string::npos)) ||
              native_result != CAUTH_OK);
         const char* native_message = cauth_result_message(native_result);
-        task->message =
-            task->has_result ? task->result_message
-                             : std::string{native_message == nullptr ? "internal error" : native_message};
+        task->message = task->has_result ? task->result_message
+            : task->has_verify_report ? task->verify_message
+            : std::string{native_message == nullptr ? "internal error" : native_message};
+        if (task->has_result && task->result.module_status != nullptr) {
+            task->module_status = task->result.module_status;
+        } else if (task->has_verify_report && task->verify_report.module_status != nullptr) {
+            task->module_status = task->verify_report.module_status;
+        }
+        if (task->module_status.empty() || task->module_status == "idle") {
+            task->module_status = task->canceled ? "canceled" : (task->succeeded ? "succeeded" : "failed");
+        }
         if (task->phase.empty()) {
-            task->phase = kind == CloudTransferTaskKind::Pull ? "Pull finished" : "Push finished";
+            task->phase = kind == CloudTransferTaskKind::Pull ? "Pull finished"
+                : kind == CloudTransferTaskKind::Push ? "Push finished"
+                                                      : "Verify finished";
         }
         if (task->has_result) {
             const auto completed_items =
@@ -579,6 +705,13 @@ void run_cloud_transfer_task(jlong client_handle,
             }
             if (task->total_bytes < task->completed_bytes) {
                 task->total_bytes = task->completed_bytes;
+            }
+        } else if (task->has_verify_report) {
+            if (task->completed_steps < task->verify_report.checked_count) {
+                task->completed_steps = task->verify_report.checked_count;
+            }
+            if (task->total_steps < task->verify_report.total_count) {
+                task->total_steps = task->verify_report.total_count;
             }
         }
     }
@@ -600,6 +733,8 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeListRemoteFiles(
     jboolean dry_run,
     jboolean delete_remote_orphans,
     jint conflict_policy,
+    jint local_write_mode,
+    jboolean atomic_write,
     jint count,
     jint start_index,
     jboolean extended_details) {
@@ -611,7 +746,8 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeListRemoteFiles(
         remote_root == nullptr ? nullptr : env->GetStringUTFChars(remote_root, nullptr);
 
     const auto request = make_request(access_token_chars, local_root_chars, remote_root_chars,
-                                      app_id, steam_id, dry_run, delete_remote_orphans, conflict_policy);
+                                      app_id, steam_id, dry_run, delete_remote_orphans,
+                                      conflict_policy, local_write_mode, atomic_write);
     cauth_steam_cloud_file_list_t result{};
     const cauth_result_t native_result = cauth_steam_cloud_list_remote_files(
         client_from_handle(handle), &request, static_cast<unsigned int>(count),
@@ -646,7 +782,9 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativePull(
     jstring remote_root,
     jboolean dry_run,
     jboolean delete_remote_orphans,
-    jint conflict_policy) {
+    jint conflict_policy,
+    jint local_write_mode,
+    jboolean atomic_write) {
     const char* access_token_chars =
         access_token == nullptr ? nullptr : env->GetStringUTFChars(access_token, nullptr);
     const char* local_root_chars =
@@ -655,7 +793,8 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativePull(
         remote_root == nullptr ? nullptr : env->GetStringUTFChars(remote_root, nullptr);
 
     const auto request = make_request(access_token_chars, local_root_chars, remote_root_chars,
-                                      app_id, steam_id, dry_run, delete_remote_orphans, conflict_policy);
+                                      app_id, steam_id, dry_run, delete_remote_orphans,
+                                      conflict_policy, local_write_mode, atomic_write);
     cauth_steam_cloud_result_t result{};
     const cauth_result_t native_result =
         cauth_steam_cloud_pull(client_from_handle(handle), &request, &result);
@@ -689,7 +828,9 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativePush(
     jstring remote_root,
     jboolean dry_run,
     jboolean delete_remote_orphans,
-    jint conflict_policy) {
+    jint conflict_policy,
+    jint local_write_mode,
+    jboolean atomic_write) {
     const char* access_token_chars =
         access_token == nullptr ? nullptr : env->GetStringUTFChars(access_token, nullptr);
     const char* local_root_chars =
@@ -698,7 +839,8 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativePush(
         remote_root == nullptr ? nullptr : env->GetStringUTFChars(remote_root, nullptr);
 
     const auto request = make_request(access_token_chars, local_root_chars, remote_root_chars,
-                                      app_id, steam_id, dry_run, delete_remote_orphans, conflict_policy);
+                                      app_id, steam_id, dry_run, delete_remote_orphans,
+                                      conflict_policy, local_write_mode, atomic_write);
     cauth_steam_cloud_result_t result{};
     const cauth_result_t native_result =
         cauth_steam_cloud_push(client_from_handle(handle), &request, &result);
@@ -733,6 +875,8 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeVerifyLocalFiles(
     jboolean dry_run,
     jboolean delete_remote_orphans,
     jint conflict_policy,
+    jint local_write_mode,
+    jboolean atomic_write,
     jboolean include_extra_local) {
     const char* access_token_chars =
         access_token == nullptr ? nullptr : env->GetStringUTFChars(access_token, nullptr);
@@ -742,7 +886,8 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeVerifyLocalFiles(
         remote_root == nullptr ? nullptr : env->GetStringUTFChars(remote_root, nullptr);
 
     const auto request = make_request(access_token_chars, local_root_chars, remote_root_chars,
-                                      app_id, steam_id, dry_run, delete_remote_orphans, conflict_policy);
+                                      app_id, steam_id, dry_run, delete_remote_orphans,
+                                      conflict_policy, local_write_mode, atomic_write);
     cauth_steam_cloud_verify_report_t result{};
     const cauth_result_t native_result = cauth_steam_cloud_verify_local_files(
         client_from_handle(handle), &request, include_extra_local ? 1 : 0, &result);
@@ -776,14 +921,26 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeStartPull(
     jstring remote_root,
     jboolean dry_run,
     jboolean delete_remote_orphans,
-    jint conflict_policy) {
+    jint conflict_policy,
+    jint local_write_mode,
+    jboolean atomic_write) {
     if (handle == 0 || app_id <= 0 || steam_id <= 0) {
         env->ThrowNew(env->FindClass(kIllegalStateException), "Cloud pull start failed: invalid argument");
         return 0;
     }
 
     const auto params = make_request_params(
-        env, app_id, steam_id, access_token, local_root, remote_root, dry_run, delete_remote_orphans, conflict_policy);
+        env,
+        app_id,
+        steam_id,
+        access_token,
+        local_root,
+        remote_root,
+        dry_run,
+        delete_remote_orphans,
+        conflict_policy,
+        local_write_mode,
+        atomic_write);
     const auto task = std::make_shared<CloudTransferTask>(CloudTransferTaskKind::Pull);
     const jlong task_handle = g_next_transfer_task_handle.fetch_add(1);
     {
@@ -808,14 +965,26 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeStartPush(
     jstring remote_root,
     jboolean dry_run,
     jboolean delete_remote_orphans,
-    jint conflict_policy) {
+    jint conflict_policy,
+    jint local_write_mode,
+    jboolean atomic_write) {
     if (handle == 0 || app_id <= 0 || steam_id <= 0) {
         env->ThrowNew(env->FindClass(kIllegalStateException), "Cloud push start failed: invalid argument");
         return 0;
     }
 
     const auto params = make_request_params(
-        env, app_id, steam_id, access_token, local_root, remote_root, dry_run, delete_remote_orphans, conflict_policy);
+        env,
+        app_id,
+        steam_id,
+        access_token,
+        local_root,
+        remote_root,
+        dry_run,
+        delete_remote_orphans,
+        conflict_policy,
+        local_write_mode,
+        atomic_write);
     const auto task = std::make_shared<CloudTransferTask>(CloudTransferTaskKind::Push);
     const jlong task_handle = g_next_transfer_task_handle.fetch_add(1);
     {
@@ -824,6 +993,52 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeStartPush(
     }
     std::thread([handle, task_handle, params]() {
         run_cloud_transfer_task(handle, task_handle, params, CloudTransferTaskKind::Push);
+    }).detach();
+    return task_handle;
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeStartVerifyLocalFiles(
+    JNIEnv* env,
+    jclass,
+    jlong handle,
+    jint app_id,
+    jlong steam_id,
+    jstring access_token,
+    jstring local_root,
+    jstring remote_root,
+    jboolean dry_run,
+    jboolean delete_remote_orphans,
+    jint conflict_policy,
+    jint local_write_mode,
+    jboolean atomic_write,
+    jboolean include_extra_local) {
+    if (handle == 0 || app_id <= 0 || steam_id <= 0) {
+        env->ThrowNew(env->FindClass(kIllegalStateException), "Cloud verify start failed: invalid argument");
+        return 0;
+    }
+
+    auto params = make_request_params(
+        env,
+        app_id,
+        steam_id,
+        access_token,
+        local_root,
+        remote_root,
+        dry_run,
+        delete_remote_orphans,
+        conflict_policy,
+        local_write_mode,
+        atomic_write);
+    params.include_extra_local = include_extra_local == JNI_TRUE;
+    const auto task = std::make_shared<CloudTransferTask>(CloudTransferTaskKind::Verify);
+    const jlong task_handle = g_next_transfer_task_handle.fetch_add(1);
+    {
+        std::lock_guard<std::mutex> lock(g_transfer_tasks_mutex);
+        g_transfer_tasks[task_handle] = task;
+    }
+    std::thread([handle, task_handle, params = std::move(params)]() {
+        run_cloud_transfer_task(handle, task_handle, params, CloudTransferTaskKind::Verify);
     }).detach();
     return task_handle;
 }
@@ -852,6 +1067,7 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeCancelTransferTas
     }
     task->cancel_requested.store(true);
     std::lock_guard<std::mutex> lock(task->mutex);
+    task->module_status = "canceled";
     task->message = "Cancel requested...";
 }
 

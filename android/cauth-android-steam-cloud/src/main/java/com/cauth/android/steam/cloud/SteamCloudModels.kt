@@ -1,5 +1,7 @@
 package com.cauth.android.steam.cloud
 
+import com.cauth.android.CAuthFileWriteOptions
+
 enum class SteamCloudDirection(val nativeValue: Int) {
     Pull(0),
     Push(1);
@@ -32,6 +34,7 @@ data class SteamCloudRequest(
     val dryRun: Boolean = false,
     val deleteRemoteOrphans: Boolean = false,
     val conflictPolicy: SteamCloudConflictPolicy = SteamCloudConflictPolicy.Default,
+    val localWriteOptions: CAuthFileWriteOptions = CAuthFileWriteOptions(),
 )
 
 data class SteamCloudVerifySnapshot(
@@ -39,6 +42,7 @@ data class SteamCloudVerifySnapshot(
     val clean: Boolean,
     val includeExtraLocal: Boolean,
     val appId: Int,
+    val moduleStatus: String,
     val checkedCount: Long,
     val okCount: Long,
     val missingCount: Long,
@@ -68,6 +72,7 @@ data class SteamCloudFileListSnapshot(
     val present: Boolean,
     val appId: Int,
     val eresult: Int,
+    val moduleStatus: String,
     val totalFiles: Long,
     val files: Array<SteamCloudFileEntrySnapshot>,
     val message: String,
@@ -78,6 +83,7 @@ data class SteamCloudResultSnapshot(
     val appId: Int,
     val directionCode: Int,
     val conflictPolicyCode: Int,
+    val moduleStatus: String,
     val localFileCount: Long,
     val remoteFileCount: Long,
     val transferredCount: Long,
@@ -94,6 +100,14 @@ data class SteamCloudResultSnapshot(
         get() = SteamCloudConflictPolicy.fromNative(conflictPolicyCode)
 }
 
+data class SteamCloudModuleTaskSnapshot(
+    val label: String,
+    val active: Boolean,
+    val moduleStatus: String,
+    val message: String,
+    val transferTask: SteamCloudTransferTaskSnapshot? = null,
+)
+
 data class SteamCloudTransferTaskSnapshot(
     val handle: Long,
     val kindCode: Int,
@@ -101,6 +115,7 @@ data class SteamCloudTransferTaskSnapshot(
     val finished: Boolean,
     val canceled: Boolean,
     val succeeded: Boolean,
+    val moduleStatus: String,
     val phase: String,
     val completedSteps: Long,
     val totalSteps: Long,
@@ -109,11 +124,13 @@ data class SteamCloudTransferTaskSnapshot(
     val target: String,
     val message: String,
     val result: SteamCloudResultSnapshot?,
+    val verifyResult: SteamCloudVerifySnapshot?,
 ) {
     val kindLabel: String
         get() = when (kindCode) {
             1 -> "Pull"
             2 -> "Push"
+            3 -> "Verify"
             else -> "Transfer"
         }
 
@@ -128,6 +145,6 @@ data class SteamCloudTransferTaskSnapshot(
         get() = when {
             totalBytes > 0L -> "${completedBytes}/${totalBytes} bytes"
             totalSteps > 0L -> "${completedSteps}/${totalSteps} steps"
-            else -> phase
+            else -> moduleStatus.ifBlank { phase }
         }
 }

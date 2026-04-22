@@ -34,6 +34,7 @@ data class LoginRequest(
 data class LoginResultSnapshot(
     val statusCode: Int,
     val resultCode: Int,
+    val moduleStatus: String,
     val message: String,
     val steamId: Long,
     val accountName: String?,
@@ -62,15 +63,24 @@ data class SavedAccountSnapshot(
 data class CmProbeSnapshot(
     val ok: Boolean,
     val endpoint: String?,
+    val moduleStatus: String,
     val status: String?,
 )
 
 data class CmLogonSnapshot(
     val ok: Boolean,
     val endpoint: String?,
+    val moduleStatus: String,
     val status: String?,
     val eresult: Int,
     val eresultExtended: Int,
     val heartbeatSeconds: Int,
     val steamId: Long,
+)
+
+data class AuthTaskSnapshot(
+    val kind: String,
+    val active: Boolean,
+    val moduleStatus: String,
+    val message: String,
 )

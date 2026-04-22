@@ -29,6 +29,8 @@ typedef struct cauth_steam_cloud_request {
     int dry_run;
     int delete_remote_orphans;
     cauth_steam_cloud_conflict_policy_t conflict_policy;
+    cauth_file_write_mode_t local_write_mode;
+    int atomic_write;
 } cauth_steam_cloud_request_t;
 
 typedef struct cauth_steam_cloud_file_entry {
@@ -49,6 +51,7 @@ typedef struct cauth_steam_cloud_file_list {
     int present;
     unsigned int app_id;
     unsigned int eresult;
+    const char* module_status;
     unsigned long long total_files;
     unsigned long long file_count;
     const cauth_steam_cloud_file_entry_t* files;
@@ -60,6 +63,7 @@ typedef struct cauth_steam_cloud_result {
     unsigned int app_id;
     cauth_steam_cloud_direction_t direction;
     cauth_steam_cloud_conflict_policy_t conflict_policy;
+    const char* module_status;
     unsigned long long local_file_count;
     unsigned long long remote_file_count;
     unsigned long long transferred_count;
@@ -75,6 +79,7 @@ typedef struct cauth_steam_cloud_verify_report {
     int clean;
     int include_extra_local;
     unsigned int app_id;
+    const char* module_status;
     unsigned long long checked_count;
     unsigned long long ok_count;
     unsigned long long missing_count;
@@ -86,6 +91,32 @@ typedef struct cauth_steam_cloud_verify_report {
     const char* message;
 } cauth_steam_cloud_verify_report_t;
 
+typedef enum cauth_steam_cloud_task_kind {
+    CAUTH_STEAM_CLOUD_TASK_PULL = 1,
+    CAUTH_STEAM_CLOUD_TASK_PUSH = 2,
+    CAUTH_STEAM_CLOUD_TASK_VERIFY = 3
+} cauth_steam_cloud_task_kind_t;
+
+typedef struct cauth_steam_cloud_task_snapshot {
+    unsigned long long handle;
+    int active;
+    int succeeded;
+    int canceled;
+    cauth_steam_cloud_task_kind_t kind;
+    const char* module_status;
+    const char* phase;
+    const char* target;
+    const char* message;
+    unsigned long long completed_steps;
+    unsigned long long total_steps;
+    unsigned long long completed_bytes;
+    unsigned long long total_bytes;
+    int has_result;
+    cauth_steam_cloud_result_t result;
+    int has_verify_report;
+    cauth_steam_cloud_verify_report_t verify_report;
+} cauth_steam_cloud_task_snapshot_t;
+
 CAUTH_API cauth_result_t cauth_steam_cloud_list_remote_files(
     cauth_client_t* client,
     const cauth_steam_cloud_request_t* request,
@@ -96,14 +127,29 @@ CAUTH_API cauth_result_t cauth_steam_cloud_list_remote_files(
 CAUTH_API cauth_result_t cauth_steam_cloud_pull(cauth_client_t* client,
                                                const cauth_steam_cloud_request_t* request,
                                                cauth_steam_cloud_result_t* out_result);
+CAUTH_API cauth_result_t cauth_steam_cloud_start_pull(cauth_client_t* client,
+                                                      const cauth_steam_cloud_request_t* request,
+                                                      unsigned long long* out_handle);
 CAUTH_API cauth_result_t cauth_steam_cloud_push(cauth_client_t* client,
                                                const cauth_steam_cloud_request_t* request,
                                                cauth_steam_cloud_result_t* out_result);
+CAUTH_API cauth_result_t cauth_steam_cloud_start_push(cauth_client_t* client,
+                                                      const cauth_steam_cloud_request_t* request,
+                                                      unsigned long long* out_handle);
 CAUTH_API cauth_result_t cauth_steam_cloud_verify_local_files(
     cauth_client_t* client,
     const cauth_steam_cloud_request_t* request,
     int include_extra_local,
     cauth_steam_cloud_verify_report_t* out_result);
+CAUTH_API cauth_result_t cauth_steam_cloud_start_verify_local_files(
+    cauth_client_t* client,
+    const cauth_steam_cloud_request_t* request,
+    int include_extra_local,
+    unsigned long long* out_handle);
+CAUTH_API cauth_result_t cauth_steam_cloud_poll_task(unsigned long long handle,
+                                                     cauth_steam_cloud_task_snapshot_t* out_snapshot);
+CAUTH_API void cauth_steam_cloud_cancel_task(unsigned long long handle);
+CAUTH_API void cauth_steam_cloud_dispose_task(unsigned long long handle);
 
 #ifdef __cplusplus
 }

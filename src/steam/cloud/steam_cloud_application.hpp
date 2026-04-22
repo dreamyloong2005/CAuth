@@ -10,6 +10,7 @@ namespace cauth::steam::cloud {
 enum class SteamCloudTransferKind {
     Pull = 1,
     Push = 2,
+    Verify = 3,
 };
 
 struct SteamCloudTransferProgress {
@@ -20,6 +21,7 @@ struct SteamCloudTransferProgress {
     std::uint64_t total_steps = 0;
     std::uint64_t completed_bytes = 0;
     std::uint64_t total_bytes = 0;
+    std::string module_status = "idle";
 };
 
 using SteamCloudTransferProgressHook =

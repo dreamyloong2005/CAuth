@@ -9,9 +9,15 @@
 #include "steam/depot/steam_depot_application.hpp"
 #include "steam/depot/depot_cm_client.hpp"
 
-#include <sstream>
+#include <atomic>
 #include <exception>
+#include <memory>
+#include <mutex>
+#include <sstream>
 #include <string>
+#include <thread>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -38,9 +44,62 @@ thread_local std::vector<cauth_depot_preflight_entry_t> g_preflight_entries;
 thread_local std::vector<std::string> g_preflight_access_statuses;
 thread_local std::vector<std::string> g_manifest_file_names;
 thread_local std::vector<cauth_manifest_file_entry_t> g_manifest_file_entries;
+thread_local std::string g_depot_verify_module_status;
+thread_local std::string g_depot_task_module_status;
+thread_local std::string g_depot_task_phase;
+thread_local std::string g_depot_task_target;
+thread_local std::string g_depot_task_message;
+
+struct DepotTask {
+    explicit DepotTask(cauth_depot_task_kind_t task_kind) : kind(task_kind) {}
+
+    std::mutex mutex;
+    std::atomic_bool cancel_requested{false};
+    std::atomic_bool finished{false};
+    cauth_depot_task_kind_t kind = CAUTH_DEPOT_TASK_MANIFEST_DOWNLOAD;
+    bool succeeded = false;
+    bool canceled = false;
+    std::string module_status = "idle";
+    std::string phase = "Queued";
+    std::string target;
+    std::string message;
+    std::uint64_t completed_steps = 0;
+    std::uint64_t total_steps = 0;
+    std::uint64_t completed_bytes = 0;
+    std::uint64_t total_bytes = 0;
+    bool has_verify_report = false;
+    std::string verify_report_module_status;
+    cauth_depot_local_verify_report_t verify_report{};
+};
+
+std::mutex g_depot_tasks_mutex;
+std::unordered_map<unsigned long long, std::shared_ptr<DepotTask>> g_depot_tasks;
+std::atomic_ullong g_next_depot_task_handle{1};
 
 std::string nullable_string(const char* value) {
     return value == nullptr ? std::string{} : std::string{value};
+}
+
+cauth::core::platform::FileWriteMode from_ffi_file_write_mode(cauth_file_write_mode_t mode) {
+    using WriteMode = cauth::core::platform::FileWriteMode;
+    switch (mode) {
+    case CAUTH_FILE_WRITE_SKIP_EXISTING:
+        return WriteMode::SkipExisting;
+    case CAUTH_FILE_WRITE_FAIL_IF_EXISTS:
+        return WriteMode::FailIfExists;
+    case CAUTH_FILE_WRITE_OVERWRITE:
+    default:
+        return WriteMode::Overwrite;
+    }
+}
+
+cauth::core::platform::FileWriteOptions make_write_options(cauth_file_write_mode_t mode,
+                                                           int atomic_write) {
+    return cauth::core::platform::FileWriteOptions{
+        from_ffi_file_write_mode(mode),
+        atomic_write != 0,
+        ".cauthdownload",
+    };
 }
 
 void clear_last_error_detail() {
@@ -49,6 +108,98 @@ void clear_last_error_detail() {
 
 void set_last_error_detail(std::string detail) {
     g_last_error_detail = std::move(detail);
+}
+
+bool message_indicates_cancel(std::string_view message) {
+    return message.find("operation canceled") != std::string_view::npos;
+}
+
+bool depot_task_cancel_requested(void* user_data) {
+    const auto* task = static_cast<const DepotTask*>(user_data);
+    return task != nullptr && task->cancel_requested.load();
+}
+
+void on_depot_task_progress(const cauth::steam::depot::DepotDownloadProgress& progress,
+                            void* user_data) {
+    auto* task = static_cast<DepotTask*>(user_data);
+    if (task == nullptr) {
+        return;
+    }
+    std::lock_guard lock{task->mutex};
+    task->module_status = progress.module_status.empty() ? "idle" : progress.module_status;
+    task->phase = progress.phase;
+    task->target = progress.target;
+    task->completed_steps = progress.completed_steps;
+    task->total_steps = progress.total_steps;
+    task->completed_bytes = progress.completed_bytes;
+    task->total_bytes = progress.total_bytes;
+}
+
+std::shared_ptr<DepotTask> find_depot_task(unsigned long long handle) {
+    std::lock_guard lock{g_depot_tasks_mutex};
+    const auto found = g_depot_tasks.find(handle);
+    if (found == g_depot_tasks.end()) {
+        return nullptr;
+    }
+    return found->second;
+}
+
+void fill_verify_report(const cauth::steam::depot::LocalVerifyReport& source,
+                        cauth_depot_local_verify_report_t& destination,
+                        int clean) {
+    destination.present = 1;
+    destination.clean = clean;
+    destination.module_status = "";
+    destination.checked_count = source.checked_count;
+    destination.ok_count = source.ok_count;
+    destination.missing_count = source.missing_count;
+    destination.mismatched_count = source.mismatched_count;
+    destination.size_only_count = source.size_only_count;
+    destination.filtered_out_count = source.filtered_out_count;
+    destination.total_count = source.total_count;
+}
+
+template <typename Runner>
+cauth_result_t start_depot_task(cauth_depot_task_kind_t kind,
+                                Runner&& runner,
+                                unsigned long long* out_handle) {
+    if (out_handle == nullptr) {
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+
+    const auto handle = g_next_depot_task_handle.fetch_add(1);
+    auto task = std::make_shared<DepotTask>(kind);
+    {
+        std::lock_guard lock{g_depot_tasks_mutex};
+        g_depot_tasks.emplace(handle, task);
+    }
+
+    std::thread([task, runner = std::forward<Runner>(runner)]() mutable {
+        cauth::steam::depot::set_current_thread_depot_download_hooks(
+            &on_depot_task_progress,
+            &depot_task_cancel_requested,
+            task.get());
+        try {
+            runner(*task);
+        } catch (const std::exception& exception) {
+            std::lock_guard lock{task->mutex};
+            task->succeeded = false;
+            task->canceled = false;
+            task->module_status = "failed";
+            task->message = exception.what();
+        } catch (...) {
+            std::lock_guard lock{task->mutex};
+            task->succeeded = false;
+            task->canceled = false;
+            task->module_status = "failed";
+            task->message = "unexpected exception";
+        }
+        cauth::steam::depot::clear_current_thread_depot_download_hooks();
+        task->finished.store(true);
+    }).detach();
+
+    *out_handle = handle;
+    return CAUTH_OK;
 }
 
 std::optional<std::vector<std::uint8_t>> hex_to_bytes(std::string_view hex) {
@@ -376,7 +527,9 @@ cauth_result_t cauth_depot_download_manifest(unsigned int depot_id,
                                              unsigned long long manifest_gid,
                                              unsigned long long request_code,
                                              unsigned int max_count,
-                                             const char* output_path) {
+                                             const char* output_path,
+                                             cauth_file_write_mode_t write_mode,
+                                             int atomic_write) {
     clear_last_error_detail();
     if (depot_id == 0 || manifest_gid == 0 || request_code == 0 || max_count == 0 ||
         output_path == nullptr || *output_path == '\0') {
@@ -393,6 +546,7 @@ cauth_result_t cauth_depot_download_manifest(unsigned int depot_id,
             request_code,
             max_count,
             output_path,
+            make_write_options(write_mode, atomic_write),
             out,
             err);
         if (exit_code == 0) {
@@ -633,7 +787,9 @@ cauth_result_t cauth_depot_download_chunk(const char* input_path,
                                           unsigned long long chunk_index,
                                           int process_chunk,
                                           unsigned int max_count,
-                                          const char* output_path) {
+                                          const char* output_path,
+                                          cauth_file_write_mode_t write_mode,
+                                          int atomic_write) {
     clear_last_error_detail();
     if (output_path == nullptr || *output_path == '\0' || max_count == 0) {
         set_last_error_detail("output path is required and max_count must be > 0");
@@ -676,6 +832,7 @@ cauth_result_t cauth_depot_download_chunk(const char* input_path,
             process_chunk != 0,
             max_count,
             output_path,
+            make_write_options(write_mode, atomic_write),
             out,
             err);
         if (exit_code != 0) {
@@ -698,7 +855,9 @@ cauth_result_t cauth_depot_download_file(const char* input_path,
                                          unsigned long long file_index,
                                          int has_file_index,
                                          unsigned int max_count,
-                                         const char* output_path) {
+                                         const char* output_path,
+                                         cauth_file_write_mode_t write_mode,
+                                         int atomic_write) {
     clear_last_error_detail();
     if (output_path == nullptr || *output_path == '\0' || max_count == 0 ||
         depot_key_hex == nullptr || *depot_key_hex == '\0') {
@@ -732,6 +891,7 @@ cauth_result_t cauth_depot_download_file(const char* input_path,
             *selected_file_index,
             max_count,
             output_path,
+            make_write_options(write_mode, atomic_write),
             out,
             err);
         if (exit_code != 0) {
@@ -751,7 +911,9 @@ cauth_result_t cauth_depot_download_file(const char* input_path,
 cauth_result_t cauth_depot_download_all_files(const char* input_path,
                                               const char* depot_key_hex,
                                               unsigned int max_count,
-                                              const char* output_root) {
+                                              const char* output_root,
+                                              cauth_file_write_mode_t write_mode,
+                                              int atomic_write) {
     clear_last_error_detail();
     if (output_root == nullptr || *output_root == '\0' || max_count == 0 ||
         depot_key_hex == nullptr || *depot_key_hex == '\0') {
@@ -773,6 +935,7 @@ cauth_result_t cauth_depot_download_all_files(const char* input_path,
             loaded_manifest,
             max_count,
             output_root,
+            make_write_options(write_mode, atomic_write),
             out,
             err);
         if (exit_code != 0) {
@@ -802,6 +965,7 @@ cauth_result_t cauth_depot_verify_local_files(const char* input_path,
 
     out_response->present = 0;
     out_response->clean = 0;
+    out_response->module_status = "";
     out_response->checked_count = 0;
     out_response->ok_count = 0;
     out_response->missing_count = 0;
@@ -831,6 +995,8 @@ cauth_result_t cauth_depot_verify_local_files(const char* input_path,
 
         out_response->present = 1;
         out_response->clean = exit_code == 0 ? 1 : 0;
+        g_depot_verify_module_status = verify_report.module_status;
+        out_response->module_status = g_depot_verify_module_status.c_str();
         out_response->checked_count = verify_report.checked_count;
         out_response->ok_count = verify_report.ok_count;
         out_response->missing_count = verify_report.missing_count;
@@ -910,4 +1076,361 @@ cauth_result_t cauth_depot_fetch_manifest_request_code(
     } catch (...) {
         return CAUTH_ERROR_INTERNAL;
     }
+}
+
+cauth_result_t cauth_depot_start_manifest_download(unsigned int depot_id,
+                                                   unsigned long long manifest_gid,
+                                                   unsigned long long request_code,
+                                                   unsigned int max_count,
+                                                   const char* output_path,
+                                                   cauth_file_write_mode_t write_mode,
+                                                   int atomic_write,
+                                                   unsigned long long* out_handle) {
+    clear_last_error_detail();
+    if (output_path == nullptr || *output_path == '\0' || depot_id == 0 || manifest_gid == 0 ||
+        request_code == 0 || max_count == 0) {
+        set_last_error_detail(
+            "depot_id, manifest_gid, request_code, max_count, and output_path are required");
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+
+    const auto output_path_copy = std::string{output_path};
+    const auto write_options = make_write_options(write_mode, atomic_write);
+    return start_depot_task(
+        CAUTH_DEPOT_TASK_MANIFEST_DOWNLOAD,
+        [depot_id, manifest_gid, request_code, max_count, output_path_copy, write_options](
+            DepotTask& task) {
+            std::ostringstream out;
+            std::ostringstream err;
+            const auto exit_code = cauth::steam::depot::download_manifest_to_path(
+                depot_id,
+                manifest_gid,
+                request_code,
+                max_count,
+                output_path_copy,
+                write_options,
+                out,
+                err);
+            std::lock_guard lock{task.mutex};
+            task.succeeded = exit_code == 0;
+            task.canceled = !task.succeeded && message_indicates_cancel(err.str());
+            task.module_status = task.canceled ? "canceled" : (task.succeeded ? "succeeded" : "failed");
+            task.message = err.str().empty() ? out.str() : err.str();
+            if (task.message.empty()) {
+                task.message = task.succeeded ? "manifest download complete"
+                                             : "manifest download failed";
+            }
+        },
+        out_handle);
+}
+
+cauth_result_t cauth_depot_start_download_chunk(const char* input_path,
+                                                const char* depot_key_hex,
+                                                const char* file_path,
+                                                unsigned long long file_index,
+                                                int has_file_index,
+                                                unsigned long long chunk_index,
+                                                int process_chunk,
+                                                unsigned int max_count,
+                                                const char* output_path,
+                                                cauth_file_write_mode_t write_mode,
+                                                int atomic_write,
+                                                unsigned long long* out_handle) {
+    clear_last_error_detail();
+    if (output_path == nullptr || *output_path == '\0' || max_count == 0) {
+        set_last_error_detail("manifest input path, output path, and max_count are required");
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+
+    cauth::steam::depot::LoadedDepotManifest loaded_manifest;
+    const auto load_result =
+        load_manifest_for_file_operation(input_path, depot_key_hex, loaded_manifest);
+    if (load_result != CAUTH_OK) {
+        return load_result;
+    }
+
+    std::ostringstream selection_err;
+    const auto selected_file_index = cauth::steam::depot::resolve_file_selection(
+        loaded_manifest,
+        static_cast<std::size_t>(file_index),
+        has_file_index != 0,
+        nullable_string(file_path),
+        selection_err);
+    if (!selected_file_index.has_value()) {
+        set_last_error_detail(selection_err.str());
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+    if (!cauth::steam::depot::validate_chunk_selection(
+            loaded_manifest,
+            *selected_file_index,
+            static_cast<std::size_t>(chunk_index),
+            selection_err)) {
+        set_last_error_detail(selection_err.str());
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+
+    const auto output_path_copy = std::string{output_path};
+    const auto write_options = make_write_options(write_mode, atomic_write);
+    return start_depot_task(
+        CAUTH_DEPOT_TASK_CHUNK_DOWNLOAD,
+        [loaded_manifest = std::move(loaded_manifest),
+         selected_file_index = *selected_file_index,
+         chunk_index = static_cast<std::size_t>(chunk_index),
+         process_chunk = process_chunk != 0,
+         max_count,
+         output_path_copy,
+         write_options](DepotTask& task) {
+            std::ostringstream out;
+            std::ostringstream err;
+            const auto exit_code = cauth::steam::depot::download_chunk_from_manifest(
+                loaded_manifest,
+                selected_file_index,
+                chunk_index,
+                process_chunk,
+                max_count,
+                output_path_copy,
+                write_options,
+                out,
+                err);
+            std::lock_guard lock{task.mutex};
+            task.succeeded = exit_code == 0;
+            task.canceled = !task.succeeded && message_indicates_cancel(err.str());
+            task.module_status = task.canceled ? "canceled" : (task.succeeded ? "succeeded" : "failed");
+            task.message = err.str().empty() ? out.str() : err.str();
+            if (task.message.empty()) {
+                task.message = task.succeeded ? "chunk download complete" : "chunk download failed";
+            }
+        },
+        out_handle);
+}
+
+cauth_result_t cauth_depot_start_download_file(const char* input_path,
+                                               const char* depot_key_hex,
+                                               const char* file_path,
+                                               unsigned long long file_index,
+                                               int has_file_index,
+                                               unsigned int max_count,
+                                               const char* output_path,
+                                               cauth_file_write_mode_t write_mode,
+                                               int atomic_write,
+                                               unsigned long long* out_handle) {
+    clear_last_error_detail();
+    if (output_path == nullptr || *output_path == '\0' || max_count == 0 ||
+        depot_key_hex == nullptr || *depot_key_hex == '\0') {
+        set_last_error_detail("manifest input path, depot key, output path, and max_count are required");
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+
+    cauth::steam::depot::LoadedDepotManifest loaded_manifest;
+    const auto load_result =
+        load_manifest_for_file_operation(input_path, depot_key_hex, loaded_manifest);
+    if (load_result != CAUTH_OK) {
+        return load_result;
+    }
+
+    std::ostringstream selection_err;
+    const auto selected_file_index = cauth::steam::depot::resolve_file_selection(
+        loaded_manifest,
+        static_cast<std::size_t>(file_index),
+        has_file_index != 0,
+        nullable_string(file_path),
+        selection_err);
+    if (!selected_file_index.has_value()) {
+        set_last_error_detail(selection_err.str());
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+
+    const auto output_path_copy = std::string{output_path};
+    const auto write_options = make_write_options(write_mode, atomic_write);
+    return start_depot_task(
+        CAUTH_DEPOT_TASK_FILE_DOWNLOAD,
+        [loaded_manifest = std::move(loaded_manifest),
+         selected_file_index = *selected_file_index,
+         max_count,
+         output_path_copy,
+         write_options](DepotTask& task) {
+            std::ostringstream out;
+            std::ostringstream err;
+            const auto exit_code = cauth::steam::depot::download_file_from_manifest(
+                loaded_manifest,
+                selected_file_index,
+                max_count,
+                output_path_copy,
+                write_options,
+                out,
+                err);
+            std::lock_guard lock{task.mutex};
+            task.succeeded = exit_code == 0;
+            task.canceled = !task.succeeded && message_indicates_cancel(err.str());
+            task.module_status = task.canceled ? "canceled" : (task.succeeded ? "succeeded" : "failed");
+            task.message = err.str().empty() ? out.str() : err.str();
+            if (task.message.empty()) {
+                task.message = task.succeeded ? "file download complete" : "file download failed";
+            }
+        },
+        out_handle);
+}
+
+cauth_result_t cauth_depot_start_download_all_files(const char* input_path,
+                                                    const char* depot_key_hex,
+                                                    unsigned int max_count,
+                                                    const char* output_root,
+                                                    cauth_file_write_mode_t write_mode,
+                                                    int atomic_write,
+                                                    unsigned long long* out_handle) {
+    clear_last_error_detail();
+    if (output_root == nullptr || *output_root == '\0' || max_count == 0 ||
+        depot_key_hex == nullptr || *depot_key_hex == '\0') {
+        set_last_error_detail("manifest input path, output root, max_count, and depot key are required");
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+
+    cauth::steam::depot::LoadedDepotManifest loaded_manifest;
+    const auto load_result =
+        load_manifest_for_file_operation(input_path, depot_key_hex, loaded_manifest);
+    if (load_result != CAUTH_OK) {
+        return load_result;
+    }
+
+    const auto output_root_copy = std::string{output_root};
+    const auto write_options = make_write_options(write_mode, atomic_write);
+    return start_depot_task(
+        CAUTH_DEPOT_TASK_ALL_FILES_DOWNLOAD,
+        [loaded_manifest = std::move(loaded_manifest),
+         max_count,
+         output_root_copy,
+         write_options](DepotTask& task) {
+            std::ostringstream out;
+            std::ostringstream err;
+            const auto exit_code = cauth::steam::depot::download_all_files_from_manifest(
+                loaded_manifest,
+                max_count,
+                output_root_copy,
+                write_options,
+                out,
+                err);
+            std::lock_guard lock{task.mutex};
+            task.succeeded = exit_code == 0;
+            task.canceled = !task.succeeded && message_indicates_cancel(err.str());
+            task.module_status = task.canceled ? "canceled" : (task.succeeded ? "succeeded" : "failed");
+            task.message = err.str().empty() ? out.str() : err.str();
+            if (task.message.empty()) {
+                task.message = task.succeeded ? "all-files download complete"
+                                             : "all-files download failed";
+            }
+        },
+        out_handle);
+}
+
+cauth_result_t cauth_depot_start_verify_local_files(const char* input_path,
+                                                    const char* depot_key_hex,
+                                                    const char* local_root,
+                                                    const char* filter_text,
+                                                    unsigned long long* out_handle) {
+    clear_last_error_detail();
+    if (local_root == nullptr || *local_root == '\0') {
+        set_last_error_detail("manifest input path and local root are required");
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+
+    cauth::steam::depot::LoadedDepotManifest loaded_manifest;
+    const auto load_result =
+        load_manifest_for_file_operation(input_path, depot_key_hex, loaded_manifest);
+    if (load_result != CAUTH_OK) {
+        return load_result;
+    }
+
+    const auto local_root_copy = std::string{local_root};
+    const auto filter_text_copy = nullable_string(filter_text);
+    return start_depot_task(
+        CAUTH_DEPOT_TASK_VERIFY_LOCAL,
+        [loaded_manifest = std::move(loaded_manifest),
+         local_root_copy,
+         filter_text_copy](DepotTask& task) {
+            cauth::steam::depot::LocalVerifyReport verify_report;
+            std::ostringstream out;
+            std::ostringstream err;
+            const auto exit_code = cauth::steam::depot::verify_local_files_against_manifest(
+                loaded_manifest,
+                local_root_copy,
+                filter_text_copy,
+                out,
+                err,
+                &verify_report);
+            std::lock_guard lock{task.mutex};
+            task.has_verify_report = true;
+            fill_verify_report(verify_report, task.verify_report, exit_code == 0 ? 1 : 0);
+            task.verify_report_module_status = verify_report.module_status;
+            task.verify_report.module_status = task.verify_report_module_status.c_str();
+            task.succeeded = exit_code == 0;
+            const auto detail = err.str().empty() ? out.str() : err.str();
+            task.canceled = !task.succeeded && message_indicates_cancel(detail);
+            task.module_status = verify_report.module_status;
+            task.message = detail;
+            if (task.message.empty()) {
+                task.message = task.succeeded ? "verify complete" : "verify failed";
+            }
+            if (task.canceled) {
+                task.module_status = "canceled";
+            } else if (!task.succeeded && task.module_status == "idle") {
+                task.module_status = "failed";
+            }
+        },
+        out_handle);
+}
+
+cauth_result_t cauth_depot_poll_task(unsigned long long handle,
+                                     cauth_depot_task_snapshot_t* out_snapshot) {
+    if (out_snapshot == nullptr) {
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+    const auto task = find_depot_task(handle);
+    if (task == nullptr) {
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+
+    std::lock_guard lock{task->mutex};
+    g_depot_task_module_status = task->module_status;
+    g_depot_task_phase = task->phase;
+    g_depot_task_target = task->target;
+    g_depot_task_message = task->message;
+
+    out_snapshot->handle = handle;
+    out_snapshot->active = task->finished.load() ? 0 : 1;
+    out_snapshot->succeeded = task->succeeded ? 1 : 0;
+    out_snapshot->canceled = task->canceled ? 1 : 0;
+    out_snapshot->kind = task->kind;
+    out_snapshot->module_status = g_depot_task_module_status.c_str();
+    out_snapshot->phase = g_depot_task_phase.c_str();
+    out_snapshot->target = g_depot_task_target.c_str();
+    out_snapshot->message = g_depot_task_message.c_str();
+    out_snapshot->completed_steps = task->completed_steps;
+    out_snapshot->total_steps = task->total_steps;
+    out_snapshot->completed_bytes = task->completed_bytes;
+    out_snapshot->total_bytes = task->total_bytes;
+    out_snapshot->has_verify_report = task->has_verify_report ? 1 : 0;
+    out_snapshot->verify_report = task->verify_report;
+    if (out_snapshot->has_verify_report != 0) {
+        out_snapshot->verify_report.module_status = task->verify_report_module_status.c_str();
+    }
+    return CAUTH_OK;
+}
+
+void cauth_depot_cancel_task(unsigned long long handle) {
+    const auto task = find_depot_task(handle);
+    if (task == nullptr) {
+        return;
+    }
+    task->cancel_requested.store(true);
+    std::lock_guard lock{task->mutex};
+    task->module_status = "canceled";
+    task->phase = "Cancel requested";
+    if (task->message.empty()) {
+        task->message = "Cancel requested...";
+    }
+}
+
+void cauth_depot_dispose_task(unsigned long long handle) {
+    std::lock_guard lock{g_depot_tasks_mutex};
+    g_depot_tasks.erase(handle);
 }

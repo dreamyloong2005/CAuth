@@ -22,6 +22,7 @@ import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.toClipEntry
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.cauth.android.steam.auth.AuthTaskSnapshot
 import com.cauth.android.steam.auth.CAuthSteamAuthController
 import com.cauth.android.steam.auth.CAuthSteamAuthState
 import com.cauth.android.steam.auth.LoginPlatform
@@ -184,13 +185,29 @@ fun CAuthSteamAuthActionButtons(
 @Composable
 fun CAuthSteamAuthStatus(
     statusText: String,
+    moduleStatus: String,
+    moduleTask: AuthTaskSnapshot?,
     modifier: Modifier = Modifier,
 ) {
-    Text(
-        text = statusText,
+    Column(
         modifier = modifier,
-        style = MaterialTheme.typography.bodyMedium,
-    )
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = statusText,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Text(
+            text = "Module status: ${moduleStatus.ifBlank { "idle" }}",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        moduleTask?.let { task ->
+            Text(
+                text = "Task: ${task.kind} [${task.moduleStatus}] ${task.message}",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
 }
 
 @Composable

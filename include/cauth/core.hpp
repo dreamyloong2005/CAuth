@@ -7,6 +7,7 @@
 #include "core/session/auth_session_storage.hpp"
 #include "core/session/session_repository.hpp"
 #include "core/platform/http_client.hpp"
+#include "core/platform/file_write.hpp"
 #include "core/platform/password_crypto.hpp"
 #include "core/platform/rsa_public_key.hpp"
 #include "core/platform/session_repository_factory.hpp"

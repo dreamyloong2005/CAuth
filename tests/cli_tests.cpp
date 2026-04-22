@@ -49,8 +49,18 @@ int main() {
         auto argv = make_argv(args);
         const auto exit_code = cauth::cli::run_cli(static_cast<int>(argv.size()), argv.data(), out, err);
         if (expect_true(exit_code == 0, "version command should succeed") != 0) return 1;
-        if (expect_true(contains(out.str(), "CAuth 0.4.0"), "version output should include semantic version") != 0) return 1;
+        if (expect_true(contains(out.str(), "CAuth 0.5.0"), "version output should include semantic version") != 0) return 1;
         if (expect_true(err.str().empty(), "version command should not write stderr") != 0) return 1;
+    }
+
+    {
+        std::ostringstream out;
+        std::ostringstream err;
+        std::vector<std::string> args = {"cauth", "--memory-session-store", "--version"};
+        auto argv = make_argv(args);
+        const auto exit_code = cauth::cli::run_cli(static_cast<int>(argv.size()), argv.data(), out, err);
+        if (expect_true(exit_code == 0, "version command with memory session store should succeed") != 0) return 1;
+        if (expect_true(contains(out.str(), "CAuth 0.5.0"), "memory session store should still dispatch version") != 0) return 1;
     }
 
     {
@@ -176,6 +186,26 @@ int main() {
         std::ostringstream captured_err;
         ScopedStreamRedirect redirect_out(std::cout, captured_out.rdbuf());
         ScopedStreamRedirect redirect_err(std::cerr, captured_err.rdbuf());
+        std::vector<std::string> args = {
+            "cauth", "steam", "depot", "manifest-download",
+            "--depot-id", "441",
+            "--manifest-gid", "123",
+            "--request-code", "456",
+            "--out", "manifest.bin",
+            "--skip-existing",
+            "--fail-if-exists"};
+        auto argv = make_argv(args);
+        const auto exit_code = cauth::cli::run_steam_depot(static_cast<int>(argv.size()) - 1, argv.data() + 1);
+        if (expect_true(exit_code == 2, "conflicting depot write mode flags should be rejected") != 0) return 1;
+        if (expect_true(contains(captured_err.str(), "only one of --overwrite, --skip-existing, or --fail-if-exists may be used"),
+                        "depot parser should reject conflicting write mode flags") != 0) return 1;
+    }
+
+    {
+        std::ostringstream captured_out;
+        std::ostringstream captured_err;
+        ScopedStreamRedirect redirect_out(std::cout, captured_out.rdbuf());
+        ScopedStreamRedirect redirect_err(std::cerr, captured_err.rdbuf());
         std::vector<std::string> args = {"cauth", "steam", "cloud", "wat"};
         auto argv = make_argv(args);
         const auto exit_code = cauth::cli::run_steam_cloud(static_cast<int>(argv.size()) - 1, argv.data() + 1);
@@ -207,6 +237,24 @@ int main() {
         const auto exit_code = cauth::cli::run_steam_cloud(static_cast<int>(argv.size()) - 1, argv.data() + 1);
         if (expect_true(exit_code == 2, "steam cloud pull without local-root should be rejected") != 0) return 1;
         if (expect_true(contains(captured_err.str(), "steam cloud pull requires --local-root <path>"), "steam cloud pull should require local-root") != 0) return 1;
+    }
+
+    {
+        std::ostringstream captured_out;
+        std::ostringstream captured_err;
+        ScopedStreamRedirect redirect_out(std::cout, captured_out.rdbuf());
+        ScopedStreamRedirect redirect_err(std::cerr, captured_err.rdbuf());
+        std::vector<std::string> args = {
+            "cauth", "steam", "cloud", "push",
+            "--steam-id", "76561198000000000",
+            "--app-id", "440",
+            "--local-root", "D:/saves",
+            "--atomic-write"};
+        auto argv = make_argv(args);
+        const auto exit_code = cauth::cli::run_steam_cloud(static_cast<int>(argv.size()) - 1, argv.data() + 1);
+        if (expect_true(exit_code == 2, "steam cloud push should reject local write flags") != 0) return 1;
+        if (expect_true(contains(captured_err.str(), "steam cloud push does not support local write options"),
+                        "steam cloud push should explain unsupported local write flags") != 0) return 1;
     }
 
     {

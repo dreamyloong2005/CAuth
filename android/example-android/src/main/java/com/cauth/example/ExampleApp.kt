@@ -16,6 +16,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -34,6 +35,8 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.toClipEntry
 import androidx.compose.ui.unit.dp
 import com.cauth.android.CAuthClient
+import com.cauth.android.CAuthClientOptions
+import com.cauth.android.CAuthSessionStorageKind
 import com.cauth.android.compose.CAuthSteamAuthActionButtons
 import com.cauth.android.compose.CAuthSteamAuthForm
 import com.cauth.android.compose.CAuthSteamAuthHeader
@@ -86,7 +89,19 @@ fun CAuthExampleApp() {
 @Composable
 private fun ExampleScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val client = remember { CAuthClient.create() }
+    var sessionStorageKind by remember { mutableStateOf(CAuthSessionStorageKind.Default) }
+    var sessionStorageNamespace by remember { mutableStateOf("cauth_example_store") }
+    var sessionStorageKey by remember { mutableStateOf("auth_session_v1") }
+    var appliedClientOptions by remember {
+        mutableStateOf(
+            buildExampleClientOptions(
+                kind = sessionStorageKind,
+                namespace = sessionStorageNamespace,
+                key = sessionStorageKey,
+            ),
+        )
+    }
+    val client = remember(appliedClientOptions) { CAuthClient.create(appliedClientOptions) }
     DisposableEffect(client) {
         onDispose { client.close() }
     }
@@ -127,6 +142,9 @@ private fun ExampleScreen(modifier: Modifier = Modifier) {
     }
     val defaultAllFilesRoot = remember(defaultDepotRoot) {
         defaultDepotRoot
+    }
+    val activeSessionStoreSummary = remember(appliedClientOptions) {
+        describeExampleClientOptions(appliedClientOptions)
     }
 
     LaunchedEffect(defaultCloudRoot, cloudState.localRoot) {
@@ -372,6 +390,72 @@ private fun ExampleScreen(modifier: Modifier = Modifier) {
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                Text("Session Store", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = "Use Android secure storage namespaces or an in-memory session store here. Desktop CLI and FFI additionally support file-path session stores.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(
+                        CAuthSessionStorageKind.Default to "Default",
+                        CAuthSessionStorageKind.Memory to "Memory",
+                        CAuthSessionStorageKind.SecureStorage to "Secure",
+                    ).forEach { (kind, label) ->
+                        FilterChip(
+                            selected = sessionStorageKind == kind,
+                            onClick = { sessionStorageKind = kind },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                if (sessionStorageKind != CAuthSessionStorageKind.Memory) {
+                    OutlinedTextField(
+                        value = sessionStorageNamespace,
+                        onValueChange = { sessionStorageNamespace = it.trim() },
+                        label = { Text("Secure storage namespace") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = sessionStorageKey,
+                        onValueChange = { sessionStorageKey = it.trim() },
+                        label = { Text("Secure storage key") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                }
+                Text(
+                    text = "Active: $activeSessionStoreSummary",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Button(
+                    onClick = {
+                        appliedClientOptions = buildExampleClientOptions(
+                            kind = sessionStorageKind,
+                            namespace = sessionStorageNamespace,
+                            key = sessionStorageKey,
+                        )
+                        depotWorkflowState = null
+                        cloudWorkflowState = null
+                        depotLastFailureSnapshot = null
+                        depotRetrySnapshot = null
+                        cloudLastFailureSnapshot = null
+                        cloudRetrySnapshot = null
+                    },
+                ) {
+                    Text("Recreate Client")
+                }
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 Text("Test Surface", style = MaterialTheme.typography.titleMedium)
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -459,7 +543,11 @@ private fun ExampleScreen(modifier: Modifier = Modifier) {
                             onPlatformSelected = authController::setLoginPlatform,
                         )
                         CAuthSteamAuthActionButtons(controller = authController)
-                        CAuthSteamAuthStatus(statusText = authState.statusText)
+                        CAuthSteamAuthStatus(
+                            statusText = authState.statusText,
+                            moduleStatus = authState.moduleStatus,
+                            moduleTask = authState.moduleTask,
+                        )
                         CAuthSteamAuthTrace(traceLines = authState.traceLines)
                         CAuthSteamAuthResults(state = authState, controller = authController)
                     }
@@ -704,7 +792,12 @@ private fun ExampleScreen(modifier: Modifier = Modifier) {
 
 private fun buildAuthStatusEntries(state: CAuthSteamAuthState): List<ExampleStatusEntry> = buildList {
     add(ExampleStatusEntry("Status", state.statusText))
+    add(ExampleStatusEntry("Module Status", state.moduleStatus))
     add(ExampleStatusEntry("Busy", state.busy.toString()))
+    state.moduleTask?.let {
+        add(ExampleStatusEntry("Task", it.kind))
+        add(ExampleStatusEntry("Task Status", it.moduleStatus))
+    }
     state.loginResult?.let {
         add(ExampleStatusEntry("Login", it.status.name))
         add(ExampleStatusEntry("SteamID", it.steamId.toString()))
@@ -734,7 +827,12 @@ private fun buildAuthStatusTone(state: CAuthSteamAuthState): ExampleStatusTone =
 
 private fun buildDepotStatusEntries(state: CAuthSteamDepotState): List<ExampleStatusEntry> = buildList {
     add(ExampleStatusEntry("Status", state.statusText))
+    add(ExampleStatusEntry("Module Status", state.moduleStatus))
     add(ExampleStatusEntry("Busy", state.busy.toString()))
+    state.moduleTask?.let {
+        add(ExampleStatusEntry("Task", it.label))
+        add(ExampleStatusEntry("Task Status", it.moduleStatus))
+    }
     add(ExampleStatusEntry("AppID", state.appIdText.ifBlank { "(none)" }))
     add(ExampleStatusEntry("Branch", state.branch.ifBlank { "(none)" }))
     resolveSelectedDepotPlatform(state)?.let {
@@ -783,7 +881,12 @@ private fun buildDepotStatusTone(state: CAuthSteamDepotState): ExampleStatusTone
 
 private fun buildCloudStatusEntries(state: CAuthSteamCloudState): List<ExampleStatusEntry> = buildList {
     add(ExampleStatusEntry("Status", state.statusText))
+    add(ExampleStatusEntry("Module Status", state.moduleStatus))
     add(ExampleStatusEntry("Busy", state.busy.toString()))
+    state.moduleTask?.let {
+        add(ExampleStatusEntry("Task", it.label))
+        add(ExampleStatusEntry("Task Status", it.moduleStatus))
+    }
     add(ExampleStatusEntry("AppID", state.appIdText.ifBlank { "(none)" }))
     add(ExampleStatusEntry("Remote Root", state.remoteRoot.ifBlank { "(none)" }))
     add(ExampleStatusEntry("Local Root", state.localRoot.ifBlank { "(none)" }))
@@ -1685,9 +1788,17 @@ private fun captureCloudWorkflowSnapshot(
 
 private fun buildAuthSummary(state: CAuthSteamAuthState): String = buildString {
     appendLine("status=${state.statusText}")
+    appendLine("moduleStatus=${state.moduleStatus}")
     appendLine("busy=${state.busy}")
+    state.moduleTask?.let {
+        appendLine("moduleTask.kind=${it.kind}")
+        appendLine("moduleTask.active=${it.active}")
+        appendLine("moduleTask.moduleStatus=${it.moduleStatus}")
+        appendLine("moduleTask.message=${it.message}")
+    }
     state.loginResult?.let {
         appendLine("login.status=${it.status}")
+        appendLine("login.moduleStatus=${it.moduleStatus}")
         appendLine("login.message=${it.message}")
         appendLine("login.steamId=${it.steamId}")
         appendLine("login.account=${it.accountName ?: "(none)"}")
@@ -1701,11 +1812,13 @@ private fun buildAuthSummary(state: CAuthSteamAuthState): String = buildString {
     }
     state.cmProbe?.let {
         appendLine("cm.probe.ok=${it.ok}")
+        appendLine("cm.probe.moduleStatus=${it.moduleStatus}")
         appendLine("cm.probe.endpoint=${it.endpoint ?: "(none)"}")
         appendLine("cm.probe.status=${it.status ?: "(none)"}")
     }
     state.cmLogon?.let {
         appendLine("cm.logon.ok=${it.ok}")
+        appendLine("cm.logon.moduleStatus=${it.moduleStatus}")
         appendLine("cm.logon.endpoint=${it.endpoint ?: "(none)"}")
         appendLine("cm.logon.eresult=${it.eresult}")
         appendLine("cm.logon.extended=${it.eresultExtended}")
@@ -1715,7 +1828,14 @@ private fun buildAuthSummary(state: CAuthSteamAuthState): String = buildString {
 
 private fun buildDepotSummary(state: CAuthSteamDepotState): String = buildString {
     appendLine("status=${state.statusText}")
+    appendLine("moduleStatus=${state.moduleStatus}")
     appendLine("busy=${state.busy}")
+    state.moduleTask?.let {
+        appendLine("moduleTask.label=${it.label}")
+        appendLine("moduleTask.active=${it.active}")
+        appendLine("moduleTask.moduleStatus=${it.moduleStatus}")
+        appendLine("moduleTask.message=${it.message}")
+    }
     appendLine("appId=${state.appIdText}")
     appendLine("branch=${state.branch}")
     appendLine("requestCodeText=${state.requestCodeText}")
@@ -1749,6 +1869,7 @@ private fun buildDepotSummary(state: CAuthSteamDepotState): String = buildString
     state.localVerify?.let {
         appendLine("localVerify.present=${it.present}")
         appendLine("localVerify.clean=${it.clean}")
+        appendLine("localVerify.moduleStatus=${it.moduleStatus}")
         appendLine("localVerify.checked=${it.checkedCount}")
         appendLine("localVerify.ok=${it.okCount}")
         appendLine("localVerify.missing=${it.missingCount}")
@@ -1763,6 +1884,7 @@ private fun buildDepotSummary(state: CAuthSteamDepotState): String = buildString
         appendLine("downloadTask.finished=${it.finished}")
         appendLine("downloadTask.canceled=${it.canceled}")
         appendLine("downloadTask.succeeded=${it.succeeded}")
+        appendLine("downloadTask.moduleStatus=${it.moduleStatus}")
         appendLine("downloadTask.phase=${it.phase}")
         appendLine("downloadTask.progress=${it.progressSummary}")
         appendLine("downloadTask.target=${it.target}")
@@ -1772,13 +1894,21 @@ private fun buildDepotSummary(state: CAuthSteamDepotState): String = buildString
 
 private fun buildCloudSummary(state: CAuthSteamCloudState): String = buildString {
     appendLine("status=${state.statusText}")
+    appendLine("moduleStatus=${state.moduleStatus}")
     appendLine("busy=${state.busy}")
+    state.moduleTask?.let {
+        appendLine("moduleTask.label=${it.label}")
+        appendLine("moduleTask.active=${it.active}")
+        appendLine("moduleTask.moduleStatus=${it.moduleStatus}")
+        appendLine("moduleTask.message=${it.message}")
+    }
     appendLine("appId=${state.appIdText}")
     appendLine("localRoot=${state.localRoot}")
     appendLine("remoteRoot=${state.remoteRoot}")
     appendLine("conflictPolicy=${state.conflictPolicy}")
     state.fileList?.let {
         appendLine("fileList.ok=${it.ok}")
+        appendLine("fileList.moduleStatus=${it.moduleStatus}")
         appendLine("fileList.eresult=${it.eresult}")
         appendLine("fileList.total=${it.totalFiles}")
         appendLine("fileList.returned=${it.files.size}")
@@ -1786,6 +1916,7 @@ private fun buildCloudSummary(state: CAuthSteamCloudState): String = buildString
     state.verifyResult?.let {
         appendLine("verify.present=${it.present}")
         appendLine("verify.clean=${it.clean}")
+        appendLine("verify.moduleStatus=${it.moduleStatus}")
         appendLine("verify.includeExtraLocal=${it.includeExtraLocal}")
         appendLine("verify.checked=${it.checkedCount}")
         appendLine("verify.ok=${it.okCount}")
@@ -1799,6 +1930,7 @@ private fun buildCloudSummary(state: CAuthSteamCloudState): String = buildString
     }
     state.operationResult?.let {
         appendLine("result.ok=${it.ok}")
+        appendLine("result.moduleStatus=${it.moduleStatus}")
         appendLine("result.direction=${it.direction}")
         appendLine("result.transferred=${it.transferredCount}")
         appendLine("result.deleted=${it.deletedCount}")
@@ -1813,12 +1945,14 @@ private fun buildCloudSummary(state: CAuthSteamCloudState): String = buildString
         appendLine("transferTask.finished=${it.finished}")
         appendLine("transferTask.canceled=${it.canceled}")
         appendLine("transferTask.succeeded=${it.succeeded}")
+        appendLine("transferTask.moduleStatus=${it.moduleStatus}")
         appendLine("transferTask.phase=${it.phase}")
         appendLine("transferTask.progress=${it.progressSummary}")
         appendLine("transferTask.target=${it.target}")
         appendLine("transferTask.message=${it.message}")
         it.result?.let { result ->
             appendLine("transferTask.result.ok=${result.ok}")
+            appendLine("transferTask.result.moduleStatus=${result.moduleStatus}")
             appendLine("transferTask.result.direction=${result.direction}")
             appendLine("transferTask.result.transferred=${result.transferredCount}")
             appendLine("transferTask.result.deleted=${result.deletedCount}")
@@ -1827,6 +1961,40 @@ private fun buildCloudSummary(state: CAuthSteamCloudState): String = buildString
             appendLine("transferTask.result.bytes=${result.transferredBytes}")
             appendLine("transferTask.result.message=${result.message}")
         }
+    }
+}
+
+private fun buildExampleClientOptions(
+    kind: CAuthSessionStorageKind,
+    namespace: String,
+    key: String,
+): CAuthClientOptions = when (kind) {
+    CAuthSessionStorageKind.Memory -> CAuthClientOptions(
+        sessionStorageKind = CAuthSessionStorageKind.Memory,
+    )
+    CAuthSessionStorageKind.SecureStorage -> CAuthClientOptions(
+        sessionStorageKind = CAuthSessionStorageKind.SecureStorage,
+        sessionStorageNamespace = namespace.ifBlank { null },
+        sessionStorageKey = key.ifBlank { null },
+    )
+    else -> CAuthClientOptions(
+        sessionStorageKind = CAuthSessionStorageKind.Default,
+        sessionStorageNamespace = namespace.ifBlank { null },
+        sessionStorageKey = key.ifBlank { null },
+    )
+}
+
+private fun describeExampleClientOptions(options: CAuthClientOptions): String = when (options.sessionStorageKind) {
+    CAuthSessionStorageKind.Memory -> "memory-only session repository"
+    CAuthSessionStorageKind.SecureStorage -> {
+        val namespace = options.sessionStorageNamespace ?: "(default namespace)"
+        val key = options.sessionStorageKey ?: "(default key)"
+        "secure storage namespace=$namespace key=$key"
+    }
+    else -> {
+        val namespace = options.sessionStorageNamespace ?: "(default namespace)"
+        val key = options.sessionStorageKey ?: "(default key)"
+        "platform default with namespace=$namespace key=$key"
     }
 }
 

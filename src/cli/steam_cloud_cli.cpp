@@ -4,6 +4,8 @@
 #include "core/platform/session_repository_factory.hpp"
 #include "steam/cloud/steam_cloud_application.hpp"
 
+#include <atomic>
+#include <csignal>
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -13,6 +15,40 @@
 
 namespace {
 using namespace cauth::cli::support;
+
+std::atomic_bool g_cloud_cli_cancel_requested{false};
+
+void on_cloud_cli_signal(int) {
+    g_cloud_cli_cancel_requested.store(true);
+}
+
+bool cloud_cli_cancel_requested(void*) {
+    return g_cloud_cli_cancel_requested.load();
+}
+
+int apply_write_mode_flag(cauth::core::platform::FileWriteOptions& write_options,
+                          bool& has_write_mode,
+                          std::string_view arg,
+                          std::ostream& err) {
+    using WriteMode = cauth::core::platform::FileWriteMode;
+    WriteMode parsed_mode = WriteMode::Overwrite;
+    if (arg == "--overwrite") {
+        parsed_mode = WriteMode::Overwrite;
+    } else if (arg == "--skip-existing") {
+        parsed_mode = WriteMode::SkipExisting;
+    } else if (arg == "--fail-if-exists") {
+        parsed_mode = WriteMode::FailIfExists;
+    } else {
+        return 0;
+    }
+    if (has_write_mode && write_options.mode != parsed_mode) {
+        err << "only one of --overwrite, --skip-existing, or --fail-if-exists may be used\n";
+        return -1;
+    }
+    write_options.mode = parsed_mode;
+    has_write_mode = true;
+    return 1;
+}
 
 struct CloudCliProgressState {
     ProgressLineState line_state;
@@ -25,7 +61,11 @@ void on_cloud_progress(const cauth::steam::cloud::SteamCloudTransferProgress& pr
         return;
     }
 
-    std::string line = "steam cloud: " + progress.phase;
+    std::string line = "steam cloud";
+    if (!progress.module_status.empty()) {
+        line += " [" + progress.module_status + "]";
+    }
+    line += ": " + progress.phase;
     if (progress.total_steps != 0) {
         line += " [";
         line += std::to_string(progress.completed_steps);
@@ -50,24 +90,26 @@ void on_cloud_progress(const cauth::steam::cloud::SteamCloudTransferProgress& pr
 
 struct ScopedCloudCliProgress {
     explicit ScopedCloudCliProgress(bool enabled) : enabled_(enabled) {
-        if (!enabled_) {
-            return;
-        }
+        g_cloud_cli_cancel_requested.store(false);
+        previous_handler_ = std::signal(SIGINT, &on_cloud_cli_signal);
         cauth::steam::cloud::set_current_thread_steam_cloud_transfer_hooks(
-            &on_cloud_progress, nullptr, &state_);
+            enabled_ ? &on_cloud_progress : nullptr,
+            &cloud_cli_cancel_requested,
+            &state_);
     }
 
     ~ScopedCloudCliProgress() {
-        if (!enabled_) {
-            return;
-        }
         cauth::steam::cloud::clear_current_thread_steam_cloud_transfer_hooks();
-        finish_progress_line(std::cerr, state_.line_state);
+        if (enabled_) {
+            finish_progress_line(std::cerr, state_.line_state);
+        }
+        std::signal(SIGINT, previous_handler_);
     }
 
   private:
     bool enabled_ = false;
     CloudCliProgressState state_;
+    void (*previous_handler_)(int) = SIG_DFL;
 };
 
 enum class CloudCommandKind {
@@ -84,6 +126,7 @@ struct ParsedCloudCommand {
     std::uint32_t start_index = 0;
     bool extended_details = true;
     bool include_extra_local = false;
+    bool has_write_mode = false;
 };
 
 struct ParsedCloudResult {
@@ -203,6 +246,33 @@ ParsedCloudResult parse_cloud_command(int argc, char** argv) {
             result.command.request.backend = *parsed;
             continue;
         }
+        if (result.command.kind == CloudCommandKind::Pull) {
+            const auto write_flag_result = apply_write_mode_flag(
+                result.command.request.local_write_options,
+                result.command.has_write_mode,
+                arg,
+                std::cerr);
+            if (write_flag_result < 0) {
+                return result;
+            }
+            if (write_flag_result > 0) {
+                continue;
+            }
+            if (arg == "--atomic-write") {
+                result.command.request.local_write_options.atomic_write = true;
+                continue;
+            }
+            if (arg == "--no-atomic-write") {
+                result.command.request.local_write_options.atomic_write = false;
+                continue;
+            }
+        } else if (result.command.kind == CloudCommandKind::Push &&
+                   (arg == "--overwrite" || arg == "--skip-existing" ||
+                    arg == "--fail-if-exists" || arg == "--atomic-write" ||
+                    arg == "--no-atomic-write")) {
+            std::cerr << "steam cloud push does not support local write options\n";
+            return result;
+        }
         std::cerr << "unknown or incomplete steam cloud option: " << arg << '\n';
         cauth::cli::print_cli_usage();
         return result;
@@ -238,6 +308,7 @@ int run_steam_cloud(int argc, char** argv) {
         if (!parsed.ok) return parsed.exit_code;
 
         const bool enable_progress =
+            parsed.command.kind == CloudCommandKind::Verify ||
             parsed.command.kind == CloudCommandKind::Pull ||
             parsed.command.kind == CloudCommandKind::Push;
         ScopedCloudCliProgress scoped_progress{enable_progress};

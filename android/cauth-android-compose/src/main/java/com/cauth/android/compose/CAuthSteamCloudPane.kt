@@ -41,6 +41,13 @@ fun CAuthSteamCloudPane(
         ) {
             Text("Steam Cloud", style = MaterialTheme.typography.titleMedium)
             Text(state.statusText, style = MaterialTheme.typography.bodySmall)
+            Text("Module status: ${state.moduleStatus}", style = MaterialTheme.typography.bodySmall)
+            state.moduleTask?.let { task ->
+                Text(
+                    "Task: ${task.label} [${task.moduleStatus}] ${task.message}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
 
             state.transferTask?.let { task ->
                 val progressFraction = task.progressFraction
@@ -58,7 +65,7 @@ fun CAuthSteamCloudPane(
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     }
                     Text(
-                        text = task.phase.ifBlank { task.kindLabel },
+                        text = "${task.moduleStatus.ifBlank { "idle" }}: ${task.phase.ifBlank { task.kindLabel }}",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     Text(
@@ -79,7 +86,7 @@ fun CAuthSteamCloudPane(
                     }
                     if (task.active) {
                         Button(onClick = controller::cancelActiveTransfer) {
-                            Text("Cancel Transfer")
+                            Text("Cancel Task")
                         }
                     }
                 }

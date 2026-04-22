@@ -4,9 +4,14 @@
 #include "ffi/client_internal.hpp"
 #include "steam/cloud/steam_cloud_application.hpp"
 
+#include <atomic>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <string>
+#include <thread>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -15,12 +20,54 @@ std::string nullable_string(const char* value) {
     return value == nullptr ? std::string{} : std::string{value};
 }
 
+bool message_indicates_cancel(std::string_view message) {
+    return message.find("operation canceled") != std::string_view::npos;
+}
+
 thread_local std::string g_last_cloud_message;
+thread_local std::string g_last_cloud_module_status;
 thread_local std::vector<std::string> g_cloud_filenames;
 thread_local std::vector<std::string> g_cloud_urls;
 thread_local std::vector<std::string> g_cloud_platforms;
 thread_local std::vector<std::string> g_cloud_shas;
 thread_local std::vector<cauth_steam_cloud_file_entry_t> g_cloud_entries;
+thread_local std::string g_cloud_task_phase;
+thread_local std::string g_cloud_task_target;
+thread_local std::string g_cloud_task_message;
+thread_local std::string g_cloud_task_module_status;
+thread_local std::string g_cloud_task_result_message;
+thread_local std::string g_cloud_task_verify_message;
+
+struct CloudTask {
+    explicit CloudTask(cauth_steam_cloud_task_kind_t task_kind) : kind(task_kind) {}
+
+    std::mutex mutex;
+    std::atomic_bool cancel_requested{false};
+    std::atomic_bool finished{false};
+    cauth_steam_cloud_task_kind_t kind = CAUTH_STEAM_CLOUD_TASK_PULL;
+    bool succeeded = false;
+    bool canceled = false;
+    std::string module_status = "idle";
+    std::string phase = "Queued";
+    std::string target;
+    std::string message;
+    std::uint64_t completed_steps = 0;
+    std::uint64_t total_steps = 0;
+    std::uint64_t completed_bytes = 0;
+    std::uint64_t total_bytes = 0;
+    bool has_result = false;
+    cauth_steam_cloud_result_t result{};
+    std::string result_message;
+    std::string result_module_status;
+    bool has_verify_report = false;
+    cauth_steam_cloud_verify_report_t verify_report{};
+    std::string verify_message;
+    std::string verify_module_status;
+};
+
+std::mutex g_cloud_tasks_mutex;
+std::unordered_map<unsigned long long, std::shared_ptr<CloudTask>> g_cloud_tasks;
+std::atomic_ullong g_next_cloud_task_handle{1};
 
 cauth_steam_cloud_direction_t to_ffi_direction(cauth::steam::cloud::SteamCloudDirection direction) {
     switch (direction) {
@@ -49,6 +96,19 @@ cauth::steam::cloud::SteamCloudConflictPolicy from_ffi_conflict_policy(
     }
 }
 
+cauth::core::platform::FileWriteMode from_ffi_file_write_mode(cauth_file_write_mode_t mode) {
+    using WriteMode = cauth::core::platform::FileWriteMode;
+    switch (mode) {
+    case CAUTH_FILE_WRITE_SKIP_EXISTING:
+        return WriteMode::SkipExisting;
+    case CAUTH_FILE_WRITE_FAIL_IF_EXISTS:
+        return WriteMode::FailIfExists;
+    case CAUTH_FILE_WRITE_OVERWRITE:
+    default:
+        return WriteMode::Overwrite;
+    }
+}
+
 cauth::steam::cloud::SteamCloudRequest build_native_request(cauth_client_t* client,
                                                             const cauth_steam_cloud_request_t* request) {
     cauth::steam::cloud::SteamCloudRequest native_request;
@@ -61,6 +121,9 @@ cauth::steam::cloud::SteamCloudRequest build_native_request(cauth_client_t* clie
     native_request.delete_remote_orphans = request->delete_remote_orphans != 0;
     native_request.conflict_policy = from_ffi_conflict_policy(request->conflict_policy);
     native_request.backend = cauth::steam::cloud::SteamCloudBackend::Auto;
+    native_request.local_write_options.mode = from_ffi_file_write_mode(request->local_write_mode);
+    native_request.local_write_options.atomic_write = request->atomic_write != 0;
+    native_request.local_write_options.temp_suffix = ".cauthdownload";
     if (native_request.access_token.empty() || native_request.refresh_token.empty() ||
         native_request.steam_id == 0) {
         const auto session = native_request.steam_id == 0
@@ -100,6 +163,122 @@ cauth_steam_cloud_conflict_policy_t to_ffi_conflict_policy(
     }
 }
 
+bool cloud_task_cancel_requested(void* user_data) {
+    const auto* task = static_cast<const CloudTask*>(user_data);
+    return task != nullptr && task->cancel_requested.load();
+}
+
+void on_cloud_task_progress(const cauth::steam::cloud::SteamCloudTransferProgress& progress,
+                            void* user_data) {
+    auto* task = static_cast<CloudTask*>(user_data);
+    if (task == nullptr) {
+        return;
+    }
+    std::lock_guard lock{task->mutex};
+    task->module_status = progress.module_status.empty() ? "idle" : progress.module_status;
+    task->phase = progress.phase;
+    task->target = progress.target;
+    task->completed_steps = progress.completed_steps;
+    task->total_steps = progress.total_steps;
+    task->completed_bytes = progress.completed_bytes;
+    task->total_bytes = progress.total_bytes;
+}
+
+std::shared_ptr<CloudTask> find_cloud_task(unsigned long long handle) {
+    std::lock_guard lock{g_cloud_tasks_mutex};
+    const auto found = g_cloud_tasks.find(handle);
+    if (found == g_cloud_tasks.end()) {
+        return nullptr;
+    }
+    return found->second;
+}
+
+void fill_cloud_result(const cauth::steam::cloud::SteamCloudResult& source,
+                       cauth_steam_cloud_result_t& destination,
+                       std::string& message_storage,
+                       std::string& module_status_storage) {
+    message_storage = source.message;
+    module_status_storage = source.module_status;
+    destination.ok = source.ok ? 1 : 0;
+    destination.app_id = source.app_id;
+    destination.direction = to_ffi_direction(source.direction);
+    destination.conflict_policy = to_ffi_conflict_policy(source.conflict_policy);
+    destination.local_file_count = source.local_file_count;
+    destination.remote_file_count = source.remote_file_count;
+    destination.transferred_count = source.transferred_count;
+    destination.deleted_count = source.deleted_count;
+    destination.skipped_count = source.skipped_count;
+    destination.conflict_count = source.conflict_count;
+    destination.transferred_bytes = source.transferred_bytes;
+    destination.module_status = module_status_storage.c_str();
+    destination.message = message_storage.c_str();
+}
+
+void fill_cloud_verify_report(const cauth::steam::cloud::SteamCloudVerifyResult& source,
+                              cauth_steam_cloud_verify_report_t& destination,
+                              std::string& message_storage,
+                              std::string& module_status_storage) {
+    message_storage = source.message;
+    module_status_storage = source.module_status;
+    destination.present = 1;
+    destination.clean = source.clean() ? 1 : 0;
+    destination.include_extra_local = source.include_extra_local ? 1 : 0;
+    destination.app_id = source.app_id;
+    destination.checked_count = source.checked_count;
+    destination.ok_count = source.ok_count;
+    destination.missing_count = source.missing_count;
+    destination.mismatched_count = source.mismatched_count;
+    destination.size_only_count = source.size_only_count;
+    destination.filtered_out_count = source.filtered_out_count;
+    destination.extra_local_count = source.extra_local_count;
+    destination.total_count = source.total_count;
+    destination.module_status = module_status_storage.c_str();
+    destination.message = message_storage.c_str();
+}
+
+template <typename Runner>
+cauth_result_t start_cloud_task(cauth_steam_cloud_task_kind_t kind,
+                                Runner&& runner,
+                                unsigned long long* out_handle) {
+    if (out_handle == nullptr) {
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+
+    const auto handle = g_next_cloud_task_handle.fetch_add(1);
+    auto task = std::make_shared<CloudTask>(kind);
+    {
+        std::lock_guard lock{g_cloud_tasks_mutex};
+        g_cloud_tasks.emplace(handle, task);
+    }
+
+    std::thread([task, runner = std::forward<Runner>(runner)]() mutable {
+        cauth::steam::cloud::set_current_thread_steam_cloud_transfer_hooks(
+            &on_cloud_task_progress,
+            &cloud_task_cancel_requested,
+            task.get());
+        try {
+            runner(*task);
+        } catch (const std::exception& exception) {
+            std::lock_guard lock{task->mutex};
+            task->succeeded = false;
+            task->canceled = false;
+            task->module_status = "failed";
+            task->message = exception.what();
+        } catch (...) {
+            std::lock_guard lock{task->mutex};
+            task->succeeded = false;
+            task->canceled = false;
+            task->module_status = "failed";
+            task->message = "unexpected exception";
+        }
+        cauth::steam::cloud::clear_current_thread_steam_cloud_transfer_hooks();
+        task->finished.store(true);
+    }).detach();
+
+    *out_handle = handle;
+    return CAUTH_OK;
+}
+
 cauth_result_t run_cloud_operation(
     cauth_client_t* client,
     const cauth_steam_cloud_request_t* request,
@@ -114,6 +293,7 @@ cauth_result_t run_cloud_operation(
     out_result->app_id = 0;
     out_result->direction = CAUTH_STEAM_CLOUD_PULL;
     out_result->conflict_policy = CAUTH_STEAM_CLOUD_CONFLICT_DEFAULT;
+    out_result->module_status = "";
     out_result->local_file_count = 0;
     out_result->remote_file_count = 0;
     out_result->transferred_count = 0;
@@ -127,11 +307,13 @@ cauth_result_t run_cloud_operation(
         const auto native_request = build_native_request(client, request);
         const auto result = fn(native_request);
         g_last_cloud_message = result.message;
+        g_last_cloud_module_status = result.module_status;
 
         out_result->ok = result.ok ? 1 : 0;
         out_result->app_id = result.app_id;
         out_result->direction = to_ffi_direction(result.direction);
         out_result->conflict_policy = to_ffi_conflict_policy(result.conflict_policy);
+        out_result->module_status = g_last_cloud_module_status.c_str();
         out_result->local_file_count = result.local_file_count;
         out_result->remote_file_count = result.remote_file_count;
         out_result->transferred_count = result.transferred_count;
@@ -166,6 +348,7 @@ cauth_result_t cauth_steam_cloud_list_remote_files(
     out_response->present = 0;
     out_response->app_id = 0;
     out_response->eresult = 0;
+    out_response->module_status = "";
     out_response->total_files = 0;
     out_response->file_count = 0;
     out_response->files = nullptr;
@@ -183,6 +366,7 @@ cauth_result_t cauth_steam_cloud_list_remote_files(
         const auto result = cauth::steam::cloud::list_remote_files(
             native_request, count, start_index, extended_details != 0);
         g_last_cloud_message = result.message;
+        g_last_cloud_module_status = result.module_status;
 
         g_cloud_filenames.reserve(result.files.size());
         g_cloud_urls.reserve(result.files.size());
@@ -216,6 +400,7 @@ cauth_result_t cauth_steam_cloud_list_remote_files(
         out_response->present = 1;
         out_response->app_id = result.app_id;
         out_response->eresult = result.eresult;
+        out_response->module_status = g_last_cloud_module_status.c_str();
         out_response->total_files = result.total_files;
         out_response->file_count = static_cast<unsigned long long>(g_cloud_entries.size());
         out_response->files = g_cloud_entries.empty() ? nullptr : g_cloud_entries.data();
@@ -254,6 +439,7 @@ cauth_result_t cauth_steam_cloud_verify_local_files(
     out_result->clean = 0;
     out_result->include_extra_local = include_extra_local != 0 ? 1 : 0;
     out_result->app_id = 0;
+    out_result->module_status = "";
     out_result->checked_count = 0;
     out_result->ok_count = 0;
     out_result->missing_count = 0;
@@ -269,11 +455,13 @@ cauth_result_t cauth_steam_cloud_verify_local_files(
         const auto result = cauth::steam::cloud::verify_cloud_local_files(
             native_request, include_extra_local != 0);
         g_last_cloud_message = result.message;
+        g_last_cloud_module_status = result.module_status;
 
         out_result->present = 1;
         out_result->clean = result.clean() ? 1 : 0;
         out_result->include_extra_local = result.include_extra_local ? 1 : 0;
         out_result->app_id = result.app_id;
+        out_result->module_status = g_last_cloud_module_status.c_str();
         out_result->checked_count = result.checked_count;
         out_result->ok_count = result.ok_count;
         out_result->missing_count = result.missing_count;
@@ -289,4 +477,171 @@ cauth_result_t cauth_steam_cloud_verify_local_files(
     } catch (...) {
         return CAUTH_ERROR_INTERNAL;
     }
+}
+
+cauth_result_t cauth_steam_cloud_start_pull(cauth_client_t* client,
+                                            const cauth_steam_cloud_request_t* request,
+                                            unsigned long long* out_handle) {
+    if (client == nullptr || request == nullptr || request->app_id == 0 || request->steam_id == 0) {
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+    try {
+        const auto native_request = build_native_request(client, request);
+        return start_cloud_task(
+            CAUTH_STEAM_CLOUD_TASK_PULL,
+            [native_request](CloudTask& task) {
+                const auto result = cauth::steam::cloud::pull_cloud_save(native_request);
+                std::lock_guard lock{task.mutex};
+                task.has_result = true;
+                fill_cloud_result(result, task.result, task.result_message, task.result_module_status);
+                task.succeeded = result.ok;
+                task.canceled = !result.ok && message_indicates_cancel(result.message);
+                task.module_status = result.module_status;
+                task.message = result.message.empty() ? (result.ok ? "pull complete" : "pull failed")
+                                                     : result.message;
+                if (task.module_status == "idle") {
+                    task.module_status = task.canceled ? "canceled" : (task.succeeded ? "succeeded" : "failed");
+                }
+            },
+            out_handle);
+    } catch (const std::bad_alloc&) {
+        return CAUTH_ERROR_OUT_OF_MEMORY;
+    } catch (...) {
+        return CAUTH_ERROR_INTERNAL;
+    }
+}
+
+cauth_result_t cauth_steam_cloud_start_push(cauth_client_t* client,
+                                            const cauth_steam_cloud_request_t* request,
+                                            unsigned long long* out_handle) {
+    if (client == nullptr || request == nullptr || request->app_id == 0 || request->steam_id == 0) {
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+    try {
+        const auto native_request = build_native_request(client, request);
+        return start_cloud_task(
+            CAUTH_STEAM_CLOUD_TASK_PUSH,
+            [native_request](CloudTask& task) {
+                const auto result = cauth::steam::cloud::push_cloud_save(native_request);
+                std::lock_guard lock{task.mutex};
+                task.has_result = true;
+                fill_cloud_result(result, task.result, task.result_message, task.result_module_status);
+                task.succeeded = result.ok;
+                task.canceled = !result.ok && message_indicates_cancel(result.message);
+                task.module_status = result.module_status;
+                task.message = result.message.empty() ? (result.ok ? "push complete" : "push failed")
+                                                     : result.message;
+                if (task.module_status == "idle") {
+                    task.module_status = task.canceled ? "canceled" : (task.succeeded ? "succeeded" : "failed");
+                }
+            },
+            out_handle);
+    } catch (const std::bad_alloc&) {
+        return CAUTH_ERROR_OUT_OF_MEMORY;
+    } catch (...) {
+        return CAUTH_ERROR_INTERNAL;
+    }
+}
+
+cauth_result_t cauth_steam_cloud_start_verify_local_files(
+    cauth_client_t* client,
+    const cauth_steam_cloud_request_t* request,
+    int include_extra_local,
+    unsigned long long* out_handle) {
+    if (client == nullptr || request == nullptr || request->app_id == 0 || request->steam_id == 0) {
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+    try {
+        const auto native_request = build_native_request(client, request);
+        return start_cloud_task(
+            CAUTH_STEAM_CLOUD_TASK_VERIFY,
+            [native_request, include_extra_local](CloudTask& task) {
+                const auto result = cauth::steam::cloud::verify_cloud_local_files(
+                    native_request,
+                    include_extra_local != 0);
+                std::lock_guard lock{task.mutex};
+                task.has_verify_report = true;
+                fill_cloud_verify_report(
+                    result,
+                    task.verify_report,
+                    task.verify_message,
+                    task.verify_module_status);
+                task.succeeded = result.clean();
+                task.canceled = !task.succeeded && message_indicates_cancel(result.message);
+                task.module_status = result.module_status;
+                task.message = result.message.empty() ? (task.succeeded ? "verify complete" : "verify failed")
+                                                     : result.message;
+                if (task.module_status == "idle") {
+                    task.module_status = task.canceled ? "canceled" : (task.succeeded ? "succeeded" : "failed");
+                }
+            },
+            out_handle);
+    } catch (const std::bad_alloc&) {
+        return CAUTH_ERROR_OUT_OF_MEMORY;
+    } catch (...) {
+        return CAUTH_ERROR_INTERNAL;
+    }
+}
+
+cauth_result_t cauth_steam_cloud_poll_task(unsigned long long handle,
+                                           cauth_steam_cloud_task_snapshot_t* out_snapshot) {
+    if (out_snapshot == nullptr) {
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+    const auto task = find_cloud_task(handle);
+    if (task == nullptr) {
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+
+    std::lock_guard lock{task->mutex};
+    g_cloud_task_module_status = task->module_status;
+    g_cloud_task_phase = task->phase;
+    g_cloud_task_target = task->target;
+    g_cloud_task_message = task->message;
+    g_cloud_task_result_message = task->result_message;
+    g_cloud_task_verify_message = task->verify_message;
+
+    out_snapshot->handle = handle;
+    out_snapshot->active = task->finished.load() ? 0 : 1;
+    out_snapshot->succeeded = task->succeeded ? 1 : 0;
+    out_snapshot->canceled = task->canceled ? 1 : 0;
+    out_snapshot->kind = task->kind;
+    out_snapshot->module_status = g_cloud_task_module_status.c_str();
+    out_snapshot->phase = g_cloud_task_phase.c_str();
+    out_snapshot->target = g_cloud_task_target.c_str();
+    out_snapshot->message = g_cloud_task_message.c_str();
+    out_snapshot->completed_steps = task->completed_steps;
+    out_snapshot->total_steps = task->total_steps;
+    out_snapshot->completed_bytes = task->completed_bytes;
+    out_snapshot->total_bytes = task->total_bytes;
+    out_snapshot->has_result = task->has_result ? 1 : 0;
+    out_snapshot->result = task->result;
+    if (out_snapshot->has_result != 0) {
+        out_snapshot->result.message = g_cloud_task_result_message.c_str();
+    }
+    out_snapshot->has_verify_report = task->has_verify_report ? 1 : 0;
+    out_snapshot->verify_report = task->verify_report;
+    if (out_snapshot->has_verify_report != 0) {
+        out_snapshot->verify_report.message = g_cloud_task_verify_message.c_str();
+    }
+    return CAUTH_OK;
+}
+
+void cauth_steam_cloud_cancel_task(unsigned long long handle) {
+    const auto task = find_cloud_task(handle);
+    if (task == nullptr) {
+        return;
+    }
+    task->cancel_requested.store(true);
+    std::lock_guard lock{task->mutex};
+    task->module_status = "canceled";
+    task->phase = "Cancel requested";
+    if (task->message.empty()) {
+        task->message = "Cancel requested...";
+    }
+}
+
+void cauth_steam_cloud_dispose_task(unsigned long long handle) {
+    std::lock_guard lock{g_cloud_tasks_mutex};
+    g_cloud_tasks.erase(handle);
 }

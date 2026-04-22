@@ -23,6 +23,8 @@ class CAuthSteamCloudApi(
             dryRun = request.dryRun,
             deleteRemoteOrphans = request.deleteRemoteOrphans,
             conflictPolicy = request.conflictPolicy.nativeValue,
+            localWriteMode = request.localWriteOptions.mode.nativeValue,
+            atomicWrite = request.localWriteOptions.atomicWrite,
             count = count,
             startIndex = startIndex,
             extendedDetails = extendedDetails,
@@ -40,6 +42,8 @@ class CAuthSteamCloudApi(
             dryRun = request.dryRun,
             deleteRemoteOrphans = request.deleteRemoteOrphans,
             conflictPolicy = request.conflictPolicy.nativeValue,
+            localWriteMode = request.localWriteOptions.mode.nativeValue,
+            atomicWrite = request.localWriteOptions.atomicWrite,
         )
     }
 
@@ -54,6 +58,8 @@ class CAuthSteamCloudApi(
             dryRun = request.dryRun,
             deleteRemoteOrphans = request.deleteRemoteOrphans,
             conflictPolicy = request.conflictPolicy.nativeValue,
+            localWriteMode = request.localWriteOptions.mode.nativeValue,
+            atomicWrite = request.localWriteOptions.atomicWrite,
         )
     }
 
@@ -71,6 +77,8 @@ class CAuthSteamCloudApi(
             dryRun = request.dryRun,
             deleteRemoteOrphans = request.deleteRemoteOrphans,
             conflictPolicy = request.conflictPolicy.nativeValue,
+            localWriteMode = request.localWriteOptions.mode.nativeValue,
+            atomicWrite = request.localWriteOptions.atomicWrite,
             includeExtraLocal = includeExtraLocal,
         )
     }
@@ -86,6 +94,8 @@ class CAuthSteamCloudApi(
             dryRun = request.dryRun,
             deleteRemoteOrphans = request.deleteRemoteOrphans,
             conflictPolicy = request.conflictPolicy.nativeValue,
+            localWriteMode = request.localWriteOptions.mode.nativeValue,
+            atomicWrite = request.localWriteOptions.atomicWrite,
         )
     }
 
@@ -100,6 +110,28 @@ class CAuthSteamCloudApi(
             dryRun = request.dryRun,
             deleteRemoteOrphans = request.deleteRemoteOrphans,
             conflictPolicy = request.conflictPolicy.nativeValue,
+            localWriteMode = request.localWriteOptions.mode.nativeValue,
+            atomicWrite = request.localWriteOptions.atomicWrite,
+        )
+    }
+
+    suspend fun startVerifyLocalFiles(
+        request: SteamCloudRequest,
+        includeExtraLocal: Boolean = false,
+    ): Long = withContext(Dispatchers.IO) {
+        CAuthNativeSteamCloud.nativeStartVerifyLocalFiles(
+            handle = client.requireNativeHandle(),
+            appId = request.appId,
+            steamId = request.steamId,
+            accessToken = request.accessToken,
+            localRoot = request.localRoot,
+            remoteRoot = request.remoteRoot,
+            dryRun = request.dryRun,
+            deleteRemoteOrphans = request.deleteRemoteOrphans,
+            conflictPolicy = request.conflictPolicy.nativeValue,
+            localWriteMode = request.localWriteOptions.mode.nativeValue,
+            atomicWrite = request.localWriteOptions.atomicWrite,
+            includeExtraLocal = includeExtraLocal,
         )
     }
 

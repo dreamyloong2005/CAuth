@@ -17,6 +17,8 @@ internal object CAuthNativeSteamCloud {
         dryRun: Boolean,
         deleteRemoteOrphans: Boolean,
         conflictPolicy: Int,
+        localWriteMode: Int,
+        atomicWrite: Boolean,
         count: Int,
         startIndex: Int,
         extendedDetails: Boolean,
@@ -33,6 +35,8 @@ internal object CAuthNativeSteamCloud {
         dryRun: Boolean,
         deleteRemoteOrphans: Boolean,
         conflictPolicy: Int,
+        localWriteMode: Int,
+        atomicWrite: Boolean,
     ): SteamCloudResultSnapshot
 
     @JvmStatic
@@ -46,6 +50,8 @@ internal object CAuthNativeSteamCloud {
         dryRun: Boolean,
         deleteRemoteOrphans: Boolean,
         conflictPolicy: Int,
+        localWriteMode: Int,
+        atomicWrite: Boolean,
     ): SteamCloudResultSnapshot
 
     @JvmStatic
@@ -59,6 +65,8 @@ internal object CAuthNativeSteamCloud {
         dryRun: Boolean,
         deleteRemoteOrphans: Boolean,
         conflictPolicy: Int,
+        localWriteMode: Int,
+        atomicWrite: Boolean,
         includeExtraLocal: Boolean,
     ): SteamCloudVerifySnapshot
 
@@ -73,6 +81,8 @@ internal object CAuthNativeSteamCloud {
         dryRun: Boolean,
         deleteRemoteOrphans: Boolean,
         conflictPolicy: Int,
+        localWriteMode: Int,
+        atomicWrite: Boolean,
     ): Long
 
     @JvmStatic
@@ -86,6 +96,24 @@ internal object CAuthNativeSteamCloud {
         dryRun: Boolean,
         deleteRemoteOrphans: Boolean,
         conflictPolicy: Int,
+        localWriteMode: Int,
+        atomicWrite: Boolean,
+    ): Long
+
+    @JvmStatic
+    external fun nativeStartVerifyLocalFiles(
+        handle: Long,
+        appId: Int,
+        steamId: Long,
+        accessToken: String?,
+        localRoot: String?,
+        remoteRoot: String?,
+        dryRun: Boolean,
+        deleteRemoteOrphans: Boolean,
+        conflictPolicy: Int,
+        localWriteMode: Int,
+        atomicWrite: Boolean,
+        includeExtraLocal: Boolean,
     ): Long
 
     @JvmStatic

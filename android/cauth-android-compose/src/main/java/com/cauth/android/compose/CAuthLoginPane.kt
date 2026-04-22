@@ -40,7 +40,11 @@ fun CAuthLoginPane(
                 onPlatformSelected = controller::setLoginPlatform,
             )
             CAuthSteamAuthActionButtons(controller = controller)
-            CAuthSteamAuthStatus(statusText = state.statusText)
+            CAuthSteamAuthStatus(
+                statusText = state.statusText,
+                moduleStatus = state.moduleStatus,
+                moduleTask = state.moduleTask,
+            )
             CAuthSteamAuthTrace(traceLines = state.traceLines)
             CAuthSteamAuthResults(state = state, controller = controller)
         }

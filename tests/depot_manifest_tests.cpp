@@ -115,6 +115,11 @@ std::vector<std::uint8_t> make_manifest() {
     return manifest;
 }
 
+std::string read_text_file(const std::filesystem::path& path) {
+    std::ifstream input{path, std::ios::binary};
+    return std::string((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+}
+
 } // namespace
 
 int main() {
@@ -294,6 +299,64 @@ int main() {
         std::cerr << "manifest local verification should report ok, mismatch, and missing files\n";
         return 1;
     }
+
+    const auto file_write_root =
+        std::filesystem::temp_directory_path() / "cauth_file_write_test";
+    std::filesystem::remove_all(file_write_root);
+    std::filesystem::create_directories(file_write_root);
+    const auto atomic_path = file_write_root / "atomic.bin";
+    {
+        auto prepared = cauth::core::platform::prepare_file_write(
+            atomic_path,
+            cauth::core::platform::FileWriteOptions{
+                cauth::core::platform::FileWriteMode::Overwrite,
+                true,
+                ".cauthdownload",
+            });
+        std::string write_error;
+        if (!prepared.ok() ||
+            !prepared.write_all(std::vector<std::uint8_t>{'n', 'e', 'w'}, write_error) ||
+            std::filesystem::exists(atomic_path.string() + ".cauthdownload")) {
+            std::cerr << "atomic file write should commit final file and clean temp path\n";
+            return 1;
+        }
+    }
+    if (read_text_file(atomic_path) != "new") {
+        std::cerr << "atomic file write should replace destination contents\n";
+        return 1;
+    }
+    {
+        std::ofstream existing{atomic_path, std::ios::binary | std::ios::trunc};
+        existing << "keep";
+    }
+    {
+        const auto prepared = cauth::core::platform::prepare_file_write(
+            atomic_path,
+            cauth::core::platform::FileWriteOptions{
+                cauth::core::platform::FileWriteMode::SkipExisting,
+                true,
+                ".cauthdownload",
+            });
+        if (!prepared.ok() || !prepared.skipped()) {
+            std::cerr << "skip-existing file write should skip existing output path\n";
+            return 1;
+        }
+    }
+    {
+        const auto prepared = cauth::core::platform::prepare_file_write(
+            atomic_path,
+            cauth::core::platform::FileWriteOptions{
+                cauth::core::platform::FileWriteMode::FailIfExists,
+                false,
+                ".cauthdownload",
+            });
+        if (prepared.ok() ||
+            prepared.error_message().find("already exists") == std::string::npos) {
+            std::cerr << "fail-if-exists file write should reject existing output path\n";
+            return 1;
+        }
+    }
+    std::filesystem::remove_all(file_write_root);
 
     cauth::core::depot::DepotManifestFile directory_entry;
     directory_entry.filename = "folder";

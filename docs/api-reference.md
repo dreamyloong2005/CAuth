@@ -147,6 +147,7 @@ Web-flow helpers:
 `CAuthSteamAuthController`:
 
 - owns editable login form state
+- owns `moduleStatus` and `moduleTask`
 - owns saved-session snapshot
 - owns saved-account list snapshot
 - owns CM probe/logon snapshots
@@ -237,6 +238,7 @@ The manifest/preflight responses also expose platform metadata:
 - `prepareKeyAndCodeSelection(...)`
 - `useManifestSelection(...)`
 - `useManifestFile(...)`
+- `moduleStatus` / `moduleTask`
 - progress state
 - cancel support
 - trace lines
@@ -293,10 +295,15 @@ Main operations:
 `CAuthSteamCloudController` adds:
 
 - editable cloud request state
+- `moduleStatus` / `moduleTask`
 - verify state
 - transfer-task progress state
 - cancel support
 - trace lines
+
+For the Android controllers, `moduleStatus` is a module-defined string rather than a fixed core enum.
+Busy states and terminal states are both exposed. After a short terminal-state dwell, controllers
+return to `idle`, and `moduleTask` is cleared back to `null`.
 
 ### CLI equivalents
 

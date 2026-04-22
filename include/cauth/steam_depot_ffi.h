@@ -111,6 +111,7 @@ typedef struct cauth_manifest_request_code_response {
 typedef struct cauth_depot_local_verify_report {
     int present;
     int clean;
+    const char* module_status;
     unsigned long long checked_count;
     unsigned long long ok_count;
     unsigned long long missing_count;
@@ -119,6 +120,32 @@ typedef struct cauth_depot_local_verify_report {
     unsigned long long filtered_out_count;
     unsigned long long total_count;
 } cauth_depot_local_verify_report_t;
+
+typedef enum cauth_depot_task_kind {
+    CAUTH_DEPOT_TASK_MANIFEST_DOWNLOAD = 1,
+    CAUTH_DEPOT_TASK_CHUNK_DOWNLOAD = 2,
+    CAUTH_DEPOT_TASK_FILE_DOWNLOAD = 3,
+    CAUTH_DEPOT_TASK_ALL_FILES_DOWNLOAD = 4,
+    CAUTH_DEPOT_TASK_VERIFY_LOCAL = 5
+} cauth_depot_task_kind_t;
+
+typedef struct cauth_depot_task_snapshot {
+    unsigned long long handle;
+    int active;
+    int succeeded;
+    int canceled;
+    cauth_depot_task_kind_t kind;
+    const char* module_status;
+    const char* phase;
+    const char* target;
+    const char* message;
+    unsigned long long completed_steps;
+    unsigned long long total_steps;
+    unsigned long long completed_bytes;
+    unsigned long long total_bytes;
+    int has_verify_report;
+    cauth_depot_local_verify_report_t verify_report;
+} cauth_depot_task_snapshot_t;
 
 CAUTH_API cauth_result_t cauth_depot_fetch_branches(cauth_client_t* client,
                                                     unsigned long long steam_id,
@@ -141,7 +168,17 @@ CAUTH_API cauth_result_t cauth_depot_download_manifest(unsigned int depot_id,
                                                        unsigned long long manifest_gid,
                                                        unsigned long long request_code,
                                                        unsigned int max_count,
-                                                       const char* output_path);
+                                                       const char* output_path,
+                                                       cauth_file_write_mode_t write_mode,
+                                                       int atomic_write);
+CAUTH_API cauth_result_t cauth_depot_start_manifest_download(unsigned int depot_id,
+                                                             unsigned long long manifest_gid,
+                                                             unsigned long long request_code,
+                                                             unsigned int max_count,
+                                                             const char* output_path,
+                                                             cauth_file_write_mode_t write_mode,
+                                                             int atomic_write,
+                                                             unsigned long long* out_handle);
 CAUTH_API cauth_result_t cauth_depot_fetch_key(cauth_client_t* client,
                                                unsigned long long steam_id,
                                                unsigned int app_id,
@@ -174,23 +211,68 @@ CAUTH_API cauth_result_t cauth_depot_download_chunk(const char* input_path,
                                                     unsigned long long chunk_index,
                                                     int process_chunk,
                                                     unsigned int max_count,
-                                                    const char* output_path);
+                                                    const char* output_path,
+                                                    cauth_file_write_mode_t write_mode,
+                                                    int atomic_write);
+CAUTH_API cauth_result_t cauth_depot_start_download_chunk(const char* input_path,
+                                                          const char* depot_key_hex,
+                                                          const char* file_path,
+                                                          unsigned long long file_index,
+                                                          int has_file_index,
+                                                          unsigned long long chunk_index,
+                                                          int process_chunk,
+                                                          unsigned int max_count,
+                                                          const char* output_path,
+                                                          cauth_file_write_mode_t write_mode,
+                                                          int atomic_write,
+                                                          unsigned long long* out_handle);
 CAUTH_API cauth_result_t cauth_depot_download_file(const char* input_path,
                                                    const char* depot_key_hex,
                                                    const char* file_path,
                                                    unsigned long long file_index,
                                                    int has_file_index,
                                                    unsigned int max_count,
-                                                   const char* output_path);
+                                                   const char* output_path,
+                                                   cauth_file_write_mode_t write_mode,
+                                                   int atomic_write);
+CAUTH_API cauth_result_t cauth_depot_start_download_file(const char* input_path,
+                                                         const char* depot_key_hex,
+                                                         const char* file_path,
+                                                         unsigned long long file_index,
+                                                         int has_file_index,
+                                                         unsigned int max_count,
+                                                         const char* output_path,
+                                                         cauth_file_write_mode_t write_mode,
+                                                         int atomic_write,
+                                                         unsigned long long* out_handle);
 CAUTH_API cauth_result_t cauth_depot_download_all_files(const char* input_path,
                                                         const char* depot_key_hex,
                                                         unsigned int max_count,
-                                                        const char* output_root);
+                                                        const char* output_root,
+                                                        cauth_file_write_mode_t write_mode,
+                                                        int atomic_write);
+CAUTH_API cauth_result_t cauth_depot_start_download_all_files(const char* input_path,
+                                                              const char* depot_key_hex,
+                                                              unsigned int max_count,
+                                                              const char* output_root,
+                                                              cauth_file_write_mode_t write_mode,
+                                                              int atomic_write,
+                                                              unsigned long long* out_handle);
 CAUTH_API cauth_result_t cauth_depot_verify_local_files(const char* input_path,
                                                         const char* depot_key_hex,
                                                         const char* local_root,
                                                         const char* filter_text,
                                                         cauth_depot_local_verify_report_t* out_response);
+CAUTH_API cauth_result_t cauth_depot_start_verify_local_files(
+    const char* input_path,
+    const char* depot_key_hex,
+    const char* local_root,
+    const char* filter_text,
+    unsigned long long* out_handle);
+CAUTH_API cauth_result_t cauth_depot_poll_task(unsigned long long handle,
+                                               cauth_depot_task_snapshot_t* out_snapshot);
+CAUTH_API void cauth_depot_cancel_task(unsigned long long handle);
+CAUTH_API void cauth_depot_dispose_task(unsigned long long handle);
 CAUTH_API const char* cauth_depot_last_error_detail(void);
 
 #ifdef __cplusplus

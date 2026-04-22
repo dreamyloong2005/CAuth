@@ -14,5 +14,6 @@
 #include "steam/depot/manifest_downloader.hpp"
 #include "steam/depot/manifest_request_code.hpp"
 #include "steam/depot/pics.hpp"
+#include "steam/depot/steam_depot_application.hpp"
 
 #endif

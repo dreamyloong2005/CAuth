@@ -26,7 +26,7 @@ $cauth = ".\\build\\windows-msvc-debug\\cauth.exe"
 Expected version output for the current development line:
 
 ```text
-CAuth 0.4.0
+CAuth 0.5.0
 ```
 
 ## 2. Steam auth
@@ -201,3 +201,10 @@ Recommended Android validation sequence:
 
 The example app surfaces raw summaries, traces, progress cards, retry hooks, and workflow helpers,
 so it is intended to be used as a real debugging console.
+
+For the Android controller states, also sanity-check this behavior while testing:
+
+1. start an auth / depot / cloud action and confirm `moduleStatus` enters a busy state
+2. complete or cancel the action and confirm the terminal state becomes visible
+3. wait a short moment and confirm the controller returns to `idle`
+4. confirm `moduleTask` is cleared once the state is back at `idle`

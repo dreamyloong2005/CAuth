@@ -41,6 +41,13 @@ fun CAuthSteamDepotPane(
         ) {
             Text("Steam Depot", style = MaterialTheme.typography.titleMedium)
             Text(state.statusText, style = MaterialTheme.typography.bodySmall)
+            Text("Module status: ${state.moduleStatus}", style = MaterialTheme.typography.bodySmall)
+            state.moduleTask?.let { task ->
+                Text(
+                    "Task: ${task.label} [${task.moduleStatus}] ${task.message}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
 
             state.downloadTask?.let { task ->
                 val progressFraction = task.progressFraction
@@ -58,7 +65,7 @@ fun CAuthSteamDepotPane(
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     }
                     Text(
-                        text = task.phase.ifBlank { task.kindLabel },
+                        text = "${task.moduleStatus.ifBlank { "idle" }}: ${task.phase.ifBlank { task.kindLabel }}",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     Text(
@@ -79,7 +86,7 @@ fun CAuthSteamDepotPane(
                     }
                     if (task.active) {
                         Button(onClick = controller::cancelActiveDownload) {
-                            Text("Cancel Download")
+                            Text("Cancel Task")
                         }
                     }
                 }

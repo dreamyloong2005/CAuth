@@ -122,7 +122,11 @@ fun LoginScreen() {
             onPlatformSelected = controller::setLoginPlatform,
         )
         CAuthSteamAuthActionButtons(controller = controller)
-        CAuthSteamAuthStatus(statusText = state.statusText)
+        CAuthSteamAuthStatus(
+            statusText = state.statusText,
+            moduleStatus = state.moduleStatus,
+            moduleTask = state.moduleTask,
+        )
         CAuthSteamAuthTrace(traceLines = state.traceLines)
         CAuthSteamAuthResults(state = state)
     }
@@ -164,6 +168,8 @@ suspend fun example(client: CAuthClient) {
 - editable form fields
 - selected login platform
 - status text
+- `moduleStatus`
+- `moduleTask`
 - in-flight busy flag
 - login result
 - saved session snapshot
@@ -197,6 +203,8 @@ Actions currently exposed:
 - manifest info snapshot
 - manifest file list snapshot
 - local verify snapshot
+- `moduleStatus`
+- `moduleTask`
 - download task snapshot with progress/cancel state
 - status text
 - busy flag
@@ -229,10 +237,21 @@ Actions currently exposed:
 - remote file list snapshot
 - latest local verify snapshot
 - latest pull/push result
+- `moduleStatus`
+- `moduleTask`
 - transfer task snapshot with progress/cancel state
 - status text
 - busy flag
 - rolling trace lines
+
+Controller state semantics:
+
+- busy states such as `reading`, `writing`, `queued`, `downloading`, `uploading`, `verifying`, and
+  `canceling` stay visible while work is active
+- terminal states such as `succeeded`, `failed`, and `canceled` remain visible briefly so the host
+  can render a stable outcome
+- controllers then return to `idle` automatically
+- once a controller is back at `idle`, its public `moduleTask` is guaranteed to be `null`
 
 Actions currently exposed:
 

@@ -702,6 +702,111 @@ int main() {
 
     {
         ScopedCloudHooksReset hooks_reset;
+        const auto temp_dir = make_temp_dir("cauth-cloud-pull-skip-existing");
+        const auto local_path = temp_dir / "save1.sav";
+        if (!write_text_file(local_path, "local")) {
+            std::cerr << "failed to prepare pull skip-existing fixture\n";
+            return 1;
+        }
+
+        g_download_call_count = 0;
+        g_mock_list_result = {};
+        g_mock_list_result.ok = true;
+        g_mock_list_result.app_id = 440;
+        g_mock_list_result.total_files = 1;
+        g_mock_list_result.files = {
+            cauth::steam::cloud::SteamCloudFileEntry{
+                440, 1, "save1.sav", 9999999999ULL, 6, "mock://save1", 0, 0, "all", "deadbeef"}
+        };
+        cauth::steam::cloud::testing::set_list_remote_files_hook(&mock_list_remote_files);
+        cauth::steam::cloud::testing::set_download_file_hook(&mock_download_file);
+
+        cauth::steam::cloud::SteamCloudRequest pull_request;
+        pull_request.app_id = 440;
+        pull_request.access_token = "token";
+        pull_request.local_root = temp_dir.string();
+        pull_request.local_write_options.mode =
+            cauth::core::platform::FileWriteMode::SkipExisting;
+        const auto result = cauth::steam::cloud::pull_cloud_save(pull_request);
+        if (!result.ok || result.transferred_count != 0 || result.skipped_count != 1 ||
+            g_download_call_count != 0 ||
+            result.message.find("1 existing") == std::string::npos ||
+            read_text_file(local_path) != "local") {
+            std::cerr << "pull skip-existing should skip local targets before download\n";
+            return 1;
+        }
+    }
+
+    {
+        ScopedCloudHooksReset hooks_reset;
+        const auto temp_dir = make_temp_dir("cauth-cloud-pull-fail-if-exists");
+        const auto local_path = temp_dir / "save1.sav";
+        if (!write_text_file(local_path, "local")) {
+            std::cerr << "failed to prepare pull fail-if-exists fixture\n";
+            return 1;
+        }
+
+        g_download_call_count = 0;
+        g_mock_list_result = {};
+        g_mock_list_result.ok = true;
+        g_mock_list_result.app_id = 440;
+        g_mock_list_result.total_files = 1;
+        g_mock_list_result.files = {
+            cauth::steam::cloud::SteamCloudFileEntry{
+                440, 1, "save1.sav", 9999999999ULL, 6, "mock://save1", 0, 0, "all", "deadbeef"}
+        };
+        cauth::steam::cloud::testing::set_list_remote_files_hook(&mock_list_remote_files);
+        cauth::steam::cloud::testing::set_download_file_hook(&mock_download_file);
+
+        cauth::steam::cloud::SteamCloudRequest pull_request;
+        pull_request.app_id = 440;
+        pull_request.access_token = "token";
+        pull_request.local_root = temp_dir.string();
+        pull_request.local_write_options.mode =
+            cauth::core::platform::FileWriteMode::FailIfExists;
+        const auto result = cauth::steam::cloud::pull_cloud_save(pull_request);
+        if (result.ok || g_download_call_count != 0 ||
+            result.message.find("already exists") == std::string::npos) {
+            std::cerr << "pull fail-if-exists should stop before download\n";
+            return 1;
+        }
+    }
+
+    {
+        ScopedCloudHooksReset hooks_reset;
+        const auto temp_dir = make_temp_dir("cauth-cloud-pull-atomic-write");
+        const auto local_path = temp_dir / "save1.sav";
+
+        g_download_call_count = 0;
+        g_mock_list_result = {};
+        g_mock_list_result.ok = true;
+        g_mock_list_result.app_id = 440;
+        g_mock_list_result.total_files = 1;
+        g_mock_list_result.files = {
+            cauth::steam::cloud::SteamCloudFileEntry{
+                440, 1, "save1.sav", 10, 6, "mock://save1", 0, 0, "all", "deadbeef"}
+        };
+        g_mock_download_response = {};
+        g_mock_download_response.ok = true;
+        g_mock_download_response.bytes = {'r', 'e', 'm', 'o', 't', 'e'};
+        cauth::steam::cloud::testing::set_list_remote_files_hook(&mock_list_remote_files);
+        cauth::steam::cloud::testing::set_download_file_hook(&mock_download_file);
+
+        cauth::steam::cloud::SteamCloudRequest pull_request;
+        pull_request.app_id = 440;
+        pull_request.access_token = "token";
+        pull_request.local_root = temp_dir.string();
+        pull_request.local_write_options.atomic_write = true;
+        const auto result = cauth::steam::cloud::pull_cloud_save(pull_request);
+        if (!result.ok || result.transferred_count != 1 || read_text_file(local_path) != "remote" ||
+            std::filesystem::exists(temp_dir / "save1.sav.cauthdownload")) {
+            std::cerr << "pull atomic-write should commit final file and remove temp file\n";
+            return 1;
+        }
+    }
+
+    {
+        ScopedCloudHooksReset hooks_reset;
         const auto temp_dir = make_temp_dir("cauth-cloud-push-fail");
         const auto local_path = temp_dir / "save1.sav";
         if (!write_text_file(local_path, "local")) {

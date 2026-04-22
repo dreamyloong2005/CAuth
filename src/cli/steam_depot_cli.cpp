@@ -3,6 +3,8 @@
 
 #include "steam/depot/steam_depot_application.hpp"
 
+#include <atomic>
+#include <csignal>
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -15,6 +17,40 @@
 namespace {
 using namespace cauth::cli::support;
 
+std::atomic_bool g_depot_cli_cancel_requested{false};
+
+void on_depot_cli_signal(int) {
+    g_depot_cli_cancel_requested.store(true);
+}
+
+bool depot_cli_cancel_requested(void*) {
+    return g_depot_cli_cancel_requested.load();
+}
+
+int apply_write_mode_flag(cauth::core::platform::FileWriteOptions& write_options,
+                          bool& has_write_mode,
+                          std::string_view arg,
+                          std::ostream& err) {
+    using WriteMode = cauth::core::platform::FileWriteMode;
+    WriteMode parsed_mode = WriteMode::Overwrite;
+    if (arg == "--overwrite") {
+        parsed_mode = WriteMode::Overwrite;
+    } else if (arg == "--skip-existing") {
+        parsed_mode = WriteMode::SkipExisting;
+    } else if (arg == "--fail-if-exists") {
+        parsed_mode = WriteMode::FailIfExists;
+    } else {
+        return 0;
+    }
+    if (has_write_mode && write_options.mode != parsed_mode) {
+        err << "only one of --overwrite, --skip-existing, or --fail-if-exists may be used\n";
+        return -1;
+    }
+    write_options.mode = parsed_mode;
+    has_write_mode = true;
+    return 1;
+}
+
 struct DepotCliProgressState {
     ProgressLineState line_state;
 };
@@ -25,7 +61,11 @@ void on_depot_progress(const cauth::steam::depot::DepotDownloadProgress& progres
         return;
     }
 
-    std::string line = "steam depot: " + progress.phase;
+    std::string line = "steam depot";
+    if (!progress.module_status.empty()) {
+        line += " [" + progress.module_status + "]";
+    }
+    line += ": " + progress.phase;
     if (progress.total_steps != 0) {
         line += " [";
         line += std::to_string(progress.completed_steps);
@@ -50,24 +90,26 @@ void on_depot_progress(const cauth::steam::depot::DepotDownloadProgress& progres
 
 struct ScopedDepotCliProgress {
     explicit ScopedDepotCliProgress(bool enabled) : enabled_(enabled) {
-        if (!enabled_) {
-            return;
-        }
+        g_depot_cli_cancel_requested.store(false);
+        previous_handler_ = std::signal(SIGINT, &on_depot_cli_signal);
         cauth::steam::depot::set_current_thread_depot_download_hooks(
-            &on_depot_progress, nullptr, &state_);
+            enabled_ ? &on_depot_progress : nullptr,
+            &depot_cli_cancel_requested,
+            &state_);
     }
 
     ~ScopedDepotCliProgress() {
-        if (!enabled_) {
-            return;
-        }
         cauth::steam::depot::clear_current_thread_depot_download_hooks();
-        finish_progress_line(std::cerr, state_.line_state);
+        if (enabled_) {
+            finish_progress_line(std::cerr, state_.line_state);
+        }
+        std::signal(SIGINT, previous_handler_);
     }
 
   private:
     bool enabled_ = false;
     DepotCliProgressState state_;
+    void (*previous_handler_)(int) = SIG_DFL;
 };
 
 enum class DepotCommandKind {
@@ -106,6 +148,8 @@ struct ParsedDepotCommand {
     std::string input_path;
     std::string output_path;
     std::string local_root;
+    cauth::core::platform::FileWriteOptions write_options;
+    bool has_write_mode = false;
 };
 
 struct ParsedDepotResult {
@@ -255,6 +299,35 @@ ParsedDepotResult parse_depot_command(int argc, char** argv) {
             result.command.process_chunk = true;
             continue;
         }
+        if (result.command.kind == DepotCommandKind::ManifestDownload ||
+            result.command.kind == DepotCommandKind::ChunkDownload ||
+            result.command.kind == DepotCommandKind::FileDownload ||
+            result.command.kind == DepotCommandKind::AllFilesDownload) {
+            const auto write_flag_result = apply_write_mode_flag(
+                result.command.write_options, result.command.has_write_mode, arg, std::cerr);
+            if (write_flag_result < 0) {
+                return result;
+            }
+            if (write_flag_result > 0) {
+                continue;
+            }
+        }
+        if ((result.command.kind == DepotCommandKind::ManifestDownload ||
+             result.command.kind == DepotCommandKind::ChunkDownload ||
+             result.command.kind == DepotCommandKind::FileDownload ||
+             result.command.kind == DepotCommandKind::AllFilesDownload) &&
+            arg == "--atomic-write") {
+            result.command.write_options.atomic_write = true;
+            continue;
+        }
+        if ((result.command.kind == DepotCommandKind::ManifestDownload ||
+             result.command.kind == DepotCommandKind::ChunkDownload ||
+             result.command.kind == DepotCommandKind::FileDownload ||
+             result.command.kind == DepotCommandKind::AllFilesDownload) &&
+            arg == "--no-atomic-write") {
+            result.command.write_options.atomic_write = false;
+            continue;
+        }
         if ((result.command.kind == DepotCommandKind::Manifests ||
              result.command.kind == DepotCommandKind::Preflight ||
              result.command.kind == DepotCommandKind::ManifestCode) &&
@@ -360,7 +433,8 @@ int run_steam_depot(int argc, char** argv) {
         request.kind == DepotCommandKind::ManifestDownload ||
         request.kind == DepotCommandKind::ChunkDownload ||
         request.kind == DepotCommandKind::FileDownload ||
-        request.kind == DepotCommandKind::AllFilesDownload;
+        request.kind == DepotCommandKind::AllFilesDownload ||
+        request.kind == DepotCommandKind::VerifyLocal;
     ScopedDepotCliProgress scoped_progress{enable_progress};
 
     if (request.kind == DepotCommandKind::Branches) {
@@ -397,6 +471,7 @@ int run_steam_depot(int argc, char** argv) {
             request.request_code,
             request.max_count,
             request.output_path,
+            request.write_options,
             std::cout,
             std::cerr);
     }
@@ -436,6 +511,7 @@ int run_steam_depot(int argc, char** argv) {
             loaded_manifest,
             request.max_count,
             request.output_path,
+            request.write_options,
             std::cout,
             std::cerr);
     }
@@ -465,6 +541,7 @@ int run_steam_depot(int argc, char** argv) {
             request.process_chunk,
             request.max_count,
             request.output_path,
+            request.write_options,
             std::cout,
             std::cerr);
     }
@@ -474,6 +551,7 @@ int run_steam_depot(int argc, char** argv) {
         *selected_file_index,
         request.max_count,
         request.output_path,
+        request.write_options,
         std::cout,
         std::cerr);
 }

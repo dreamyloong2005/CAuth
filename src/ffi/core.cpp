@@ -18,6 +18,35 @@ std::string nullable_string(const char* value) {
     return value == nullptr ? std::string{} : std::string{value};
 }
 
+cauth::core::platform::SessionRepositoryBackend from_ffi_session_storage_kind(
+    cauth_session_storage_kind_t kind) {
+    using Backend = cauth::core::platform::SessionRepositoryBackend;
+    switch (kind) {
+    case CAUTH_SESSION_STORAGE_MEMORY:
+        return Backend::Memory;
+    case CAUTH_SESSION_STORAGE_FILE_PATH:
+        return Backend::File;
+    case CAUTH_SESSION_STORAGE_SECURE_STORAGE:
+        return Backend::SecureStorage;
+    case CAUTH_SESSION_STORAGE_DEFAULT:
+    default:
+        return Backend::Default;
+    }
+}
+
+cauth::core::platform::SessionRepositoryOptions make_repository_options(
+    const cauth_client_options_t* options) {
+    cauth::core::platform::SessionRepositoryOptions native_options;
+    if (options == nullptr) {
+        return native_options;
+    }
+    native_options.backend = from_ffi_session_storage_kind(options->session_storage_kind);
+    native_options.storage_path = nullable_string(options->session_storage_path);
+    native_options.storage_namespace = nullable_string(options->session_storage_namespace);
+    native_options.storage_key = nullable_string(options->session_storage_key);
+    return native_options;
+}
+
 thread_local std::string g_last_saved_provider;
 thread_local std::string g_last_saved_subject_id;
 thread_local std::string g_last_saved_account_name;
@@ -85,14 +114,19 @@ cauth_version_t cauth_get_version(void) {
 }
 
 cauth_result_t cauth_client_create(cauth_client_t** out_client) {
+    return cauth_client_create_with_options(nullptr, out_client);
+}
+
+cauth_result_t cauth_client_create_with_options(const cauth_client_options_t* options,
+                                                cauth_client_t** out_client) {
     if (out_client == nullptr) {
         return CAUTH_ERROR_INVALID_ARGUMENT;
     }
 
     try {
         *out_client = new cauth_client{};
-        (*out_client)->session_repository =
-            cauth::core::platform::make_platform_session_repository();
+        (*out_client)->session_repository = cauth::core::platform::make_platform_session_repository(
+            make_repository_options(options));
         return CAUTH_OK;
     } catch (const std::bad_alloc&) {
         *out_client = nullptr;
