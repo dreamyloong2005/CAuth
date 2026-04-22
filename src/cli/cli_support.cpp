@@ -2,7 +2,10 @@
 
 #include <cctype>
 #include <cstdlib>
+#include <iomanip>
+#include <iostream>
 #include <memory>
+#include <sstream>
 
 namespace cauth::cli::support {
 namespace {
@@ -49,6 +52,56 @@ std::uint64_t parse_u64_arg(const char* value) {
     const auto parsed = std::strtoull(value, &end, 10);
     if (end == value || (end != nullptr && *end != '\0')) return 0;
     return static_cast<std::uint64_t>(parsed);
+}
+
+std::string format_byte_count(std::uint64_t bytes) {
+    static constexpr const char* kUnits[] = {"B", "KiB", "MiB", "GiB", "TiB"};
+    constexpr std::size_t kUnitCount = sizeof(kUnits) / sizeof(kUnits[0]);
+    double value = static_cast<double>(bytes);
+    std::size_t unit_index = 0;
+    while (value >= 1024.0 && unit_index + 1 < kUnitCount) {
+        value /= 1024.0;
+        ++unit_index;
+    }
+
+    std::ostringstream out;
+    if (unit_index == 0) {
+        out << bytes << ' ' << kUnits[unit_index];
+    } else {
+        out << std::fixed << std::setprecision(value >= 100.0 ? 0 : value >= 10.0 ? 1 : 2)
+            << value << ' ' << kUnits[unit_index];
+    }
+    return out.str();
+}
+
+std::string truncate_progress_text(std::string_view text, std::size_t max_length) {
+    if (text.size() <= max_length) {
+        return std::string{text};
+    }
+    if (max_length <= 3) {
+        return std::string{text.substr(0, max_length)};
+    }
+    return std::string{text.substr(0, max_length - 3)} + "...";
+}
+
+void print_progress_line(std::ostream& out, ProgressLineState& state, std::string_view line) {
+    out << '\r' << line;
+    if (state.last_line_length > line.size()) {
+        out << std::string(state.last_line_length - line.size(), ' ');
+    }
+    out.flush();
+    state.last_line_length = line.size();
+    state.active = true;
+}
+
+void finish_progress_line(std::ostream& out, ProgressLineState& state) {
+    if (!state.active) {
+        return;
+    }
+    out << '\n';
+    out.flush();
+    state.last_line_length = 0;
+    state.active = false;
 }
 
 } // namespace cauth::cli::support

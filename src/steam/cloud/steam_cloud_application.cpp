@@ -86,6 +86,89 @@ void report_transfer_progress(const SteamCloudTransferProgress& progress) {
     g_transfer_progress_hook(progress, g_transfer_hook_user_data);
 }
 
+struct HttpPhaseProgressContext {
+    SteamCloudTransferKind kind = SteamCloudTransferKind::Pull;
+    cauth::core::platform::HttpTransferDirection direction =
+        cauth::core::platform::HttpTransferDirection::Download;
+    std::string phase;
+    std::string target;
+    std::uint64_t completed_steps = 0;
+    std::uint64_t total_steps = 0;
+    std::uint64_t completed_bytes_base = 0;
+    std::uint64_t total_bytes = 0;
+};
+
+void report_http_phase_progress(const cauth::core::platform::HttpTransferProgress& progress,
+                                void* user_data) {
+    const auto* context = static_cast<const HttpPhaseProgressContext*>(user_data);
+    if (context == nullptr || progress.direction != context->direction) {
+        return;
+    }
+    report_transfer_progress(SteamCloudTransferProgress{
+        context->kind,
+        context->phase,
+        context->target,
+        context->completed_steps,
+        context->total_steps,
+        context->completed_bytes_base + progress.bytes_transferred,
+        context->total_bytes != 0 ? context->total_bytes
+                                  : context->completed_bytes_base + progress.total_bytes,
+    });
+}
+
+bool is_http_phase_canceled(void*) { return is_transfer_canceled(); }
+
+struct UploadBatchProgressContext {
+    std::uint64_t total_steps = 0;
+    std::uint64_t total_bytes = 0;
+    std::uint64_t completed_bytes = 0;
+    std::uint64_t completed_files = 0;
+    std::string current_filename;
+    std::uint64_t current_file_total_bytes = 0;
+    std::uint64_t current_file_bytes = 0;
+};
+
+void report_upload_batch_progress(std::string_view filename,
+                                  std::uint64_t bytes_transferred,
+                                  std::uint64_t total_bytes,
+                                  void* user_data) {
+    auto* context = static_cast<UploadBatchProgressContext*>(user_data);
+    if (context == nullptr) {
+        return;
+    }
+
+    if (!context->current_filename.empty() && context->current_filename != filename) {
+        if (context->current_file_total_bytes != 0 &&
+            context->current_file_bytes >= context->current_file_total_bytes) {
+            context->completed_bytes += context->current_file_total_bytes;
+            ++context->completed_files;
+        }
+        context->current_filename.assign(filename);
+        context->current_file_total_bytes = total_bytes;
+        context->current_file_bytes = 0;
+    } else if (context->current_filename.empty()) {
+        context->current_filename.assign(filename);
+        context->current_file_total_bytes = total_bytes;
+    }
+
+    context->current_file_bytes = bytes_transferred;
+    if (context->current_file_total_bytes == 0) {
+        context->current_file_total_bytes = total_bytes;
+    }
+
+    report_transfer_progress(SteamCloudTransferProgress{
+        SteamCloudTransferKind::Push,
+        "Uploading file",
+        context->current_filename,
+        context->completed_files,
+        context->total_steps,
+        context->completed_bytes + bytes_transferred,
+        context->total_bytes,
+    });
+}
+
+bool is_upload_batch_canceled(void*) { return is_transfer_canceled(); }
+
 std::string normalize_slashes(std::string value) {
     for (auto& ch : value) {
         if (ch == '\\') {
@@ -887,9 +970,25 @@ SteamCloudResult pull_cloud_save(const SteamCloudRequest& request) {
         }
 
         report_pull_state("Downloading file", normalized_name);
-        const auto download_result = g_download_file_hook != nullptr
-                                         ? g_download_file_hook(effective_request, file)
-                                         : download_remote_file(effective_request, file);
+        HttpPhaseProgressContext download_progress_context{
+            SteamCloudTransferKind::Pull,
+            cauth::core::platform::HttpTransferDirection::Download,
+            "Downloading file",
+            normalized_name,
+            progress.transferred_count + progress.skipped_count,
+            total_remote_files,
+            progress.transferred_bytes,
+            total_remote_bytes,
+        };
+        const cauth::core::platform::HttpRequestCallbacks download_callbacks{
+            &report_http_phase_progress,
+            &is_http_phase_canceled,
+            &download_progress_context,
+        };
+        const auto download_result =
+            g_download_file_hook != nullptr
+                ? g_download_file_hook(effective_request, file)
+                : download_remote_file(effective_request, file, download_callbacks);
         if (!download_result.ok) {
             return make_result(
                 effective_request,
@@ -1004,6 +1103,7 @@ SteamCloudResult push_cloud_save(const SteamCloudRequest& request) {
     std::vector<SteamCloudUploadFile> files_to_upload;
     std::unordered_set<std::string> local_remote_filenames;
     local_remote_filenames.reserve(remote_file_by_name.size());
+    std::uint64_t planned_transfer_bytes = 0;
     report_transfer_progress(
         SteamCloudTransferProgress{SteamCloudTransferKind::Push, "Scanning local files", {}});
     for (const auto& entry : std::filesystem::recursive_directory_iterator(input_root, ec)) {
@@ -1087,7 +1187,7 @@ SteamCloudResult push_cloud_save(const SteamCloudRequest& request) {
             }
         }
 
-        progress.transferred_bytes += bytes->size();
+        planned_transfer_bytes += bytes->size();
         files_to_upload.push_back(std::move(file));
     }
 
@@ -1107,6 +1207,7 @@ SteamCloudResult push_cloud_save(const SteamCloudRequest& request) {
     }
 
     if (effective_request.dry_run) {
+        progress.transferred_bytes = planned_transfer_bytes;
         progress.transferred_count = files_to_upload.size();
         progress.deleted_count = files_to_delete.size();
         report_transfer_progress(SteamCloudTransferProgress{
@@ -1149,6 +1250,14 @@ SteamCloudResult push_cloud_save(const SteamCloudRequest& request) {
             effective_request, SteamCloudDirection::Push, progress, "upload preparation");
     }
     const auto total_push_steps = static_cast<std::uint64_t>(files_to_upload.size() + files_to_delete.size());
+    UploadBatchProgressContext upload_progress_context;
+    upload_progress_context.total_steps = total_push_steps;
+    upload_progress_context.total_bytes = planned_transfer_bytes;
+    const SteamCloudUploadCallbacks upload_callbacks{
+        &report_upload_batch_progress,
+        &is_upload_batch_canceled,
+        &upload_progress_context,
+    };
     report_transfer_progress(SteamCloudTransferProgress{
         SteamCloudTransferKind::Push,
         "Uploading files",
@@ -1156,11 +1265,16 @@ SteamCloudResult push_cloud_save(const SteamCloudRequest& request) {
         0,
         total_push_steps,
         0,
-        progress.transferred_bytes,
+        planned_transfer_bytes,
     });
     const auto upload_result =
         use_cm_upload
-            ? upload_cloud_files_via_cm(effective_request, "CAuth", files_to_upload, files_to_delete)
+            ? upload_cloud_files_via_cm(
+                  effective_request,
+                  "CAuth",
+                  files_to_upload,
+                  files_to_delete,
+                  upload_callbacks)
             : (g_upload_cloud_files_hook != nullptr
                      ? g_upload_cloud_files_hook(
                            SteamCloudWebAuthContext{
@@ -1181,12 +1295,14 @@ SteamCloudResult push_cloud_save(const SteamCloudRequest& request) {
                            effective_request.app_id,
                            "CAuth",
                            files_to_upload,
-                           files_to_delete));
+                           files_to_delete,
+                           upload_callbacks));
     if (!upload_result.ok) {
         return make_result(
             effective_request, SteamCloudDirection::Push, false, upload_result.message, progress);
     }
 
+    progress.transferred_bytes = planned_transfer_bytes;
     progress.transferred_count = files_to_upload.size();
     progress.deleted_count = files_to_delete.size();
     report_transfer_progress(SteamCloudTransferProgress{

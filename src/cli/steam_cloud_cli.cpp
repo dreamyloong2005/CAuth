@@ -14,6 +14,62 @@
 namespace {
 using namespace cauth::cli::support;
 
+struct CloudCliProgressState {
+    ProgressLineState line_state;
+};
+
+void on_cloud_progress(const cauth::steam::cloud::SteamCloudTransferProgress& progress,
+                       void* user_data) {
+    auto* state = static_cast<CloudCliProgressState*>(user_data);
+    if (state == nullptr) {
+        return;
+    }
+
+    std::string line = "steam cloud: " + progress.phase;
+    if (progress.total_steps != 0) {
+        line += " [";
+        line += std::to_string(progress.completed_steps);
+        line += "/";
+        line += std::to_string(progress.total_steps);
+        line += "]";
+    }
+    if (progress.total_bytes != 0 || progress.completed_bytes != 0) {
+        line += " ";
+        line += format_byte_count(progress.completed_bytes);
+        if (progress.total_bytes != 0) {
+            line += "/";
+            line += format_byte_count(progress.total_bytes);
+        }
+    }
+    if (!progress.target.empty()) {
+        line += " ";
+        line += truncate_progress_text(progress.target);
+    }
+    print_progress_line(std::cerr, state->line_state, line);
+}
+
+struct ScopedCloudCliProgress {
+    explicit ScopedCloudCliProgress(bool enabled) : enabled_(enabled) {
+        if (!enabled_) {
+            return;
+        }
+        cauth::steam::cloud::set_current_thread_steam_cloud_transfer_hooks(
+            &on_cloud_progress, nullptr, &state_);
+    }
+
+    ~ScopedCloudCliProgress() {
+        if (!enabled_) {
+            return;
+        }
+        cauth::steam::cloud::clear_current_thread_steam_cloud_transfer_hooks();
+        finish_progress_line(std::cerr, state_.line_state);
+    }
+
+  private:
+    bool enabled_ = false;
+    CloudCliProgressState state_;
+};
+
 enum class CloudCommandKind {
     List,
     Verify,
@@ -181,6 +237,10 @@ int run_steam_cloud(int argc, char** argv) {
         const auto parsed = parse_cloud_command(argc, argv);
         if (!parsed.ok) return parsed.exit_code;
 
+        const bool enable_progress =
+            parsed.command.kind == CloudCommandKind::Pull ||
+            parsed.command.kind == CloudCommandKind::Push;
+        ScopedCloudCliProgress scoped_progress{enable_progress};
         const auto store = cauth::core::platform::make_platform_session_repository();
         switch (parsed.command.kind) {
         case CloudCommandKind::List:

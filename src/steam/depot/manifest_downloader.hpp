@@ -1,6 +1,7 @@
 #ifndef CAUTH_CORE_DEPOT_MANIFEST_DOWNLOADER_HPP
 #define CAUTH_CORE_DEPOT_MANIFEST_DOWNLOADER_HPP
 
+#include "core/platform/http_client.hpp"
 #include "steam/depot/cdn_directory.hpp"
 
 #include <cstdint>
@@ -36,9 +37,13 @@ std::string build_chunk_url(const CdnServer& server, const ChunkDownloadRequest&
 class ManifestDownloader {
   public:
     ManifestDownloadResult download_raw_manifest(const CdnServer& server,
-                                                 const ManifestDownloadRequest& request) const;
+                                                 const ManifestDownloadRequest& request,
+                                                 const cauth::core::platform::HttpRequestCallbacks& callbacks =
+                                                     {}) const;
     ManifestDownloadResult download_raw_chunk(const CdnServer& server,
-                                              const ChunkDownloadRequest& request) const;
+                                              const ChunkDownloadRequest& request,
+                                              const cauth::core::platform::HttpRequestCallbacks& callbacks =
+                                                  {}) const;
 };
 
 } // namespace cauth::core::depot

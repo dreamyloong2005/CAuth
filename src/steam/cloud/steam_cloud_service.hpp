@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/platform/http_client.hpp"
 #include "steam/cloud/steam_cloud_types.hpp"
 
 #include <string_view>
@@ -24,6 +25,8 @@ SteamCloudFileListResult fetch_remote_file_list(const SteamCloudRequest& request
                                                 std::uint32_t start_index,
                                                 bool extended_details);
 SteamCloudDownloadResult download_remote_file(const SteamCloudRequest& request,
-                                              const SteamCloudFileEntry& file);
+                                              const SteamCloudFileEntry& file,
+                                              const cauth::core::platform::HttpRequestCallbacks& callbacks =
+                                                  {});
 
 } // namespace cauth::steam::cloud

@@ -103,6 +103,9 @@ raw manifest tree.
 .\build\windows-msvc-debug\cauth.exe steam depot chunk-download --in .\build\manifest.bin --file "relative/path" --chunk-index 0 --out .\build\chunk.bin --depot-key <depot_key_hex> --process --max-count 20
 ```
 
+On the current Windows desktop path, depot transfer commands print live byte progress in the CLI
+while manifest, chunk, and file data are being transferred.
+
 ### One file
 
 ```powershell

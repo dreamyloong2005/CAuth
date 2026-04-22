@@ -791,11 +791,13 @@ SteamCloudFileListResult fetch_remote_file_list(const SteamCloudRequest& request
     }
 }
 
-SteamCloudDownloadResult download_remote_file(const SteamCloudRequest& request,
-                                              const SteamCloudFileEntry& file) {
+SteamCloudDownloadResult download_remote_file(
+    const SteamCloudRequest& request,
+    const SteamCloudFileEntry& file,
+    const cauth::core::platform::HttpRequestCallbacks& callbacks) {
     switch (resolve_cloud_backend(request)) {
     case SteamCloudBackend::CmCloud:
-        return download_remote_file_via_cm(request, file);
+        return download_remote_file_via_cm(request, file, callbacks);
     case SteamCloudBackend::WebApi:
         break;
     case SteamCloudBackend::Auto:
@@ -818,6 +820,7 @@ SteamCloudDownloadResult download_remote_file(const SteamCloudRequest& request,
     cauth::core::platform::HttpRequest http_request;
     http_request.method = cauth::core::platform::HttpMethod::Get;
     http_request.url = file.url;
+    http_request.callbacks = callbacks;
     if (request.session_type == cauth::steam::auth::kSteamSessionTypeWebBrowser &&
         is_web_store_download_url(file.url)) {
         if (const auto store_cookie_header = build_store_cookie_header_for_request(request);

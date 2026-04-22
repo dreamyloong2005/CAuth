@@ -37,6 +37,7 @@ cauth_core
   - local-vs-remote verification
   - pull and push workflows
   - conflict policy handling
+  - live transfer progress in the desktop CLI
   - progress and cancellation support on Android
 
 The command-line tool under `cauth.exe` is a diagnostic frontend over those modules. It is useful
@@ -44,12 +45,12 @@ for development and acceptance testing, but it is not required by library consum
 
 ## Current Version
 
-The current development version is `0.3.3`.
+The current development version is `0.4.0`.
 
 Native versioning is controlled by CMake:
 
 ```cmake
-project(CAuth VERSION 0.3.3)
+project(CAuth VERSION 0.4.0)
 ```
 
 CMake generates the native version header at configure time, and the CLI / C ABI read that same
@@ -179,6 +180,9 @@ Depot and cloud smoke checks:
 & $cauth steam depot preflight --steam-id 7656119... --app-id 2868840 --branch public --max-count 20
 & $cauth steam cloud list --steam-id 7656119... --app-id 2868840 --remote-root savegames --backend auto
 ```
+
+`steam depot manifest-download`, `chunk-download`, `file-download`, `all-files-download`, and
+`steam cloud pull` / `push` now surface live byte progress in the desktop CLI on the WinHTTP path.
 
 When one Steam account has multiple saved session types, depot flows and Steam Cloud `--backend auto`
 prefer the `steam-client` session automatically. If you explicitly choose `--backend web`, CAuth

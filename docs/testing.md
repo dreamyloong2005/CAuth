@@ -26,7 +26,7 @@ $cauth = ".\\build\\windows-msvc-debug\\cauth.exe"
 Expected version output for the current development line:
 
 ```text
-CAuth 0.3.3
+CAuth 0.4.0
 ```
 
 ## 2. Steam auth
@@ -139,6 +139,9 @@ Replace `<depot_id>` and `<manifest_gid>` with values from `preflight`.
 `verify-local` compares file presence, size, chunk structure, and binary content against the
 manifest, excluding directory-only entries.
 
+Desktop CLI depot transfers now print live byte progress while the HTTP transfer is in flight on
+the WinHTTP-backed path.
+
 ## 5. Cloud workflow
 
 Cloud can run against saved CM-backed auth material or against the standalone web-login flow.
@@ -165,6 +168,9 @@ Use `--backend auto` first. If you are diagnosing auth material directly, try `-
 & $cauth steam cloud pull --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-cloud --remote-root savegames --backend auto
 & $cauth steam cloud push --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-cloud --remote-root savegames --backend auto
 ```
+
+Desktop CLI cloud pull and push now print live byte progress while transfer data is moving on the
+WinHTTP-backed path.
 
 If you want an orchestrated script run, use:
 

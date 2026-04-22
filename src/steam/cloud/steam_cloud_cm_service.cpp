@@ -964,10 +964,20 @@ SteamCloudUploadResult make_upload_error(std::string message) {
 }
 
 SteamCloudUploadResult upload_cm_block(const PreparedUploadFile& file,
-                                       const ClientFileUploadBlockRequest& block) {
+                                       const ClientFileUploadBlockRequest& block,
+                                       std::string_view filename,
+                                       std::uint64_t file_offset,
+                                       const SteamCloudUploadCallbacks& callbacks) {
     if (!cauth::core::platform::is_platform_http_client_available()) {
         return make_upload_error("platform HTTP client is not available");
     }
+
+    struct UploadProgressContext {
+        std::string_view filename;
+        std::uint64_t file_offset = 0;
+        std::uint64_t total_bytes = 0;
+        const SteamCloudUploadCallbacks* callbacks = nullptr;
+    } progress_context{filename, file_offset, file.upload_bytes.size(), &callbacks};
 
     cauth::core::platform::HttpRequest http_request;
     http_request.method = block.http_method == 2 ? cauth::core::platform::HttpMethod::Post
@@ -990,6 +1000,29 @@ SteamCloudUploadResult upload_cm_block(const PreparedUploadFile& file,
             begin + static_cast<std::ptrdiff_t>(block.block_length);
         http_request.body.assign(begin, end);
     }
+
+    http_request.callbacks.progress_hook =
+        [](const cauth::core::platform::HttpTransferProgress& progress, void* user_data) {
+            const auto* context = static_cast<const UploadProgressContext*>(user_data);
+            if (context == nullptr || context->callbacks == nullptr ||
+                context->callbacks->progress_hook == nullptr ||
+                progress.direction != cauth::core::platform::HttpTransferDirection::Upload) {
+                return;
+            }
+            context->callbacks->progress_hook(
+                context->filename,
+                context->file_offset + progress.bytes_transferred,
+                context->total_bytes,
+                context->callbacks->user_data);
+        };
+    http_request.callbacks.cancel_hook =
+        [](void* user_data) -> bool {
+            const auto* context = static_cast<const UploadProgressContext*>(user_data);
+            return context != nullptr && context->callbacks != nullptr &&
+                   context->callbacks->cancel_hook != nullptr &&
+                   context->callbacks->cancel_hook(context->callbacks->user_data);
+        };
+    http_request.callbacks.user_data = &progress_context;
 
     const auto response = cauth::core::platform::perform_platform_http_request(http_request);
     if (!response.ok) {
@@ -1067,8 +1100,10 @@ SteamCloudFileListResult fetch_remote_file_list_via_cm(const SteamCloudRequest& 
     return final_result;
 }
 
-SteamCloudDownloadResult download_remote_file_via_cm(const SteamCloudRequest& request,
-                                                     const SteamCloudFileEntry& file) {
+SteamCloudDownloadResult download_remote_file_via_cm(
+    const SteamCloudRequest& request,
+    const SteamCloudFileEntry& file,
+    const cauth::core::platform::HttpRequestCallbacks& callbacks) {
     if (request.app_id == 0) {
         return make_download_error("app_id is required");
     }
@@ -1129,6 +1164,7 @@ SteamCloudDownloadResult download_remote_file_via_cm(const SteamCloudRequest& re
     http_request.url = std::string{download_info.use_https ? "https://" : "http://"} +
                        download_info.url_host + download_info.url_path;
     http_request.headers = download_info.request_headers;
+    http_request.callbacks = callbacks;
     const auto response = cauth::core::platform::perform_platform_http_request(http_request);
     if (!response.ok) {
         return make_download_error(response.error_message.empty()
@@ -1149,7 +1185,8 @@ SteamCloudDownloadResult download_remote_file_via_cm(const SteamCloudRequest& re
 SteamCloudUploadResult upload_cloud_files_via_cm(const SteamCloudRequest& request,
                                                  std::string_view machine_name,
                                                  const std::vector<SteamCloudUploadFile>& files,
-                                                 const std::vector<std::string>& files_to_delete) {
+                                                 const std::vector<std::string>& files_to_delete,
+                                                 const SteamCloudUploadCallbacks& callbacks) {
     if (request.app_id == 0) {
         return make_upload_error("app_id is required");
     }
@@ -1260,8 +1297,14 @@ SteamCloudUploadResult upload_cloud_files_via_cm(const SteamCloudRequest& reques
                 }
 
                 bool transfer_succeeded = true;
+                std::uint64_t uploaded_file_bytes = 0;
                 for (const auto& block : begin_file_response->block_requests) {
-                    const auto block_result = upload_cm_block(file, block);
+                    const auto block_result = upload_cm_block(
+                        file,
+                        block,
+                        file.source->filename,
+                        uploaded_file_bytes,
+                        callbacks);
                     if (!block_result.ok) {
                         transfer_succeeded = false;
                         upload_error =
@@ -1269,6 +1312,7 @@ SteamCloudUploadResult upload_cloud_files_via_cm(const SteamCloudRequest& reques
                             block_result.message;
                         break;
                     }
+                    uploaded_file_bytes += static_cast<std::uint64_t>(block.block_length);
                 }
 
                 const auto commit_request =

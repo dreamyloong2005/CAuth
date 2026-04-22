@@ -14,6 +14,26 @@ struct HttpHeader {
     std::string value;
 };
 
+enum class HttpTransferDirection {
+    Upload,
+    Download,
+};
+
+struct HttpTransferProgress {
+    HttpTransferDirection direction = HttpTransferDirection::Download;
+    std::uint64_t bytes_transferred = 0;
+    std::uint64_t total_bytes = 0;
+};
+
+using HttpTransferProgressHook = void (*)(const HttpTransferProgress& progress, void* user_data);
+using HttpTransferCancelHook = bool (*)(void* user_data);
+
+struct HttpRequestCallbacks {
+    HttpTransferProgressHook progress_hook = nullptr;
+    HttpTransferCancelHook cancel_hook = nullptr;
+    void* user_data = nullptr;
+};
+
 enum class HttpMethod {
     Get,
     Post,
@@ -28,6 +48,7 @@ struct HttpRequest {
     std::vector<HttpHeader> headers;
     std::int32_t connect_timeout_ms = 5000;
     std::int32_t read_timeout_ms = 10000;
+    HttpRequestCallbacks callbacks;
 };
 
 struct HttpResponse {

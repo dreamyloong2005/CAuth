@@ -15,6 +15,61 @@
 namespace {
 using namespace cauth::cli::support;
 
+struct DepotCliProgressState {
+    ProgressLineState line_state;
+};
+
+void on_depot_progress(const cauth::steam::depot::DepotDownloadProgress& progress, void* user_data) {
+    auto* state = static_cast<DepotCliProgressState*>(user_data);
+    if (state == nullptr) {
+        return;
+    }
+
+    std::string line = "steam depot: " + progress.phase;
+    if (progress.total_steps != 0) {
+        line += " [";
+        line += std::to_string(progress.completed_steps);
+        line += "/";
+        line += std::to_string(progress.total_steps);
+        line += "]";
+    }
+    if (progress.total_bytes != 0 || progress.completed_bytes != 0) {
+        line += " ";
+        line += format_byte_count(progress.completed_bytes);
+        if (progress.total_bytes != 0) {
+            line += "/";
+            line += format_byte_count(progress.total_bytes);
+        }
+    }
+    if (!progress.target.empty()) {
+        line += " ";
+        line += truncate_progress_text(progress.target);
+    }
+    print_progress_line(std::cerr, state->line_state, line);
+}
+
+struct ScopedDepotCliProgress {
+    explicit ScopedDepotCliProgress(bool enabled) : enabled_(enabled) {
+        if (!enabled_) {
+            return;
+        }
+        cauth::steam::depot::set_current_thread_depot_download_hooks(
+            &on_depot_progress, nullptr, &state_);
+    }
+
+    ~ScopedDepotCliProgress() {
+        if (!enabled_) {
+            return;
+        }
+        cauth::steam::depot::clear_current_thread_depot_download_hooks();
+        finish_progress_line(std::cerr, state_.line_state);
+    }
+
+  private:
+    bool enabled_ = false;
+    DepotCliProgressState state_;
+};
+
 enum class DepotCommandKind {
     Branches,
     Manifests,
@@ -301,6 +356,13 @@ int run_steam_depot(int argc, char** argv) {
     if (!parsed.ok) return parsed.exit_code;
 
     const auto& request = parsed.command;
+    const bool enable_progress =
+        request.kind == DepotCommandKind::ManifestDownload ||
+        request.kind == DepotCommandKind::ChunkDownload ||
+        request.kind == DepotCommandKind::FileDownload ||
+        request.kind == DepotCommandKind::AllFilesDownload;
+    ScopedDepotCliProgress scoped_progress{enable_progress};
+
     if (request.kind == DepotCommandKind::Branches) {
         return cauth::steam::depot::print_branches(
             request.steam_id, request.app_id, request.max_count, std::cout, std::cerr);

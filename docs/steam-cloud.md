@@ -27,6 +27,9 @@ Common flags:
 - `--delete-remote-orphans` allows `push` to remove remote files that do not exist locally.
 - `--include-extra-local` makes `verify` report local-only files explicitly.
 
+On the current Windows desktop path, `pull` and `push` print live byte progress in the CLI while
+network transfer is happening.
+
 ## Auth material
 
 Steam Cloud supports two practical session sources:

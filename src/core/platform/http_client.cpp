@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cwctype>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -44,6 +45,23 @@ std::string narrow_ascii(std::wstring_view value) {
         narrowed.push_back(static_cast<char>(ch & 0xff));
     }
     return narrowed;
+}
+#endif
+
+#ifdef _WIN32
+bool is_request_canceled(const HttpRequestCallbacks& callbacks) {
+    return callbacks.cancel_hook != nullptr && callbacks.cancel_hook(callbacks.user_data);
+}
+
+void report_transfer_progress(const HttpRequestCallbacks& callbacks,
+                              HttpTransferDirection direction,
+                              std::uint64_t bytes_transferred,
+                              std::uint64_t total_bytes) {
+    if (callbacks.progress_hook == nullptr) {
+        return;
+    }
+    callbacks.progress_hook(HttpTransferProgress{direction, bytes_transferred, total_bytes},
+                            callbacks.user_data);
 }
 #endif
 
@@ -134,6 +152,40 @@ std::vector<HttpHeader> parse_raw_headers(const std::wstring& raw_headers) {
     return headers;
 }
 
+bool header_name_equals_ascii_case_insensitive(std::string_view lhs, std::string_view rhs) {
+    if (lhs.size() != rhs.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < lhs.size(); ++index) {
+        if (std::tolower(static_cast<unsigned char>(lhs[index])) !=
+            std::tolower(static_cast<unsigned char>(rhs[index]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::uint64_t parse_header_u64(std::string_view value) {
+    std::uint64_t parsed_value = 0;
+    for (const auto ch : value) {
+        if (!std::isdigit(static_cast<unsigned char>(ch))) {
+            return 0;
+        }
+        parsed_value = (parsed_value * 10U) + static_cast<std::uint64_t>(ch - '0');
+    }
+    return parsed_value;
+}
+
+std::uint64_t response_content_length(const std::vector<HttpHeader>& headers) {
+    for (const auto& header : headers) {
+        if (!header_name_equals_ascii_case_insensitive(header.name, "Content-Length")) {
+            continue;
+        }
+        return parse_header_u64(header.value);
+    }
+    return 0;
+}
+
 HttpResponse winhttp_request(const HttpRequest& request) {
     const auto parsed = parse_url(request.url);
     if (!parsed.has_value()) {
@@ -188,15 +240,64 @@ HttpResponse winhttp_request(const HttpRequest& request) {
         headers += L"\r\n";
     }
 
-    auto* optional_body = request.body.empty()
-                              ? WINHTTP_NO_REQUEST_DATA
-                              : const_cast<std::uint8_t*>(request.body.data());
+    if (request.body.size() >
+        static_cast<std::size_t>((std::numeric_limits<DWORD>::max)())) {
+        return {false, "HTTP request body is too large", 0, {}, {}};
+    }
+
+    if (is_request_canceled(request.callbacks)) {
+        return {false, "operation canceled", 0, {}, {}};
+    }
+
     const auto body_size = static_cast<DWORD>(request.body.size());
     if (WinHttpSendRequest(http_request.get(),
                            headers.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.c_str(),
                            headers.empty() ? 0 : static_cast<DWORD>(headers.size()),
-                           optional_body, body_size, body_size, 0) == FALSE ||
-        WinHttpReceiveResponse(http_request.get(), nullptr) == FALSE) {
+                           WINHTTP_NO_REQUEST_DATA,
+                           0,
+                           body_size,
+                           0) == FALSE) {
+        return {false, "WinHTTP request failed", 0, {}, {}};
+    }
+
+    if (!request.body.empty()) {
+        constexpr std::size_t kUploadChunkSize = 64U * 1024U;
+        report_transfer_progress(
+            request.callbacks, HttpTransferDirection::Upload, 0, request.body.size());
+
+        std::size_t offset = 0;
+        while (offset < request.body.size()) {
+            if (is_request_canceled(request.callbacks)) {
+                return {false, "operation canceled", 0, {}, {}};
+            }
+
+            const auto remaining = request.body.size() - offset;
+            const auto requested =
+                static_cast<DWORD>((std::min<std::size_t>)(remaining, kUploadChunkSize));
+            DWORD written = 0;
+            if (WinHttpWriteData(http_request.get(),
+                                 request.body.data() + static_cast<std::ptrdiff_t>(offset),
+                                 requested,
+                                 &written) == FALSE) {
+                return {false, "WinHttpWriteData failed", 0, {}, {}};
+            }
+            if (written == 0 && requested != 0) {
+                return {false, "WinHttpWriteData wrote zero bytes", 0, {}, {}};
+            }
+
+            offset += static_cast<std::size_t>(written);
+            report_transfer_progress(request.callbacks,
+                                     HttpTransferDirection::Upload,
+                                     offset,
+                                     request.body.size());
+        }
+    }
+
+    if (is_request_canceled(request.callbacks)) {
+        return {false, "operation canceled", 0, {}, {}};
+    }
+
+    if (WinHttpReceiveResponse(http_request.get(), nullptr) == FALSE) {
         return {false, "WinHTTP request failed", 0, {}, {}};
     }
 
@@ -222,9 +323,14 @@ HttpResponse winhttp_request(const HttpRequest& request) {
     const std::wstring raw_headers =
         raw_headers_buffer.empty() ? std::wstring{} : std::wstring{raw_headers_buffer.data()};
     auto response_headers = parse_raw_headers(raw_headers);
+    const auto content_length = response_content_length(response_headers);
 
     std::vector<std::uint8_t> body;
+    report_transfer_progress(request.callbacks, HttpTransferDirection::Download, 0, content_length);
     while (true) {
+        if (is_request_canceled(request.callbacks)) {
+            return {false, "operation canceled", status_code, {}, response_headers};
+        }
         DWORD available = 0;
         if (WinHttpQueryDataAvailable(http_request.get(), &available) == FALSE) {
             return {false, "WinHttpQueryDataAvailable failed", status_code, {}, response_headers};
@@ -240,6 +346,10 @@ HttpResponse winhttp_request(const HttpRequest& request) {
             return {false, "WinHttpReadData failed", status_code, {}, response_headers};
         }
         body.resize(offset + read);
+        report_transfer_progress(request.callbacks,
+                                 HttpTransferDirection::Download,
+                                 body.size(),
+                                 content_length);
     }
 
     if (status_code < 200 || status_code >= 300) {

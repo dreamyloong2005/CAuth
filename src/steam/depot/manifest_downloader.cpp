@@ -63,22 +63,26 @@ std::string build_cdn_url(const CdnServer& server, const std::string& path) {
 
 ManifestDownloadResult ManifestDownloader::download_raw_manifest(
     const CdnServer& server,
-    const ManifestDownloadRequest& request) const {
+    const ManifestDownloadRequest& request,
+    const cauth::core::platform::HttpRequestCallbacks& callbacks) const {
     platform::HttpRequest http_request;
     http_request.url = build_manifest_url(server, request);
     http_request.connect_timeout_ms = kDownloadConnectTimeoutMs;
     http_request.read_timeout_ms = 0;
+    http_request.callbacks = callbacks;
     const auto response = platform::perform_platform_http_request(http_request);
     return {response.ok, response.error_message, http_request.url, std::move(response.body)};
 }
 
 ManifestDownloadResult ManifestDownloader::download_raw_chunk(
     const CdnServer& server,
-    const ChunkDownloadRequest& request) const {
+    const ChunkDownloadRequest& request,
+    const cauth::core::platform::HttpRequestCallbacks& callbacks) const {
     platform::HttpRequest http_request;
     http_request.url = build_chunk_url(server, request);
     http_request.connect_timeout_ms = kDownloadConnectTimeoutMs;
     http_request.read_timeout_ms = 0;
+    http_request.callbacks = callbacks;
     const auto response = platform::perform_platform_http_request(http_request);
     return {response.ok, response.error_message, http_request.url, std::move(response.body)};
 }

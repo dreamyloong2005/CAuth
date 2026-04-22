@@ -30,6 +30,11 @@ struct BeginHttpUploadResponse {
     std::vector<cauth::core::platform::HttpHeader> headers;
 };
 
+struct HttpUploadProgressContext {
+    std::string_view filename;
+    const SteamCloudUploadCallbacks* callbacks = nullptr;
+};
+
 std::string json_escape(std::string_view value) {
     std::string escaped;
     escaped.reserve(value.size() + 8);
@@ -393,13 +398,38 @@ ServiceCallResult complete_app_upload_batch(const SteamCloudWebAuthContext& auth
 
 ServiceCallResult upload_file_bytes(std::string_view url,
                                     const std::vector<cauth::core::platform::HttpHeader>& headers,
-                                    const std::vector<std::uint8_t>& bytes) {
+                                    std::string_view filename,
+                                    const std::vector<std::uint8_t>& bytes,
+                                    const SteamCloudUploadCallbacks& callbacks) {
+    HttpUploadProgressContext progress_context{filename, &callbacks};
     cauth::core::platform::HttpRequest request;
     request.method = cauth::core::platform::HttpMethod::Put;
     request.url = std::string{url};
     request.content_type = "application/octet-stream";
     request.headers = headers;
     request.body = bytes;
+    request.callbacks.progress_hook =
+        [](const cauth::core::platform::HttpTransferProgress& progress, void* user_data) {
+            const auto* context = static_cast<const HttpUploadProgressContext*>(user_data);
+            if (context == nullptr || context->callbacks == nullptr ||
+                context->callbacks->progress_hook == nullptr ||
+                progress.direction != cauth::core::platform::HttpTransferDirection::Upload) {
+                return;
+            }
+            context->callbacks->progress_hook(
+                context->filename,
+                progress.bytes_transferred,
+                progress.total_bytes,
+                context->callbacks->user_data);
+        };
+    request.callbacks.cancel_hook =
+        [](void* user_data) -> bool {
+            const auto* context = static_cast<const HttpUploadProgressContext*>(user_data);
+            return context != nullptr && context->callbacks != nullptr &&
+                   context->callbacks->cancel_hook != nullptr &&
+                   context->callbacks->cancel_hook(context->callbacks->user_data);
+        };
+    request.callbacks.user_data = &progress_context;
     const auto response = cauth::core::platform::perform_platform_http_request(request);
     if (!response.ok) {
         return {false, response.error_message, {}};
@@ -440,20 +470,23 @@ SteamCloudUploadResult upload_cloud_files(std::string_view access_token,
                                           std::uint32_t app_id,
                                           std::string_view machine_name,
                                           const std::vector<SteamCloudUploadFile>& files,
-                                          const std::vector<std::string>& files_to_delete) {
+                                          const std::vector<std::string>& files_to_delete,
+                                          const SteamCloudUploadCallbacks& callbacks) {
     return upload_cloud_files(
         SteamCloudWebAuthContext{std::string{access_token}, {}, {}},
         app_id,
         machine_name,
         files,
-        files_to_delete);
+        files_to_delete,
+        callbacks);
 }
 
 SteamCloudUploadResult upload_cloud_files(const SteamCloudWebAuthContext& auth,
                                           std::uint32_t app_id,
                                           std::string_view machine_name,
                                           const std::vector<SteamCloudUploadFile>& files,
-                                          const std::vector<std::string>& files_to_delete) {
+                                          const std::vector<std::string>& files_to_delete,
+                                          const SteamCloudUploadCallbacks& callbacks) {
     if (auth.access_token.empty() && auth.web_cookie_header.empty() &&
         auth.store_cookie_header.empty()) {
         return {false, "access token with write_cloud scope or web cookie session is required"};
@@ -483,7 +516,8 @@ SteamCloudUploadResult upload_cloud_files(const SteamCloudWebAuthContext& auth,
             break;
         }
 
-        const auto put_result = upload_file_bytes(upload.url, upload.headers, file.bytes);
+        const auto put_result =
+            upload_file_bytes(upload.url, upload.headers, file.filename, file.bytes, callbacks);
         const auto commit_result =
             commit_http_upload(auth, app_id, file.filename, file.file_sha, put_result.ok);
         if (!put_result.ok) {
