@@ -203,6 +203,7 @@ Actions currently exposed:
 - manifest info snapshot
 - manifest file list snapshot
 - local verify snapshot
+- detailed verify entry arrays for depot local verification
 - `moduleStatus`
 - `moduleTask`
 - download task snapshot with progress/cancel state
@@ -236,6 +237,7 @@ Actions currently exposed:
 - `dryRun`, `deleteRemoteOrphans`, `verifyIncludeExtraLocal`, `conflictPolicy`
 - remote file list snapshot
 - latest local verify snapshot
+- detailed verify entry arrays for cloud verification
 - latest pull/push result
 - `moduleStatus`
 - `moduleTask`

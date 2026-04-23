@@ -106,6 +106,26 @@ data class ManifestFileListSnapshot(
     val files: Array<ManifestFileEntrySnapshot>,
 )
 
+data class DepotLocalVerifyEntrySnapshot(
+    val manifestFilename: String,
+    val localPath: String,
+    val statusCode: Int,
+    val expectedSize: Long,
+    val actualSize: Long,
+    val expectedShaHex: String,
+    val actualShaHex: String,
+    val reason: String,
+) {
+    val statusLabel: String
+        get() = when (statusCode) {
+            1 -> "Missing"
+            2 -> "Mismatched"
+            3 -> "Size Only"
+            4 -> "Filtered Out"
+            else -> "OK"
+        }
+}
+
 data class DepotLocalVerifySnapshot(
     val present: Boolean,
     val clean: Boolean,
@@ -117,6 +137,7 @@ data class DepotLocalVerifySnapshot(
     val sizeOnlyCount: Long,
     val filteredOutCount: Long,
     val totalCount: Long,
+    val entries: Array<DepotLocalVerifyEntrySnapshot>,
 )
 
 data class DepotModuleTaskSnapshot(

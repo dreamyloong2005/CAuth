@@ -12,6 +12,7 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -39,6 +40,8 @@ constexpr const char* kManifestFileEntrySnapshotClassName =
     "com/cauth/android/steam/depot/ManifestFileEntrySnapshot";
 constexpr const char* kManifestFileListSnapshotClassName =
     "com/cauth/android/steam/depot/ManifestFileListSnapshot";
+constexpr const char* kDepotLocalVerifyEntrySnapshotClassName =
+    "com/cauth/android/steam/depot/DepotLocalVerifyEntrySnapshot";
 constexpr const char* kDepotLocalVerifySnapshotClassName =
     "com/cauth/android/steam/depot/DepotLocalVerifySnapshot";
 constexpr const char* kDepotDownloadTaskSnapshotClassName =
@@ -55,8 +58,18 @@ jclass g_manifest_request_code_snapshot_class = nullptr;
 jclass g_manifest_info_snapshot_class = nullptr;
 jclass g_manifest_file_entry_snapshot_class = nullptr;
 jclass g_manifest_file_list_snapshot_class = nullptr;
+jclass g_depot_local_verify_entry_snapshot_class = nullptr;
 jclass g_depot_local_verify_snapshot_class = nullptr;
 jclass g_depot_download_task_snapshot_class = nullptr;
+
+struct DepotVerifyStorage {
+    std::vector<std::string> manifest_filenames;
+    std::vector<std::string> local_paths;
+    std::vector<std::string> expected_sha_hex;
+    std::vector<std::string> actual_sha_hex;
+    std::vector<std::string> reasons;
+    std::vector<cauth_depot_local_verify_entry_t> entries;
+};
 
 enum class DepotDownloadTaskKind : jint {
     Manifest = 1,
@@ -86,6 +99,7 @@ struct DepotDownloadTask {
     std::uint64_t total_bytes = 0;
     std::string verify_report_module_status;
     cauth_depot_local_verify_report_t verify_report{};
+    DepotVerifyStorage verify_storage;
 };
 
 std::mutex g_download_tasks_mutex;
@@ -187,6 +201,11 @@ jclass ensure_manifest_file_entry_snapshot_class(JNIEnv* env) {
 jclass ensure_manifest_file_list_snapshot_class(JNIEnv* env) {
     return require_global_class(
         env, g_manifest_file_list_snapshot_class, kManifestFileListSnapshotClassName);
+}
+
+jclass ensure_depot_local_verify_entry_snapshot_class(JNIEnv* env) {
+    return require_global_class(
+        env, g_depot_local_verify_entry_snapshot_class, kDepotLocalVerifyEntrySnapshotClassName);
 }
 
 jclass ensure_depot_local_verify_snapshot_class(JNIEnv* env) {
@@ -462,15 +481,109 @@ jobject make_manifest_file_list(JNIEnv* env, const cauth_manifest_file_list_t& r
     return instance;
 }
 
-jobject make_depot_local_verify_snapshot(JNIEnv* env,
-                                         const cauth_depot_local_verify_report_t& result) {
-    jclass cls = ensure_depot_local_verify_snapshot_class(env);
+void fill_depot_verify_storage(const cauth_depot_local_verify_report_t& source,
+                               DepotVerifyStorage& storage,
+                               cauth_depot_local_verify_report_t& destination) {
+    storage.manifest_filenames.clear();
+    storage.local_paths.clear();
+    storage.expected_sha_hex.clear();
+    storage.actual_sha_hex.clear();
+    storage.reasons.clear();
+    storage.entries.clear();
+    storage.manifest_filenames.reserve(static_cast<std::size_t>(source.entry_count));
+    storage.local_paths.reserve(static_cast<std::size_t>(source.entry_count));
+    storage.expected_sha_hex.reserve(static_cast<std::size_t>(source.entry_count));
+    storage.actual_sha_hex.reserve(static_cast<std::size_t>(source.entry_count));
+    storage.reasons.reserve(static_cast<std::size_t>(source.entry_count));
+    for (std::size_t index = 0; index < static_cast<std::size_t>(source.entry_count); ++index) {
+        const auto& entry = source.entries[index];
+        storage.manifest_filenames.push_back(entry.manifest_filename == nullptr ? "" : entry.manifest_filename);
+        storage.local_paths.push_back(entry.local_path == nullptr ? "" : entry.local_path);
+        storage.expected_sha_hex.push_back(entry.expected_sha_hex == nullptr ? "" : entry.expected_sha_hex);
+        storage.actual_sha_hex.push_back(entry.actual_sha_hex == nullptr ? "" : entry.actual_sha_hex);
+        storage.reasons.push_back(entry.reason == nullptr ? "" : entry.reason);
+    }
+    storage.entries.reserve(static_cast<std::size_t>(source.entry_count));
+    for (std::size_t index = 0; index < static_cast<std::size_t>(source.entry_count); ++index) {
+        const auto& entry = source.entries[index];
+        storage.entries.push_back(cauth_depot_local_verify_entry_t{
+            storage.manifest_filenames[index].c_str(),
+            storage.local_paths[index].c_str(),
+            entry.status,
+            entry.expected_size,
+            entry.actual_size,
+            storage.expected_sha_hex[index].c_str(),
+            storage.actual_sha_hex[index].c_str(),
+            storage.reasons[index].c_str(),
+        });
+    }
+    destination = source;
+    destination.entries = storage.entries.empty() ? nullptr : storage.entries.data();
+    destination.entry_count = static_cast<unsigned long long>(storage.entries.size());
+}
+
+jobject make_depot_local_verify_entry_snapshot(JNIEnv* env,
+                                               const cauth_depot_local_verify_entry_t& entry) {
+    jclass cls = ensure_depot_local_verify_entry_snapshot_class(env);
     if (cls == nullptr) {
         return nullptr;
     }
-    jmethodID ctor = env->GetMethodID(cls, "<init>", "(ZZLjava/lang/String;JJJJJJJ)V");
+    jmethodID ctor = env->GetMethodID(
+        cls,
+        "<init>",
+        "(Ljava/lang/String;Ljava/lang/String;IJJLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
     if (ctor == nullptr) {
         return nullptr;
+    }
+    jstring manifest_filename =
+        env->NewStringUTF(entry.manifest_filename == nullptr ? "" : entry.manifest_filename);
+    jstring local_path = env->NewStringUTF(entry.local_path == nullptr ? "" : entry.local_path);
+    jstring expected_sha =
+        env->NewStringUTF(entry.expected_sha_hex == nullptr ? "" : entry.expected_sha_hex);
+    jstring actual_sha =
+        env->NewStringUTF(entry.actual_sha_hex == nullptr ? "" : entry.actual_sha_hex);
+    jstring reason = env->NewStringUTF(entry.reason == nullptr ? "" : entry.reason);
+    jobject instance = env->NewObject(
+        cls,
+        ctor,
+        manifest_filename,
+        local_path,
+        static_cast<jint>(entry.status),
+        static_cast<jlong>(entry.expected_size),
+        static_cast<jlong>(entry.actual_size),
+        expected_sha,
+        actual_sha,
+        reason);
+    env->DeleteLocalRef(manifest_filename);
+    env->DeleteLocalRef(local_path);
+    env->DeleteLocalRef(expected_sha);
+    env->DeleteLocalRef(actual_sha);
+    env->DeleteLocalRef(reason);
+    return instance;
+}
+
+jobject make_depot_local_verify_snapshot(JNIEnv* env,
+                                         const cauth_depot_local_verify_report_t& result) {
+    jclass entry_cls = ensure_depot_local_verify_entry_snapshot_class(env);
+    jclass cls = ensure_depot_local_verify_snapshot_class(env);
+    if (entry_cls == nullptr || cls == nullptr) {
+        return nullptr;
+    }
+    jmethodID ctor = env->GetMethodID(
+        cls,
+        "<init>",
+        "(ZZLjava/lang/String;JJJJJJJ[Lcom/cauth/android/steam/depot/DepotLocalVerifyEntrySnapshot;)V");
+    if (ctor == nullptr) {
+        return nullptr;
+    }
+    jobjectArray entries = env->NewObjectArray(
+        static_cast<jsize>(result.entry_count),
+        entry_cls,
+        nullptr);
+    for (jsize index = 0; index < static_cast<jsize>(result.entry_count); ++index) {
+        jobject item = make_depot_local_verify_entry_snapshot(env, result.entries[index]);
+        env->SetObjectArrayElement(entries, index, item);
+        env->DeleteLocalRef(item);
     }
     jstring module_status =
         env->NewStringUTF(result.module_status == nullptr ? "idle" : result.module_status);
@@ -479,8 +592,9 @@ jobject make_depot_local_verify_snapshot(JNIEnv* env,
         static_cast<jboolean>(result.clean != 0), module_status, static_cast<jlong>(result.checked_count),
         static_cast<jlong>(result.ok_count), static_cast<jlong>(result.missing_count),
         static_cast<jlong>(result.mismatched_count), static_cast<jlong>(result.size_only_count),
-        static_cast<jlong>(result.filtered_out_count), static_cast<jlong>(result.total_count));
+        static_cast<jlong>(result.filtered_out_count), static_cast<jlong>(result.total_count), entries);
     env->DeleteLocalRef(module_status);
+    env->DeleteLocalRef(entries);
     return instance;
 }
 
@@ -1335,7 +1449,7 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeStartDepotVerifyL
             if (succeeded) {
                 std::lock_guard<std::mutex> lock(task->mutex);
                 task->has_verify_report = true;
-                task->verify_report = verify_report;
+                fill_depot_verify_storage(verify_report, task->verify_storage, task->verify_report);
                 task->verify_report_module_status =
                     verify_report.module_status == nullptr ? "idle" : verify_report.module_status;
                 task->verify_report.module_status = task->verify_report_module_status.c_str();

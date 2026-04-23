@@ -54,6 +54,30 @@ std::string infer_depot_module_status(DepotDownloadKind kind, std::string_view p
     return "downloading";
 }
 
+std::string trim_trailing_line_breaks(std::string text) {
+    while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
+        text.pop_back();
+    }
+    return text;
+}
+
+std::uint64_t read_file_size_or_zero(const std::filesystem::path& path) {
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(path, ec);
+    return ec ? 0 : size;
+}
+
+LocalVerifyEntry make_local_verify_entry_base(const cauth::core::depot::DepotManifestFile& file,
+                                              std::string_view display_name) {
+    LocalVerifyEntry entry;
+    entry.manifest_filename = std::string{display_name};
+    entry.expected_size = file.size;
+    if (!file.content_sha.empty()) {
+        entry.expected_sha_hex = cauth::core::cm::bytes_to_hex(file.content_sha);
+    }
+    return entry;
+}
+
 void append_depot_platform_summary(std::ostream& out, const cauth::core::depot::DepotInfo& depot) {
     out << " platform=" << cauth::core::depot::depot_platform_label(depot.os_list, depot.os_arch);
     if (!depot.depot_from_app.empty()) {
@@ -709,6 +733,7 @@ int verify_local_files_against_manifest(const LoadedDepotManifest& loaded_manife
         *report = LocalVerifyReport{};
         report->module_status = "verifying";
         report->total_count = count_non_directory_manifest_files(manifest);
+        report->entries.reserve(static_cast<std::size_t>(report->total_count));
     }
 
     std::error_code root_error;
@@ -772,6 +797,12 @@ int verify_local_files_against_manifest(const LoadedDepotManifest& loaded_manife
         }
         const auto display_name = display_manifest_filename(file.filename);
         if (!contains_ascii_case_insensitive(display_name, filter_text)) {
+            if (report != nullptr) {
+                auto entry = make_local_verify_entry_base(file, display_name);
+                entry.status = LocalVerifyStatus::FilteredOut;
+                entry.reason = "filtered out by filter text";
+                report->entries.push_back(std::move(entry));
+            }
             ++filtered_out;
             completed_bytes += file.size;
             report_download_progress(DepotDownloadProgress{
@@ -787,8 +818,17 @@ int verify_local_files_against_manifest(const LoadedDepotManifest& loaded_manife
         }
         ++checked;
 
-        const auto output_path = make_safe_manifest_output_path(local_root, file.filename, err);
+        std::ostringstream path_err;
+        const auto output_path = make_safe_manifest_output_path(local_root, file.filename, path_err);
         if (!output_path.has_value()) {
+            const auto reason = trim_trailing_line_breaks(path_err.str());
+            err << path_err.str();
+            if (report != nullptr) {
+                auto entry = make_local_verify_entry_base(file, display_name);
+                entry.status = LocalVerifyStatus::Mismatched;
+                entry.reason = reason.empty() ? "unsafe manifest output path" : reason;
+                report->entries.push_back(std::move(entry));
+            }
             ++mismatched;
             completed_bytes += file.size;
             report_download_progress(DepotDownloadProgress{
@@ -803,17 +843,30 @@ int verify_local_files_against_manifest(const LoadedDepotManifest& loaded_manife
             continue;
         }
 
+        auto entry = make_local_verify_entry_base(file, display_name);
+        entry.local_path = output_path->string();
+        entry.actual_size = read_file_size_or_zero(*output_path);
         const auto verify_result =
             cauth::core::depot::verify_depot_file_on_disk(*output_path, file);
         if (verify_result.ok) {
             ++matched;
             if (!cauth::core::depot::depot_file_has_binary_verification(file)) {
+                entry.status = LocalVerifyStatus::SizeOnly;
+                entry.reason = "size-only verification";
                 ++size_only;
                 out << "SIZE_ONLY file=" << display_name
                     << " path=" << output_path->string() << '\n';
             } else {
+                entry.status = LocalVerifyStatus::Ok;
+                entry.reason = "binary verification passed";
+                if (!entry.expected_sha_hex.empty()) {
+                    entry.actual_sha_hex = entry.expected_sha_hex;
+                }
                 out << "OK file=" << display_name
                     << " path=" << output_path->string() << '\n';
+            }
+            if (report != nullptr) {
+                report->entries.push_back(std::move(entry));
             }
             completed_bytes += file.size;
             report_download_progress(DepotDownloadProgress{
@@ -829,6 +882,12 @@ int verify_local_files_against_manifest(const LoadedDepotManifest& loaded_manife
         }
 
         if (verify_result.error_message.find("missing") != std::string::npos) {
+            entry.status = LocalVerifyStatus::MissingLocal;
+            entry.actual_size = 0;
+            entry.reason = verify_result.error_message;
+            if (report != nullptr) {
+                report->entries.push_back(std::move(entry));
+            }
             ++missing;
             out << "MISSING file=" << display_name
                 << " path=" << output_path->string() << '\n';
@@ -845,6 +904,11 @@ int verify_local_files_against_manifest(const LoadedDepotManifest& loaded_manife
             continue;
         }
 
+        entry.status = LocalVerifyStatus::Mismatched;
+        entry.reason = verify_result.error_message;
+        if (report != nullptr) {
+            report->entries.push_back(std::move(entry));
+        }
         ++mismatched;
         out << "MISMATCH file=" << display_name
             << " path=" << output_path->string()

@@ -38,6 +38,17 @@ thread_local std::string g_cloud_task_module_status;
 thread_local std::string g_cloud_task_result_message;
 thread_local std::string g_cloud_task_verify_message;
 
+struct CloudVerifyStorage {
+    std::vector<std::string> remote_filenames;
+    std::vector<std::string> local_paths;
+    std::vector<std::string> remote_shas;
+    std::vector<std::string> local_shas;
+    std::vector<std::string> reasons;
+    std::vector<cauth_steam_cloud_verify_entry_t> entries;
+};
+
+thread_local CloudVerifyStorage g_cloud_verify_storage;
+
 struct CloudTask {
     explicit CloudTask(cauth_steam_cloud_task_kind_t task_kind) : kind(task_kind) {}
 
@@ -63,6 +74,7 @@ struct CloudTask {
     cauth_steam_cloud_verify_report_t verify_report{};
     std::string verify_message;
     std::string verify_module_status;
+    CloudVerifyStorage verify_storage;
 };
 
 std::mutex g_cloud_tasks_mutex;
@@ -217,9 +229,62 @@ void fill_cloud_result(const cauth::steam::cloud::SteamCloudResult& source,
 void fill_cloud_verify_report(const cauth::steam::cloud::SteamCloudVerifyResult& source,
                               cauth_steam_cloud_verify_report_t& destination,
                               std::string& message_storage,
-                              std::string& module_status_storage) {
+                              std::string& module_status_storage,
+                              CloudVerifyStorage& storage) {
     message_storage = source.message;
     module_status_storage = source.module_status;
+    storage.remote_filenames.clear();
+    storage.local_paths.clear();
+    storage.remote_shas.clear();
+    storage.local_shas.clear();
+    storage.reasons.clear();
+    storage.entries.clear();
+    storage.remote_filenames.reserve(source.entries.size());
+    storage.local_paths.reserve(source.entries.size());
+    storage.remote_shas.reserve(source.entries.size());
+    storage.local_shas.reserve(source.entries.size());
+    storage.reasons.reserve(source.entries.size());
+    for (const auto& entry : source.entries) {
+        storage.remote_filenames.push_back(entry.remote_filename);
+        storage.local_paths.push_back(entry.local_path);
+        storage.remote_shas.push_back(entry.remote_sha);
+        storage.local_shas.push_back(entry.local_sha);
+        storage.reasons.push_back(entry.reason);
+    }
+    storage.entries.reserve(source.entries.size());
+    for (std::size_t index = 0; index < source.entries.size(); ++index) {
+        const auto& entry = source.entries[index];
+        cauth_steam_cloud_verify_status_t status = CAUTH_STEAM_CLOUD_VERIFY_OK;
+        switch (entry.status) {
+        case cauth::steam::cloud::SteamCloudVerifyStatus::MissingLocal:
+            status = CAUTH_STEAM_CLOUD_VERIFY_MISSING_LOCAL;
+            break;
+        case cauth::steam::cloud::SteamCloudVerifyStatus::Mismatched:
+            status = CAUTH_STEAM_CLOUD_VERIFY_MISMATCHED;
+            break;
+        case cauth::steam::cloud::SteamCloudVerifyStatus::SizeOnly:
+            status = CAUTH_STEAM_CLOUD_VERIFY_SIZE_ONLY;
+            break;
+        case cauth::steam::cloud::SteamCloudVerifyStatus::ExtraLocal:
+            status = CAUTH_STEAM_CLOUD_VERIFY_EXTRA_LOCAL;
+            break;
+        case cauth::steam::cloud::SteamCloudVerifyStatus::Ok:
+        default:
+            status = CAUTH_STEAM_CLOUD_VERIFY_OK;
+            break;
+        }
+        storage.entries.push_back(cauth_steam_cloud_verify_entry_t{
+            storage.remote_filenames[index].c_str(),
+            storage.local_paths[index].c_str(),
+            status,
+            entry.remote_size,
+            entry.remote_timestamp,
+            storage.remote_shas[index].c_str(),
+            entry.local_size,
+            storage.local_shas[index].c_str(),
+            storage.reasons[index].c_str(),
+        });
+    }
     destination.present = 1;
     destination.clean = source.clean() ? 1 : 0;
     destination.include_extra_local = source.include_extra_local ? 1 : 0;
@@ -232,6 +297,8 @@ void fill_cloud_verify_report(const cauth::steam::cloud::SteamCloudVerifyResult&
     destination.filtered_out_count = source.filtered_out_count;
     destination.extra_local_count = source.extra_local_count;
     destination.total_count = source.total_count;
+    destination.entry_count = static_cast<unsigned long long>(storage.entries.size());
+    destination.entries = storage.entries.empty() ? nullptr : storage.entries.data();
     destination.module_status = module_status_storage.c_str();
     destination.message = message_storage.c_str();
 }
@@ -448,7 +515,10 @@ cauth_result_t cauth_steam_cloud_verify_local_files(
     out_result->filtered_out_count = 0;
     out_result->extra_local_count = 0;
     out_result->total_count = 0;
+    out_result->entry_count = 0;
+    out_result->entries = nullptr;
     out_result->message = "";
+    g_cloud_verify_storage = CloudVerifyStorage{};
 
     try {
         const auto native_request = build_native_request(client, request);
@@ -457,20 +527,12 @@ cauth_result_t cauth_steam_cloud_verify_local_files(
         g_last_cloud_message = result.message;
         g_last_cloud_module_status = result.module_status;
 
-        out_result->present = 1;
-        out_result->clean = result.clean() ? 1 : 0;
-        out_result->include_extra_local = result.include_extra_local ? 1 : 0;
-        out_result->app_id = result.app_id;
-        out_result->module_status = g_last_cloud_module_status.c_str();
-        out_result->checked_count = result.checked_count;
-        out_result->ok_count = result.ok_count;
-        out_result->missing_count = result.missing_count;
-        out_result->mismatched_count = result.mismatched_count;
-        out_result->size_only_count = result.size_only_count;
-        out_result->filtered_out_count = result.filtered_out_count;
-        out_result->extra_local_count = result.extra_local_count;
-        out_result->total_count = result.total_count;
-        out_result->message = g_last_cloud_message.c_str();
+        fill_cloud_verify_report(
+            result,
+            *out_result,
+            g_last_cloud_message,
+            g_last_cloud_module_status,
+            g_cloud_verify_storage);
         return CAUTH_OK;
     } catch (const std::bad_alloc&) {
         return CAUTH_ERROR_OUT_OF_MEMORY;
@@ -565,7 +627,8 @@ cauth_result_t cauth_steam_cloud_start_verify_local_files(
                     result,
                     task.verify_report,
                     task.verify_message,
-                    task.verify_module_status);
+                    task.verify_module_status,
+                    task.verify_storage);
                 task.succeeded = result.clean();
                 task.canceled = !task.succeeded && message_indicates_cancel(result.message);
                 task.module_status = result.module_status;

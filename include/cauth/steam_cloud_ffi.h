@@ -74,6 +74,26 @@ typedef struct cauth_steam_cloud_result {
     const char* message;
 } cauth_steam_cloud_result_t;
 
+typedef enum cauth_steam_cloud_verify_status {
+    CAUTH_STEAM_CLOUD_VERIFY_OK = 0,
+    CAUTH_STEAM_CLOUD_VERIFY_MISSING_LOCAL = 1,
+    CAUTH_STEAM_CLOUD_VERIFY_MISMATCHED = 2,
+    CAUTH_STEAM_CLOUD_VERIFY_SIZE_ONLY = 3,
+    CAUTH_STEAM_CLOUD_VERIFY_EXTRA_LOCAL = 4
+} cauth_steam_cloud_verify_status_t;
+
+typedef struct cauth_steam_cloud_verify_entry {
+    const char* remote_filename;
+    const char* local_path;
+    cauth_steam_cloud_verify_status_t status;
+    unsigned int remote_size;
+    unsigned long long remote_timestamp;
+    const char* remote_sha;
+    unsigned long long local_size;
+    const char* local_sha;
+    const char* reason;
+} cauth_steam_cloud_verify_entry_t;
+
 typedef struct cauth_steam_cloud_verify_report {
     int present;
     int clean;
@@ -88,6 +108,8 @@ typedef struct cauth_steam_cloud_verify_report {
     unsigned long long filtered_out_count;
     unsigned long long extra_local_count;
     unsigned long long total_count;
+    unsigned long long entry_count;
+    const cauth_steam_cloud_verify_entry_t* entries;
     const char* message;
 } cauth_steam_cloud_verify_report_t;
 

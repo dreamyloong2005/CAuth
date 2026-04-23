@@ -143,5 +143,6 @@ The Android example app uses the same native depot module and adds a few workflo
 - manifest workflow prefers a Windows-tagged depot when several candidates are returned
 - `Prepare Key + Code` clears stale key and request-code state before refetching
 - verify, chunk/file download, and all-files download all run through progress-aware task cards
+- depot verify snapshots now expose per-file detail entries, not just counters
 
 For the Android-side UI and controller details, see [android-compose.md](android-compose.md).

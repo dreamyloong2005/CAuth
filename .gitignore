@@ -42,6 +42,7 @@ CMakeUserPresets.json
 
 # Android / Gradle outputs
 /android/.gradle/
+/android/.idea/
 /android/.kotlin/
 /android/local.properties
 /android/**/build/
@@ -55,6 +56,7 @@ CMakeUserPresets.json
 *.trace
 *.dmp
 *.mdmp
+*.hprof
 *.tmp
 *.temp
 *.bak

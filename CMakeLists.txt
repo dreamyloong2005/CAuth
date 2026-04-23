@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 
 project(
     CAuth
-    VERSION 0.5.0
+    VERSION 0.5.1
     DESCRIPTION "Native Steam authentication, depot, and cloud toolkit"
     LANGUAGES C CXX
 )

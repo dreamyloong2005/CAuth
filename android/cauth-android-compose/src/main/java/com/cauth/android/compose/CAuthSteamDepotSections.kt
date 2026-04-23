@@ -436,6 +436,11 @@ fun CAuthSteamDepotResultsSection(
                 SelectableResultText(
                     "missing=${snapshot.missingCount} mismatched=${snapshot.mismatchedCount} sizeOnly=${snapshot.sizeOnlyCount} filteredOut=${snapshot.filteredOutCount} total=${snapshot.totalCount}",
                 )
+                snapshot.entries.take(6).forEach { entry ->
+                    SelectableResultText(
+                        "${entry.statusLabel} manifest=${entry.manifestFilename} local=${entry.localPath.ifBlank { "(none)" }} expected=${entry.expectedSize} actual=${entry.actualSize} reason=${entry.reason.ifBlank { "(none)" }}",
+                    )
+                }
             }
         }
     }

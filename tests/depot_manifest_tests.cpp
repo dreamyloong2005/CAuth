@@ -264,38 +264,51 @@ int main() {
     }
     std::ostringstream verify_out;
     std::ostringstream verify_err;
+    cauth::steam::depot::LocalVerifyReport verify_ok_report;
     const auto verify_ok = cauth::steam::depot::verify_local_files_against_manifest(
         loaded_manifest,
         verify_root.string(),
         {},
         verify_out,
-        verify_err);
+        verify_err,
+        &verify_ok_report);
     {
         std::ofstream temp_output{verify_root / "folder" / "file.bin", std::ios::binary | std::ios::trunc};
         temp_output << "abcde";
     }
     std::ostringstream verify_bad_out;
     std::ostringstream verify_bad_err;
+    cauth::steam::depot::LocalVerifyReport verify_bad_report;
     const auto verify_bad = cauth::steam::depot::verify_local_files_against_manifest(
         loaded_manifest,
         verify_root.string(),
         {},
         verify_bad_out,
-        verify_bad_err);
+        verify_bad_err,
+        &verify_bad_report);
     std::filesystem::remove(verify_root / "folder" / "file.bin");
     std::ostringstream verify_missing_out;
     std::ostringstream verify_missing_err;
+    cauth::steam::depot::LocalVerifyReport verify_missing_report;
     const auto verify_missing = cauth::steam::depot::verify_local_files_against_manifest(
         loaded_manifest,
         verify_root.string(),
         {},
         verify_missing_out,
-        verify_missing_err);
+        verify_missing_err,
+        &verify_missing_report);
     std::filesystem::remove_all(verify_root);
     if (verify_ok != 0 || verify_bad == 0 || verify_missing == 0 ||
         verify_out.str().find("OK file=folder/file.bin") == std::string::npos ||
         verify_bad_out.str().find("MISMATCH file=folder/file.bin") == std::string::npos ||
-        verify_missing_out.str().find("MISSING file=folder/file.bin") == std::string::npos) {
+        verify_missing_out.str().find("MISSING file=folder/file.bin") == std::string::npos ||
+        verify_ok_report.entries.size() != 1 ||
+        verify_ok_report.entries[0].status != cauth::steam::depot::LocalVerifyStatus::Ok ||
+        verify_bad_report.entries.size() != 1 ||
+        verify_bad_report.entries[0].status != cauth::steam::depot::LocalVerifyStatus::Mismatched ||
+        verify_bad_report.entries[0].reason.find("incorrect") == std::string::npos ||
+        verify_missing_report.entries.size() != 1 ||
+        verify_missing_report.entries[0].status != cauth::steam::depot::LocalVerifyStatus::MissingLocal) {
         std::cerr << "manifest local verification should report ok, mismatch, and missing files\n";
         return 1;
     }

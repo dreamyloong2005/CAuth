@@ -223,6 +223,11 @@ fun CAuthSteamCloudResultsSection(
                     "filtered=${result.filteredOutCount} extraLocal=${result.extraLocalCount} total=${result.totalCount}",
                 )
                 SelectableCloudResultText(result.message)
+                result.entries.take(6).forEach { entry ->
+                    SelectableCloudResultText(
+                        "${entry.statusLabel} remote=${entry.remoteFilename.ifBlank { "(none)" }} local=${entry.localPath.ifBlank { "(none)" }} remoteSize=${entry.remoteSize} localSize=${entry.localSize} reason=${entry.reason.ifBlank { "(none)" }}",
+                    )
+                }
             }
         }
     }

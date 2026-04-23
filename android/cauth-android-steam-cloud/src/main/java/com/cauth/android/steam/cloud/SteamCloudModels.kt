@@ -37,6 +37,27 @@ data class SteamCloudRequest(
     val localWriteOptions: CAuthFileWriteOptions = CAuthFileWriteOptions(),
 )
 
+data class SteamCloudVerifyEntrySnapshot(
+    val remoteFilename: String,
+    val localPath: String,
+    val statusCode: Int,
+    val remoteSize: Int,
+    val remoteTimestamp: Long,
+    val remoteSha: String,
+    val localSize: Long,
+    val localSha: String,
+    val reason: String,
+) {
+    val statusLabel: String
+        get() = when (statusCode) {
+            1 -> "Missing"
+            2 -> "Mismatched"
+            3 -> "Size Only"
+            4 -> "Extra Local"
+            else -> "OK"
+        }
+}
+
 data class SteamCloudVerifySnapshot(
     val present: Boolean,
     val clean: Boolean,
@@ -52,6 +73,7 @@ data class SteamCloudVerifySnapshot(
     val extraLocalCount: Long,
     val totalCount: Long,
     val message: String,
+    val entries: Array<SteamCloudVerifyEntrySnapshot>,
 )
 
 data class SteamCloudFileEntrySnapshot(

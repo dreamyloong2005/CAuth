@@ -49,7 +49,7 @@ int main() {
         auto argv = make_argv(args);
         const auto exit_code = cauth::cli::run_cli(static_cast<int>(argv.size()), argv.data(), out, err);
         if (expect_true(exit_code == 0, "version command should succeed") != 0) return 1;
-        if (expect_true(contains(out.str(), "CAuth 0.5.0"), "version output should include semantic version") != 0) return 1;
+        if (expect_true(contains(out.str(), "CAuth 0.5.1"), "version output should include semantic version") != 0) return 1;
         if (expect_true(err.str().empty(), "version command should not write stderr") != 0) return 1;
     }
 
@@ -60,7 +60,7 @@ int main() {
         auto argv = make_argv(args);
         const auto exit_code = cauth::cli::run_cli(static_cast<int>(argv.size()), argv.data(), out, err);
         if (expect_true(exit_code == 0, "version command with memory session store should succeed") != 0) return 1;
-        if (expect_true(contains(out.str(), "CAuth 0.5.0"), "memory session store should still dispatch version") != 0) return 1;
+        if (expect_true(contains(out.str(), "CAuth 0.5.1"), "memory session store should still dispatch version") != 0) return 1;
     }
 
     {

@@ -387,7 +387,8 @@ int main() {
         verify_request.local_root = temp_dir.string();
         const auto result = cauth::steam::cloud::verify_cloud_local_files(verify_request);
         if (!result.ok || result.clean() || result.checked_count != 3 || result.ok_count != 1 ||
-            result.mismatched_count != 1 || result.missing_count != 1 || result.total_count != 3) {
+            result.mismatched_count != 1 || result.missing_count != 1 || result.total_count != 3 ||
+            result.entries.size() != 3 || result.entries[0].remote_filename.empty()) {
             std::cerr << "cloud verify should classify ok, mismatch, and missing files\n";
             return 1;
         }
@@ -416,7 +417,9 @@ int main() {
         verify_request.access_token = "token";
         verify_request.local_root = temp_dir.string();
         const auto result = cauth::steam::cloud::verify_cloud_local_files(verify_request);
-        if (!result.ok || !result.clean() || result.size_only_count != 1 || result.ok_count != 1) {
+        if (!result.ok || !result.clean() || result.size_only_count != 1 || result.ok_count != 1 ||
+            result.entries.size() != 1 ||
+            result.entries[0].status != cauth::steam::cloud::SteamCloudVerifyStatus::SizeOnly) {
             std::cerr << "cloud verify should fall back to size-only when remote sha is absent\n";
             return 1;
         }
@@ -451,7 +454,9 @@ int main() {
         verify_request.access_token = "token";
         verify_request.local_root = temp_dir.string();
         const auto result = cauth::steam::cloud::verify_cloud_local_files(verify_request, true);
-        if (!result.ok || result.extra_local_count != 1 || !result.clean()) {
+        if (!result.ok || result.extra_local_count != 1 || !result.clean() ||
+            result.entries.size() != 2 ||
+            result.entries[1].status != cauth::steam::cloud::SteamCloudVerifyStatus::ExtraLocal) {
             std::cerr << "cloud verify should optionally report extra local files without failing clean state\n";
             return 1;
         }

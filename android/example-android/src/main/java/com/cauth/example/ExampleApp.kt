@@ -863,6 +863,15 @@ private fun buildDepotStatusEntries(state: CAuthSteamDepotState): List<ExampleSt
         add(ExampleStatusEntry("Verify Checked", it.checkedCount.toString()))
         add(ExampleStatusEntry("Verify Missing", it.missingCount.toString()))
         add(ExampleStatusEntry("Verify Mismatch", it.mismatchedCount.toString()))
+        add(ExampleStatusEntry("Verify Entries", it.entries.size.toString()))
+        it.entries.firstOrNull { entry -> entry.statusCode != 0 }?.let { entry ->
+            add(
+                ExampleStatusEntry(
+                    "First Verify Issue",
+                    "${entry.statusLabel}: ${entry.manifestFilename.ifBlank { "(none)" }}",
+                ),
+            )
+        }
     }
 }
 
@@ -917,6 +926,15 @@ private fun buildCloudVerifyStatusEntries(state: CAuthSteamCloudState): List<Exa
         add(ExampleStatusEntry("Filtered Out", it.filteredOutCount.toString()))
         add(ExampleStatusEntry("Extra Local", it.extraLocalCount.toString()))
         add(ExampleStatusEntry("Total", it.totalCount.toString()))
+        add(ExampleStatusEntry("Entries", it.entries.size.toString()))
+        it.entries.firstOrNull { entry -> entry.statusCode != 0 }?.let { entry ->
+            add(
+                ExampleStatusEntry(
+                    "First Verify Issue",
+                    "${entry.statusLabel}: ${entry.remoteFilename.ifBlank { "(none)" }}",
+                ),
+            )
+        }
     } ?: add(ExampleStatusEntry("Verify", "Not run"))
 }
 
@@ -1877,6 +1895,12 @@ private fun buildDepotSummary(state: CAuthSteamDepotState): String = buildString
         appendLine("localVerify.sizeOnly=${it.sizeOnlyCount}")
         appendLine("localVerify.filteredOut=${it.filteredOutCount}")
         appendLine("localVerify.total=${it.totalCount}")
+        appendLine("localVerify.entries=${it.entries.size}")
+        it.entries.take(12).forEachIndexed { index, entry ->
+            appendLine(
+                "localVerify.entry[$index]=status=${entry.statusLabel} manifest=${entry.manifestFilename} local=${entry.localPath} expected=${entry.expectedSize} actual=${entry.actualSize} reason=${entry.reason}",
+            )
+        }
     }
     state.downloadTask?.let {
         appendLine("downloadTask.kind=${it.kindLabel}")
@@ -1889,6 +1913,24 @@ private fun buildDepotSummary(state: CAuthSteamDepotState): String = buildString
         appendLine("downloadTask.progress=${it.progressSummary}")
         appendLine("downloadTask.target=${it.target}")
         appendLine("downloadTask.message=${it.message}")
+        it.verifyResult?.let { result ->
+            appendLine("downloadTask.verify.present=${result.present}")
+            appendLine("downloadTask.verify.clean=${result.clean}")
+            appendLine("downloadTask.verify.moduleStatus=${result.moduleStatus}")
+            appendLine("downloadTask.verify.checked=${result.checkedCount}")
+            appendLine("downloadTask.verify.ok=${result.okCount}")
+            appendLine("downloadTask.verify.missing=${result.missingCount}")
+            appendLine("downloadTask.verify.mismatched=${result.mismatchedCount}")
+            appendLine("downloadTask.verify.sizeOnly=${result.sizeOnlyCount}")
+            appendLine("downloadTask.verify.filteredOut=${result.filteredOutCount}")
+            appendLine("downloadTask.verify.total=${result.totalCount}")
+            appendLine("downloadTask.verify.entries=${result.entries.size}")
+            result.entries.take(12).forEachIndexed { index, entry ->
+                appendLine(
+                    "downloadTask.verify.entry[$index]=status=${entry.statusLabel} manifest=${entry.manifestFilename} local=${entry.localPath} expected=${entry.expectedSize} actual=${entry.actualSize} reason=${entry.reason}",
+                )
+            }
+        }
     }
 }
 
@@ -1927,6 +1969,12 @@ private fun buildCloudSummary(state: CAuthSteamCloudState): String = buildString
         appendLine("verify.extraLocal=${it.extraLocalCount}")
         appendLine("verify.total=${it.totalCount}")
         appendLine("verify.message=${it.message}")
+        appendLine("verify.entries=${it.entries.size}")
+        it.entries.take(12).forEachIndexed { index, entry ->
+            appendLine(
+                "verify.entry[$index]=status=${entry.statusLabel} remote=${entry.remoteFilename} local=${entry.localPath} remoteSize=${entry.remoteSize} localSize=${entry.localSize} reason=${entry.reason}",
+            )
+        }
     }
     state.operationResult?.let {
         appendLine("result.ok=${it.ok}")
@@ -1960,6 +2008,27 @@ private fun buildCloudSummary(state: CAuthSteamCloudState): String = buildString
             appendLine("transferTask.result.conflicts=${result.conflictCount}")
             appendLine("transferTask.result.bytes=${result.transferredBytes}")
             appendLine("transferTask.result.message=${result.message}")
+        }
+        it.verifyResult?.let { result ->
+            appendLine("transferTask.verify.present=${result.present}")
+            appendLine("transferTask.verify.clean=${result.clean}")
+            appendLine("transferTask.verify.moduleStatus=${result.moduleStatus}")
+            appendLine("transferTask.verify.includeExtraLocal=${result.includeExtraLocal}")
+            appendLine("transferTask.verify.checked=${result.checkedCount}")
+            appendLine("transferTask.verify.ok=${result.okCount}")
+            appendLine("transferTask.verify.missing=${result.missingCount}")
+            appendLine("transferTask.verify.mismatched=${result.mismatchedCount}")
+            appendLine("transferTask.verify.sizeOnly=${result.sizeOnlyCount}")
+            appendLine("transferTask.verify.filteredOut=${result.filteredOutCount}")
+            appendLine("transferTask.verify.extraLocal=${result.extraLocalCount}")
+            appendLine("transferTask.verify.total=${result.totalCount}")
+            appendLine("transferTask.verify.message=${result.message}")
+            appendLine("transferTask.verify.entries=${result.entries.size}")
+            result.entries.take(12).forEachIndexed { index, entry ->
+                appendLine(
+                    "transferTask.verify.entry[$index]=status=${entry.statusLabel} remote=${entry.remoteFilename} local=${entry.localPath} remoteSize=${entry.remoteSize} localSize=${entry.localSize} reason=${entry.reason}",
+                )
+            }
         }
     }
 }

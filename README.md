@@ -46,12 +46,12 @@ for development and acceptance testing, but it is not required by library consum
 
 ## Current Version
 
-The current development version is `0.5.0`.
+The current development version is `0.5.1`.
 
 Native versioning is controlled by CMake:
 
 ```cmake
-project(CAuth VERSION 0.5.0)
+project(CAuth VERSION 0.5.1)
 ```
 
 CMake generates the native version header at configure time, and the CLI / C ABI read that same
@@ -196,6 +196,8 @@ results:
 - `moduleTask` carries the current task summary while work is active or briefly after it completes
 - terminal states such as `succeeded`, `failed`, and `canceled` automatically settle back to `idle`
 - when a controller returns to `idle`, its public `moduleTask` is cleared back to `null`
+- depot/cloud verify snapshots now also include per-entry detail arrays so hosts can show the exact
+  files that were missing, mismatched, size-only, or extra-local
 
 For a full validation path, use [docs/testing.md](docs/testing.md).
 

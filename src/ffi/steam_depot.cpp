@@ -50,6 +50,17 @@ thread_local std::string g_depot_task_phase;
 thread_local std::string g_depot_task_target;
 thread_local std::string g_depot_task_message;
 
+struct DepotVerifyStorage {
+    std::vector<std::string> manifest_filenames;
+    std::vector<std::string> local_paths;
+    std::vector<std::string> expected_sha_hex;
+    std::vector<std::string> actual_sha_hex;
+    std::vector<std::string> reasons;
+    std::vector<cauth_depot_local_verify_entry_t> entries;
+};
+
+thread_local DepotVerifyStorage g_depot_verify_storage;
+
 struct DepotTask {
     explicit DepotTask(cauth_depot_task_kind_t task_kind) : kind(task_kind) {}
 
@@ -70,6 +81,7 @@ struct DepotTask {
     bool has_verify_report = false;
     std::string verify_report_module_status;
     cauth_depot_local_verify_report_t verify_report{};
+    DepotVerifyStorage verify_storage;
 };
 
 std::mutex g_depot_tasks_mutex;
@@ -146,7 +158,59 @@ std::shared_ptr<DepotTask> find_depot_task(unsigned long long handle) {
 
 void fill_verify_report(const cauth::steam::depot::LocalVerifyReport& source,
                         cauth_depot_local_verify_report_t& destination,
-                        int clean) {
+                        int clean,
+                        DepotVerifyStorage& storage) {
+    storage.manifest_filenames.clear();
+    storage.local_paths.clear();
+    storage.expected_sha_hex.clear();
+    storage.actual_sha_hex.clear();
+    storage.reasons.clear();
+    storage.entries.clear();
+    storage.manifest_filenames.reserve(source.entries.size());
+    storage.local_paths.reserve(source.entries.size());
+    storage.expected_sha_hex.reserve(source.entries.size());
+    storage.actual_sha_hex.reserve(source.entries.size());
+    storage.reasons.reserve(source.entries.size());
+    for (const auto& entry : source.entries) {
+        storage.manifest_filenames.push_back(entry.manifest_filename);
+        storage.local_paths.push_back(entry.local_path);
+        storage.expected_sha_hex.push_back(entry.expected_sha_hex);
+        storage.actual_sha_hex.push_back(entry.actual_sha_hex);
+        storage.reasons.push_back(entry.reason);
+    }
+    storage.entries.reserve(source.entries.size());
+    for (std::size_t index = 0; index < source.entries.size(); ++index) {
+        const auto& entry = source.entries[index];
+        cauth_depot_local_verify_status_t status = CAUTH_DEPOT_LOCAL_VERIFY_OK;
+        switch (entry.status) {
+        case cauth::steam::depot::LocalVerifyStatus::MissingLocal:
+            status = CAUTH_DEPOT_LOCAL_VERIFY_MISSING_LOCAL;
+            break;
+        case cauth::steam::depot::LocalVerifyStatus::Mismatched:
+            status = CAUTH_DEPOT_LOCAL_VERIFY_MISMATCHED;
+            break;
+        case cauth::steam::depot::LocalVerifyStatus::SizeOnly:
+            status = CAUTH_DEPOT_LOCAL_VERIFY_SIZE_ONLY;
+            break;
+        case cauth::steam::depot::LocalVerifyStatus::FilteredOut:
+            status = CAUTH_DEPOT_LOCAL_VERIFY_FILTERED_OUT;
+            break;
+        case cauth::steam::depot::LocalVerifyStatus::Ok:
+        default:
+            status = CAUTH_DEPOT_LOCAL_VERIFY_OK;
+            break;
+        }
+        storage.entries.push_back(cauth_depot_local_verify_entry_t{
+            storage.manifest_filenames[index].c_str(),
+            storage.local_paths[index].c_str(),
+            status,
+            entry.expected_size,
+            entry.actual_size,
+            storage.expected_sha_hex[index].c_str(),
+            storage.actual_sha_hex[index].c_str(),
+            storage.reasons[index].c_str(),
+        });
+    }
     destination.present = 1;
     destination.clean = clean;
     destination.module_status = "";
@@ -157,6 +221,8 @@ void fill_verify_report(const cauth::steam::depot::LocalVerifyReport& source,
     destination.size_only_count = source.size_only_count;
     destination.filtered_out_count = source.filtered_out_count;
     destination.total_count = source.total_count;
+    destination.entry_count = static_cast<unsigned long long>(storage.entries.size());
+    destination.entries = storage.entries.empty() ? nullptr : storage.entries.data();
 }
 
 template <typename Runner>
@@ -973,6 +1039,9 @@ cauth_result_t cauth_depot_verify_local_files(const char* input_path,
     out_response->size_only_count = 0;
     out_response->filtered_out_count = 0;
     out_response->total_count = 0;
+    out_response->entry_count = 0;
+    out_response->entries = nullptr;
+    g_depot_verify_storage = DepotVerifyStorage{};
 
     try {
         cauth::steam::depot::LoadedDepotManifest loaded_manifest;
@@ -996,14 +1065,12 @@ cauth_result_t cauth_depot_verify_local_files(const char* input_path,
         out_response->present = 1;
         out_response->clean = exit_code == 0 ? 1 : 0;
         g_depot_verify_module_status = verify_report.module_status;
+        fill_verify_report(
+            verify_report,
+            *out_response,
+            exit_code == 0 ? 1 : 0,
+            g_depot_verify_storage);
         out_response->module_status = g_depot_verify_module_status.c_str();
-        out_response->checked_count = verify_report.checked_count;
-        out_response->ok_count = verify_report.ok_count;
-        out_response->missing_count = verify_report.missing_count;
-        out_response->mismatched_count = verify_report.mismatched_count;
-        out_response->size_only_count = verify_report.size_only_count;
-        out_response->filtered_out_count = verify_report.filtered_out_count;
-        out_response->total_count = verify_report.total_count;
 
         if (verify_report.fatal_error) {
             if (!err.str().empty()) {
@@ -1359,7 +1426,11 @@ cauth_result_t cauth_depot_start_verify_local_files(const char* input_path,
                 &verify_report);
             std::lock_guard lock{task.mutex};
             task.has_verify_report = true;
-            fill_verify_report(verify_report, task.verify_report, exit_code == 0 ? 1 : 0);
+            fill_verify_report(
+                verify_report,
+                task.verify_report,
+                exit_code == 0 ? 1 : 0,
+                task.verify_storage);
             task.verify_report_module_status = verify_report.module_status;
             task.verify_report.module_status = task.verify_report_module_status.c_str();
             task.succeeded = exit_code == 0;

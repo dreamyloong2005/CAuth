@@ -43,6 +43,25 @@ struct LoadedDepotManifest {
     std::optional<std::vector<std::uint8_t>> depot_key;
 };
 
+enum class LocalVerifyStatus {
+    Ok,
+    MissingLocal,
+    Mismatched,
+    SizeOnly,
+    FilteredOut,
+};
+
+struct LocalVerifyEntry {
+    std::string manifest_filename;
+    std::string local_path;
+    LocalVerifyStatus status = LocalVerifyStatus::Ok;
+    std::uint64_t expected_size = 0;
+    std::uint64_t actual_size = 0;
+    std::string expected_sha_hex;
+    std::string actual_sha_hex;
+    std::string reason;
+};
+
 struct LocalVerifyReport {
     bool fatal_error = false;
     std::string module_status = "idle";
@@ -53,6 +72,7 @@ struct LocalVerifyReport {
     std::uint64_t size_only_count = 0;
     std::uint64_t filtered_out_count = 0;
     std::uint64_t total_count = 0;
+    std::vector<LocalVerifyEntry> entries;
 
     [[nodiscard]] bool clean() const {
         return missing_count == 0 && mismatched_count == 0;

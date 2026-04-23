@@ -74,7 +74,7 @@ path like:
 .\build\windows-msvc-debug\cauth.exe steam auth status
 ```
 
-`--version` should print the current native version, for example `CAuth 0.5.0`. If `doctor` and
+`--version` should print the current native version, for example `CAuth 0.5.1`. If `doctor` and
 `--version` work, the desktop toolchain is in decent shape.
 
 ## Steam auth quick test
@@ -127,6 +127,7 @@ Its controller state now follows a clearer task lifecycle:
 - terminal states like `succeeded`, `failed`, and `canceled`
 - automatic return to `idle`
 - guaranteed `moduleTask == null` once the controller settles back to `idle`
+- depot/cloud verify snapshots now include per-entry detail arrays, not just aggregate counters
 
 ## Where to go next
 

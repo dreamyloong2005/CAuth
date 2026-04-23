@@ -119,7 +119,28 @@ typedef struct cauth_depot_local_verify_report {
     unsigned long long size_only_count;
     unsigned long long filtered_out_count;
     unsigned long long total_count;
+    unsigned long long entry_count;
+    const struct cauth_depot_local_verify_entry* entries;
 } cauth_depot_local_verify_report_t;
+
+typedef enum cauth_depot_local_verify_status {
+    CAUTH_DEPOT_LOCAL_VERIFY_OK = 0,
+    CAUTH_DEPOT_LOCAL_VERIFY_MISSING_LOCAL = 1,
+    CAUTH_DEPOT_LOCAL_VERIFY_MISMATCHED = 2,
+    CAUTH_DEPOT_LOCAL_VERIFY_SIZE_ONLY = 3,
+    CAUTH_DEPOT_LOCAL_VERIFY_FILTERED_OUT = 4
+} cauth_depot_local_verify_status_t;
+
+typedef struct cauth_depot_local_verify_entry {
+    const char* manifest_filename;
+    const char* local_path;
+    cauth_depot_local_verify_status_t status;
+    unsigned long long expected_size;
+    unsigned long long actual_size;
+    const char* expected_sha_hex;
+    const char* actual_sha_hex;
+    const char* reason;
+} cauth_depot_local_verify_entry_t;
 
 typedef enum cauth_depot_task_kind {
     CAUTH_DEPOT_TASK_MANIFEST_DOWNLOAD = 1,

@@ -18,6 +18,7 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -29,6 +30,8 @@ constexpr const char* kSteamCloudFileListSnapshotClassName =
     "com/cauth/android/steam/cloud/SteamCloudFileListSnapshot";
 constexpr const char* kSteamCloudResultSnapshotClassName =
     "com/cauth/android/steam/cloud/SteamCloudResultSnapshot";
+constexpr const char* kSteamCloudVerifyEntrySnapshotClassName =
+    "com/cauth/android/steam/cloud/SteamCloudVerifyEntrySnapshot";
 constexpr const char* kSteamCloudVerifySnapshotClassName =
     "com/cauth/android/steam/cloud/SteamCloudVerifySnapshot";
 constexpr const char* kSteamCloudTransferTaskSnapshotClassName =
@@ -37,8 +40,18 @@ constexpr const char* kSteamCloudTransferTaskSnapshotClassName =
 jclass g_steam_cloud_file_entry_snapshot_class = nullptr;
 jclass g_steam_cloud_file_list_snapshot_class = nullptr;
 jclass g_steam_cloud_result_snapshot_class = nullptr;
+jclass g_steam_cloud_verify_entry_snapshot_class = nullptr;
 jclass g_steam_cloud_verify_snapshot_class = nullptr;
 jclass g_steam_cloud_transfer_task_snapshot_class = nullptr;
+
+struct CloudVerifyStorage {
+    std::vector<std::string> remote_filenames;
+    std::vector<std::string> local_paths;
+    std::vector<std::string> remote_shas;
+    std::vector<std::string> local_shas;
+    std::vector<std::string> reasons;
+    std::vector<cauth_steam_cloud_verify_entry_t> entries;
+};
 
 enum class CloudTransferTaskKind : jint {
     Pull = 1,
@@ -85,6 +98,7 @@ struct CloudTransferTask {
     cauth_steam_cloud_result_t result{};
     std::string verify_module_status;
     cauth_steam_cloud_verify_report_t verify_report{};
+    CloudVerifyStorage verify_storage;
 };
 
 std::mutex g_transfer_tasks_mutex;
@@ -132,6 +146,11 @@ jclass ensure_steam_cloud_file_list_snapshot_class(JNIEnv* env) {
 jclass ensure_steam_cloud_result_snapshot_class(JNIEnv* env) {
     return require_global_class(
         env, g_steam_cloud_result_snapshot_class, kSteamCloudResultSnapshotClassName);
+}
+
+jclass ensure_steam_cloud_verify_entry_snapshot_class(JNIEnv* env) {
+    return require_global_class(
+        env, g_steam_cloud_verify_entry_snapshot_class, kSteamCloudVerifyEntrySnapshotClassName);
 }
 
 jclass ensure_steam_cloud_verify_snapshot_class(JNIEnv* env) {
@@ -331,8 +350,61 @@ void fill_ffi_result(const cauth::steam::cloud::SteamCloudResult& result,
 
 void fill_ffi_verify_report(const cauth::steam::cloud::SteamCloudVerifyResult& result,
                             cauth_steam_cloud_verify_report_t& out_result,
-                            std::string& module_status_storage) {
+                            std::string& module_status_storage,
+                            CloudVerifyStorage& storage) {
     module_status_storage = result.module_status;
+    storage.remote_filenames.clear();
+    storage.local_paths.clear();
+    storage.remote_shas.clear();
+    storage.local_shas.clear();
+    storage.reasons.clear();
+    storage.entries.clear();
+    storage.remote_filenames.reserve(result.entries.size());
+    storage.local_paths.reserve(result.entries.size());
+    storage.remote_shas.reserve(result.entries.size());
+    storage.local_shas.reserve(result.entries.size());
+    storage.reasons.reserve(result.entries.size());
+    for (const auto& entry : result.entries) {
+        storage.remote_filenames.push_back(entry.remote_filename);
+        storage.local_paths.push_back(entry.local_path);
+        storage.remote_shas.push_back(entry.remote_sha);
+        storage.local_shas.push_back(entry.local_sha);
+        storage.reasons.push_back(entry.reason);
+    }
+    storage.entries.reserve(result.entries.size());
+    for (std::size_t index = 0; index < result.entries.size(); ++index) {
+        const auto& entry = result.entries[index];
+        cauth_steam_cloud_verify_status_t status = CAUTH_STEAM_CLOUD_VERIFY_OK;
+        switch (entry.status) {
+        case cauth::steam::cloud::SteamCloudVerifyStatus::MissingLocal:
+            status = CAUTH_STEAM_CLOUD_VERIFY_MISSING_LOCAL;
+            break;
+        case cauth::steam::cloud::SteamCloudVerifyStatus::Mismatched:
+            status = CAUTH_STEAM_CLOUD_VERIFY_MISMATCHED;
+            break;
+        case cauth::steam::cloud::SteamCloudVerifyStatus::SizeOnly:
+            status = CAUTH_STEAM_CLOUD_VERIFY_SIZE_ONLY;
+            break;
+        case cauth::steam::cloud::SteamCloudVerifyStatus::ExtraLocal:
+            status = CAUTH_STEAM_CLOUD_VERIFY_EXTRA_LOCAL;
+            break;
+        case cauth::steam::cloud::SteamCloudVerifyStatus::Ok:
+        default:
+            status = CAUTH_STEAM_CLOUD_VERIFY_OK;
+            break;
+        }
+        storage.entries.push_back(cauth_steam_cloud_verify_entry_t{
+            storage.remote_filenames[index].c_str(),
+            storage.local_paths[index].c_str(),
+            status,
+            entry.remote_size,
+            entry.remote_timestamp,
+            storage.remote_shas[index].c_str(),
+            entry.local_size,
+            storage.local_shas[index].c_str(),
+            storage.reasons[index].c_str(),
+        });
+    }
     out_result.present = 1;
     out_result.clean = result.clean() ? 1 : 0;
     out_result.include_extra_local = result.include_extra_local ? 1 : 0;
@@ -345,6 +417,8 @@ void fill_ffi_verify_report(const cauth::steam::cloud::SteamCloudVerifyResult& r
     out_result.filtered_out_count = result.filtered_out_count;
     out_result.extra_local_count = result.extra_local_count;
     out_result.total_count = result.total_count;
+    out_result.entry_count = static_cast<unsigned long long>(storage.entries.size());
+    out_result.entries = storage.entries.empty() ? nullptr : storage.entries.data();
     out_result.module_status = module_status_storage.c_str();
 }
 
@@ -432,16 +506,68 @@ jobject make_steam_cloud_result(JNIEnv* env, const cauth_steam_cloud_result_t& r
     return instance;
 }
 
-jobject make_steam_cloud_verify_snapshot(JNIEnv* env,
-                                         const cauth_steam_cloud_verify_report_t& result) {
-    jclass cls = ensure_steam_cloud_verify_snapshot_class(env);
+jobject make_steam_cloud_verify_entry_snapshot(JNIEnv* env,
+                                               const cauth_steam_cloud_verify_entry_t& entry) {
+    jclass cls = ensure_steam_cloud_verify_entry_snapshot_class(env);
     if (cls == nullptr) {
         return nullptr;
     }
-    jmethodID ctor =
-        env->GetMethodID(cls, "<init>", "(ZZZILjava/lang/String;JJJJJJJJLjava/lang/String;)V");
+    jmethodID ctor = env->GetMethodID(
+        cls,
+        "<init>",
+        "(Ljava/lang/String;Ljava/lang/String;IIJLjava/lang/String;JLjava/lang/String;Ljava/lang/String;)V");
     if (ctor == nullptr) {
         return nullptr;
+    }
+    jstring remote_filename =
+        env->NewStringUTF(entry.remote_filename == nullptr ? "" : entry.remote_filename);
+    jstring local_path = env->NewStringUTF(entry.local_path == nullptr ? "" : entry.local_path);
+    jstring remote_sha = env->NewStringUTF(entry.remote_sha == nullptr ? "" : entry.remote_sha);
+    jstring local_sha = env->NewStringUTF(entry.local_sha == nullptr ? "" : entry.local_sha);
+    jstring reason = env->NewStringUTF(entry.reason == nullptr ? "" : entry.reason);
+    jobject instance = env->NewObject(
+        cls,
+        ctor,
+        remote_filename,
+        local_path,
+        static_cast<jint>(entry.status),
+        static_cast<jint>(entry.remote_size),
+        static_cast<jlong>(entry.remote_timestamp),
+        remote_sha,
+        static_cast<jlong>(entry.local_size),
+        local_sha,
+        reason);
+    env->DeleteLocalRef(remote_filename);
+    env->DeleteLocalRef(local_path);
+    env->DeleteLocalRef(remote_sha);
+    env->DeleteLocalRef(local_sha);
+    env->DeleteLocalRef(reason);
+    return instance;
+}
+
+jobject make_steam_cloud_verify_snapshot(JNIEnv* env,
+                                         const cauth_steam_cloud_verify_report_t& result) {
+    jclass entry_cls = ensure_steam_cloud_verify_entry_snapshot_class(env);
+    jclass cls = ensure_steam_cloud_verify_snapshot_class(env);
+    if (entry_cls == nullptr || cls == nullptr) {
+        return nullptr;
+    }
+    jmethodID ctor =
+        env->GetMethodID(
+            cls,
+            "<init>",
+            "(ZZZILjava/lang/String;JJJJJJJJLjava/lang/String;[Lcom/cauth/android/steam/cloud/SteamCloudVerifyEntrySnapshot;)V");
+    if (ctor == nullptr) {
+        return nullptr;
+    }
+    jobjectArray entries = env->NewObjectArray(
+        static_cast<jsize>(result.entry_count),
+        entry_cls,
+        nullptr);
+    for (jsize index = 0; index < static_cast<jsize>(result.entry_count); ++index) {
+        jobject item = make_steam_cloud_verify_entry_snapshot(env, result.entries[index]);
+        env->SetObjectArrayElement(entries, index, item);
+        env->DeleteLocalRef(item);
     }
     jstring module_status =
         env->NewStringUTF(result.module_status == nullptr ? "idle" : result.module_status);
@@ -460,9 +586,11 @@ jobject make_steam_cloud_verify_snapshot(JNIEnv* env,
         static_cast<jlong>(result.filtered_out_count),
         static_cast<jlong>(result.extra_local_count),
         static_cast<jlong>(result.total_count),
-        message);
+        message,
+        entries);
     env->DeleteLocalRef(module_status);
     env->DeleteLocalRef(message);
+    env->DeleteLocalRef(entries);
     return instance;
 }
 
@@ -633,7 +761,11 @@ void run_cloud_transfer_task(jlong client_handle,
         if (kind == CloudTransferTaskKind::Verify) {
             const auto verify_result =
                 cauth::steam::cloud::verify_cloud_local_files(native_request, params.include_extra_local);
-            fill_ffi_verify_report(verify_result, ffi_verify, task->verify_module_status);
+            fill_ffi_verify_report(
+                verify_result,
+                ffi_verify,
+                task->verify_module_status,
+                task->verify_storage);
             verify_message = verify_result.message;
             ffi_verify.message = verify_message.empty() ? "" : verify_message.c_str();
             native_result = CAUTH_OK;

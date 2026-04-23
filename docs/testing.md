@@ -26,7 +26,7 @@ $cauth = ".\\build\\windows-msvc-debug\\cauth.exe"
 Expected version output for the current development line:
 
 ```text
-CAuth 0.5.0
+CAuth 0.5.1
 ```
 
 ## 2. Steam auth
@@ -139,6 +139,9 @@ Replace `<depot_id>` and `<manifest_gid>` with values from `preflight`.
 `verify-local` compares file presence, size, chunk structure, and binary content against the
 manifest, excluding directory-only entries.
 
+The verify result now also carries per-entry details, so hosts can inspect which specific files
+were `missing`, `mismatched`, or otherwise filtered instead of relying on counters alone.
+
 Desktop CLI depot transfers now print live byte progress while the HTTP transfer is in flight on
 the WinHTTP-backed path.
 
@@ -171,6 +174,9 @@ Use `--backend auto` first. If you are diagnosing auth material directly, try `-
 
 Desktop CLI cloud pull and push now print live byte progress while transfer data is moving on the
 WinHTTP-backed path.
+
+Cloud verify results now also include per-entry detail arrays with remote/local path, size, hash,
+and reason fields when available.
 
 If you want an orchestrated script run, use:
 

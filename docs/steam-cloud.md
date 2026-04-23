@@ -30,6 +30,9 @@ Common flags:
 On the current Windows desktop path, `pull` and `push` print live byte progress in the CLI while
 network transfer is happening.
 
+Cloud verify results expose both aggregate counters and per-entry detail arrays, so hosts can see
+exactly which remote/local files matched, diverged, or were missing.
+
 ## Auth material
 
 Steam Cloud supports two practical session sources:

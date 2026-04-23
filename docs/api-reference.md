@@ -185,6 +185,9 @@ Main response types:
 - `cauth_manifest_file_list_t`
 - `cauth_depot_local_verify_report_t`
 
+`cauth_depot_local_verify_report_t` exposes aggregate counters plus an `entry_count` and `entries`
+array for per-file verify details.
+
 Main operations:
 
 - `cauth_depot_fetch_branches()`
@@ -242,6 +245,7 @@ The manifest/preflight responses also expose platform metadata:
 - progress state
 - cancel support
 - trace lines
+- detailed verify-entry snapshots for local verification results
 
 ### CLI equivalents
 
@@ -270,6 +274,9 @@ Main request/result types:
 - `cauth_steam_cloud_file_list_t`
 - `cauth_steam_cloud_result_t`
 - `cauth_steam_cloud_verify_report_t`
+
+`cauth_steam_cloud_verify_report_t` also exposes aggregate counters plus an `entry_count` and
+`entries` array for detailed verify results.
 
 Main operations:
 
