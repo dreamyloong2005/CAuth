@@ -1,6 +1,7 @@
 #include "steam/auth/steam_auth_cm_application.hpp"
 
 #include "core/platform/session_repository_factory.hpp"
+#include "steam/cm/steam_cm_connector.hpp"
 #include "steam/cm/cm_message.hpp"
 #include "steam/cm/cm_session.hpp"
 #include "steam/cm/websocket_transport.hpp"
@@ -31,6 +32,7 @@ int run_logon_or_app_info(const cauth::core::cm::CmServerQuery& query,
                           std::uint64_t steam_id,
                           std::optional<std::uint32_t> app_id,
                           bool debug_app_info,
+                          const cauth::core::platform::RouteSelection* route_selection,
                           std::ostream& out,
                           std::ostream& err) {
     const auto result = load_servers(query, err);
@@ -50,7 +52,26 @@ int run_logon_or_app_info(const cauth::core::cm::CmServerQuery& query,
     }
 
     cauth::core::cm::CmWebSocketTransport transport;
-    for (const auto& server : result->servers) {
+    auto selected_servers = result->servers;
+    if (route_selection != nullptr && !route_selection->empty()) {
+        std::vector<cauth::core::cm::CmServerEndpoint> filtered;
+        filtered.reserve(selected_servers.size());
+        for (auto& server : selected_servers) {
+            if (cauth::core::platform::route_selection_matches(
+                    route_selection,
+                    server.address + ":" + std::to_string(server.port),
+                    "websocket")) {
+                filtered.push_back(std::move(server));
+            }
+        }
+        if (filtered.empty()) {
+            err << "selected CM route is not available: " << route_selection->endpoint << '\n';
+            return 1;
+        }
+        selected_servers = std::move(filtered);
+    }
+
+    for (const auto& server : selected_servers) {
         out << "Connecting CM websocket " << server.address << ':' << server.port << "...\n";
         auto [connect_result, connection] = transport.connect(server);
         if (!connect_result.ok || !connection) {
@@ -222,14 +243,67 @@ int run_cm_servers(const cauth::core::cm::CmServerQuery& query,
     return 0;
 }
 
+int run_cm_routes(const cauth::core::cm::CmServerQuery& query,
+                  const cauth::core::platform::RouteSelection* route_selection,
+                  std::ostream& out,
+                  std::ostream& err) {
+    if (query.protocol != cauth::core::cm::CmServerProtocol::WebSocket) {
+        err << "steam auth cm routes only supports websocket endpoints right now\n";
+        return 2;
+    }
+
+    const auto report = cauth::core::cm::probe_websocket_routes(query.max_count, &err, route_selection);
+    if (!report.ok) {
+        err << report.message << '\n';
+        return 1;
+    }
+
+    out << "CM routes: " << report.routes.size() << '\n';
+    for (std::size_t index = 0; index < report.routes.size(); ++index) {
+        const auto& route = report.routes[index];
+        out << "  [" << (index + 1) << "] " << route.endpoint.address << ':'
+            << route.endpoint.port
+            << " protocol=" << route.route.protocol
+            << " latency="
+            << (route.route.latency_known ? std::to_string(route.route.latency_ms) + "ms"
+                                          : "unknown")
+            << " recent_success=" << (route.route.recent_success ? "true" : "false")
+            << " recent_failure=" << (route.route.recent_failure ? "true" : "false")
+            << " success_count=" << route.route.success_count
+            << " failure_count=" << route.route.failure_count
+            << '\n';
+    }
+    return 0;
+}
+
 int run_cm_probe(const cauth::core::cm::CmServerQuery& query,
+                 const cauth::core::platform::RouteSelection* route_selection,
                  std::ostream& out,
                  std::ostream& err) {
     const auto result = load_servers(query, err);
     if (!result.has_value()) return 1;
 
     cauth::core::cm::CmWebSocketTransport transport;
-    for (const auto& server : result->servers) {
+    auto selected_servers = result->servers;
+    if (route_selection != nullptr && !route_selection->empty()) {
+        std::vector<cauth::core::cm::CmServerEndpoint> filtered;
+        filtered.reserve(selected_servers.size());
+        for (auto& server : selected_servers) {
+            if (cauth::core::platform::route_selection_matches(
+                    route_selection,
+                    server.address + ":" + std::to_string(server.port),
+                    "websocket")) {
+                filtered.push_back(std::move(server));
+            }
+        }
+        if (filtered.empty()) {
+            err << "selected CM route is not available: " << route_selection->endpoint << '\n';
+            return 1;
+        }
+        selected_servers = std::move(filtered);
+    }
+
+    for (const auto& server : selected_servers) {
         out << "Probing websocket " << server.address << ':' << server.port << "...\n";
         const auto probe = transport.probe(server);
         if (probe.ok) {
@@ -244,18 +318,21 @@ int run_cm_probe(const cauth::core::cm::CmServerQuery& query,
 
 int run_cm_logon(const cauth::core::cm::CmServerQuery& query,
                  std::uint64_t steam_id,
+                 const cauth::core::platform::RouteSelection* route_selection,
                  std::ostream& out,
                  std::ostream& err) {
-    return run_logon_or_app_info(query, steam_id, std::nullopt, false, out, err);
+    return run_logon_or_app_info(query, steam_id, std::nullopt, false, route_selection, out, err);
 }
 
 int run_cm_app_info(const cauth::core::cm::CmServerQuery& query,
                     std::uint64_t steam_id,
                     std::uint32_t app_id,
                     bool debug_app_info,
+                    const cauth::core::platform::RouteSelection* route_selection,
                     std::ostream& out,
                     std::ostream& err) {
-    return run_logon_or_app_info(query, steam_id, app_id, debug_app_info, out, err);
+    return run_logon_or_app_info(
+        query, steam_id, app_id, debug_app_info, route_selection, out, err);
 }
 
 } // namespace cauth::steam::auth

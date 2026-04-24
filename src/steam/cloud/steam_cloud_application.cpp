@@ -5,6 +5,7 @@
 #include "core/hash/sha1.hpp"
 #include "steam/auth/steam_auth_provider.hpp"
 #include "steam/auth/steam_session_identity.hpp"
+#include "steam/cm/steam_cm_connector.hpp"
 #include "steam/cloud/steam_cloud_cm_service.hpp"
 #include "steam/cloud/steam_cloud_service.hpp"
 #include "steam/cloud/steam_cloud_test_hooks.hpp"
@@ -41,7 +42,14 @@ testing::DownloadFileHook g_download_file_hook = nullptr;
 testing::UploadCloudFilesHook g_upload_cloud_files_hook = nullptr;
 thread_local SteamCloudTransferProgressHook g_transfer_progress_hook = nullptr;
 thread_local SteamCloudTransferCancelHook g_transfer_cancel_hook = nullptr;
+thread_local SteamCloudTransferPauseHook g_transfer_pause_hook = nullptr;
 thread_local void* g_transfer_hook_user_data = nullptr;
+
+enum class TransferInterruptAction {
+    None,
+    Pause,
+    Cancel,
+};
 
 std::string lowercase_ascii(std::string_view value) {
     std::string lowered;
@@ -85,7 +93,7 @@ SteamCloudResult make_result(const SteamCloudRequest& request,
                             SteamCloudDirection direction,
                             bool ok,
                             std::string message,
-                       CloudProgress progress = {}) {
+                            CloudProgress progress = {}) {
     SteamCloudResult result;
     result.ok = ok;
     result.app_id = request.app_id;
@@ -117,8 +125,32 @@ SteamCloudResult make_canceled_result(const SteamCloudRequest& request,
     return result;
 }
 
-bool is_transfer_canceled() {
-    return g_transfer_cancel_hook != nullptr && g_transfer_cancel_hook(g_transfer_hook_user_data);
+SteamCloudResult make_paused_result(const SteamCloudRequest& request,
+                                    SteamCloudDirection direction,
+                                    const CloudProgress& progress,
+                                    std::string_view phase) {
+    std::string message = "operation paused";
+    if (!phase.empty()) {
+        message += " during ";
+        message += phase;
+    }
+    auto result = make_result(request, direction, false, std::move(message), progress);
+    result.module_status = "paused";
+    return result;
+}
+
+TransferInterruptAction current_transfer_interrupt_action() {
+    if (g_transfer_cancel_hook != nullptr && g_transfer_cancel_hook(g_transfer_hook_user_data)) {
+        return TransferInterruptAction::Cancel;
+    }
+    if (g_transfer_pause_hook != nullptr && g_transfer_pause_hook(g_transfer_hook_user_data)) {
+        return TransferInterruptAction::Pause;
+    }
+    return TransferInterruptAction::None;
+}
+
+bool is_transfer_interrupted() {
+    return current_transfer_interrupt_action() != TransferInterruptAction::None;
 }
 
 void report_transfer_progress(SteamCloudTransferProgress progress) {
@@ -161,7 +193,7 @@ void report_http_phase_progress(const cauth::core::platform::HttpTransferProgres
     });
 }
 
-bool is_http_phase_canceled(void*) { return is_transfer_canceled(); }
+bool is_http_phase_canceled(void*) { return is_transfer_interrupted(); }
 
 struct UploadBatchProgressContext {
     std::uint64_t total_steps = 0;
@@ -171,7 +203,36 @@ struct UploadBatchProgressContext {
     std::string current_filename;
     std::uint64_t current_file_total_bytes = 0;
     std::uint64_t current_file_bytes = 0;
+    bool resumable = false;
+    bool resumed = false;
+    std::uint64_t resume_from_bytes = 0;
 };
+
+void report_upload_batch_resume_state(bool resumable,
+                                      bool resumed,
+                                      std::uint64_t resume_from_bytes,
+                                      void* user_data) {
+    auto* context = static_cast<UploadBatchProgressContext*>(user_data);
+    if (context == nullptr) {
+        return;
+    }
+    context->resumable = resumable;
+    context->resumed = resumed;
+    context->resume_from_bytes = resume_from_bytes;
+    report_transfer_progress(SteamCloudTransferProgress{
+        SteamCloudTransferKind::Push,
+        resumed ? "Resuming upload" : "Preparing upload",
+        context->current_filename,
+        context->completed_files,
+        context->total_steps,
+        context->completed_bytes + context->current_file_bytes,
+        context->total_bytes,
+        {},
+        resumable,
+        resumed,
+        resume_from_bytes,
+    });
+}
 
 void report_upload_batch_progress(std::string_view filename,
                                   std::uint64_t bytes_transferred,
@@ -209,10 +270,269 @@ void report_upload_batch_progress(std::string_view filename,
         context->total_steps,
         context->completed_bytes + bytes_transferred,
         context->total_bytes,
+        {},
+        context->resumable,
+        context->resumed,
+        context->resume_from_bytes,
     });
 }
 
-bool is_upload_batch_canceled(void*) { return is_transfer_canceled(); }
+bool is_upload_batch_interrupted(void*) { return is_transfer_interrupted(); }
+bool is_upload_batch_paused(void*) {
+    return current_transfer_interrupt_action() == TransferInterruptAction::Pause;
+}
+
+void apply_upload_resume_state(SteamCloudResult& result,
+                               const UploadBatchProgressContext& context) {
+    result.resumable = context.resumable;
+    result.resumed = context.resumed;
+    result.resume_from_bytes = context.resume_from_bytes;
+}
+
+struct StreamedCloudWriteContext {
+    cauth::core::platform::PreparedFileWrite* prepared_output = nullptr;
+    std::ofstream* output = nullptr;
+    std::string error_message;
+    std::uint64_t committed_bytes = 0;
+};
+
+struct StreamedCloudDownloadOutcome {
+    bool ok = false;
+    bool paused = false;
+    bool canceled = false;
+    std::uint64_t written_bytes = 0;
+    std::string error_message;
+};
+
+bool should_use_cm_cloud_backend(const SteamCloudRequest& request);
+std::optional<std::string> unsupported_cloud_web_backend_message(
+    const SteamCloudRequest& request);
+std::string normalize_slashes(std::string value);
+
+std::string make_cloud_pull_resume_token(const SteamCloudRequest& request,
+                                         const SteamCloudFileEntry& file) {
+    return "steam-cloud-pull-v1:" + std::to_string(request.app_id) + ":" +
+           std::to_string(request.steam_id) + ":" + normalize_slashes(file.filename) + ":" +
+           std::to_string(file.file_size) + ":" + lowercase_ascii(file.file_sha);
+}
+
+bool is_same_remote_cloud_file(const SteamCloudFileEntry& left,
+                               const SteamCloudFileEntry& right) {
+    if (left.ugc_id != 0 && right.ugc_id != 0) {
+        return left.ugc_id == right.ugc_id;
+    }
+    return lowercase_ascii(normalize_slashes(left.filename)) ==
+           lowercase_ascii(normalize_slashes(right.filename));
+}
+
+bool should_retry_web_download_with_refreshed_entry(const SteamCloudRequest& request,
+                                                    const SteamCloudFileEntry& file,
+                                                    std::string_view error_message) {
+    if (should_use_cm_cloud_backend(request) || file.filename.empty()) {
+        return false;
+    }
+    return contains_ascii_case_insensitive(error_message, "expired or is not directly downloadable") ||
+           contains_ascii_case_insensitive(error_message, "http 404") ||
+           contains_ascii_case_insensitive(error_message, "remote file URL is missing");
+}
+
+std::optional<SteamCloudFileEntry> refresh_web_download_file_entry(
+    const SteamCloudRequest& request,
+    const SteamCloudFileEntry& file) {
+    if (should_use_cm_cloud_backend(request) || file.filename.empty()) {
+        return std::nullopt;
+    }
+
+    constexpr std::uint32_t kPageSize = 200;
+    std::uint32_t start_index = 0;
+    for (int page_attempt = 0; page_attempt < 64; ++page_attempt) {
+        const auto page = list_remote_files(request, kPageSize, start_index, true);
+        if (!page.ok) {
+            return std::nullopt;
+        }
+
+        for (const auto& candidate : page.files) {
+            if (is_same_remote_cloud_file(candidate, file)) {
+                return candidate;
+            }
+        }
+
+        if (page.files.empty()) {
+            break;
+        }
+
+        const auto page_count = static_cast<std::uint32_t>(page.files.size());
+        const auto next_start_index = start_index + page_count;
+        if ((page.total_files != 0 && next_start_index >= page.total_files) ||
+            page_count < kPageSize) {
+            break;
+        }
+        start_index = next_start_index;
+    }
+
+    return std::nullopt;
+}
+
+bool write_streamed_cloud_bytes(const std::uint8_t* bytes, std::size_t size, void* user_data) {
+    auto* context = static_cast<StreamedCloudWriteContext*>(user_data);
+    if (context == nullptr || context->prepared_output == nullptr || context->output == nullptr) {
+        return false;
+    }
+    if (size == 0) {
+        return true;
+    }
+    context->output->write(reinterpret_cast<const char*>(bytes),
+                           static_cast<std::streamsize>(size));
+    if (!*context->output) {
+        context->error_message =
+            "Failed to write output path: " + context->prepared_output->write_path().string();
+        return false;
+    }
+    context->committed_bytes += static_cast<std::uint64_t>(size);
+    std::string checkpoint_error;
+    if (!context->prepared_output->save_resume_state(context->committed_bytes, checkpoint_error)) {
+        context->error_message = checkpoint_error;
+        return false;
+    }
+    return true;
+}
+
+StreamedCloudDownloadOutcome download_remote_file_to_prepared_output(
+    const SteamCloudRequest& request,
+    const SteamCloudFileEntry& file,
+    cauth::core::platform::PreparedFileWrite& prepared_output,
+    const cauth::core::platform::HttpRequestCallbacks& callbacks) {
+    StreamedCloudDownloadOutcome outcome;
+    auto current_file = file;
+    bool allow_range_request = true;
+    bool refreshed_url_retry_used = false;
+
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        std::ofstream output;
+        std::string open_error;
+        if (!prepared_output.open_binary_output(output, open_error)) {
+            outcome.error_message = open_error;
+            return outcome;
+        }
+
+        StreamedCloudWriteContext write_context;
+        write_context.prepared_output = &prepared_output;
+        write_context.output = &output;
+        write_context.committed_bytes =
+            prepared_output.resume_available() ? prepared_output.resume_offset() : 0;
+
+        const auto use_range =
+            allow_range_request && prepared_output.resume_available() &&
+            prepared_output.resume_offset() > 0;
+        const auto result =
+            g_download_file_hook != nullptr
+                ? g_download_file_hook(request, current_file)
+                : download_remote_file(
+                      request,
+                      current_file,
+                      SteamCloudDownloadOptions{
+                          use_range,
+                          use_range ? prepared_output.resume_offset() : 0,
+                          &write_streamed_cloud_bytes,
+                          &write_context,
+                      },
+                      callbacks);
+        if (result.ok && g_download_file_hook != nullptr) {
+            if (!result.bytes.empty() &&
+                !write_streamed_cloud_bytes(result.bytes.data(), result.bytes.size(), &write_context)) {
+                output.close();
+                if (write_context.committed_bytes > 0) {
+                    prepared_output.preserve_partial();
+                }
+                outcome.error_message = write_context.error_message.empty()
+                    ? "Failed to write mocked cloud download bytes"
+                    : write_context.error_message;
+                outcome.written_bytes = write_context.committed_bytes;
+                return outcome;
+            }
+        }
+        output.close();
+        if (!output) {
+            prepared_output.preserve_partial();
+            outcome.error_message =
+                "Failed to finalize output path: " + prepared_output.write_path().string();
+            outcome.written_bytes = write_context.committed_bytes;
+            return outcome;
+        }
+
+        if (!result.ok) {
+            const auto action = current_transfer_interrupt_action();
+            if (action == TransferInterruptAction::Pause) {
+                prepared_output.preserve_partial();
+                outcome.paused = true;
+                outcome.error_message = "operation paused";
+                outcome.written_bytes = write_context.committed_bytes;
+                return outcome;
+            }
+            if (action == TransferInterruptAction::Cancel) {
+                std::string discard_error;
+                if (!prepared_output.discard_partial(discard_error) && outcome.error_message.empty()) {
+                    outcome.error_message = discard_error;
+                }
+                outcome.canceled = true;
+                outcome.error_message =
+                    outcome.error_message.empty() ? "operation canceled" : outcome.error_message;
+                return outcome;
+            }
+            if (use_range && result.message == "HTTP range request was not honored") {
+                std::string discard_error;
+                if (!prepared_output.discard_partial(discard_error)) {
+                    outcome.error_message = discard_error;
+                    return outcome;
+                }
+                allow_range_request = false;
+                auto restarted = cauth::core::platform::prepare_file_write(
+                    prepared_output.final_path(), prepared_output.options());
+                if (!restarted.ok()) {
+                    outcome.error_message = restarted.error_message();
+                    return outcome;
+                }
+                prepared_output = std::move(restarted);
+                continue;
+            }
+            if (!refreshed_url_retry_used &&
+                should_retry_web_download_with_refreshed_entry(request, current_file, result.message)) {
+                if (write_context.committed_bytes > 0) {
+                    prepared_output.preserve_partial();
+                }
+                const auto refreshed_file =
+                    refresh_web_download_file_entry(request, current_file);
+                if (refreshed_file.has_value() && !refreshed_file->url.empty() &&
+                    refreshed_file->url != current_file.url) {
+                    current_file = *refreshed_file;
+                    refreshed_url_retry_used = true;
+                    continue;
+                }
+            }
+            if (write_context.committed_bytes > 0) {
+                prepared_output.preserve_partial();
+            }
+            outcome.error_message = write_context.error_message.empty() ? result.message
+                                                                        : write_context.error_message;
+            outcome.written_bytes = write_context.committed_bytes;
+            return outcome;
+        }
+
+        std::string commit_error;
+        if (!prepared_output.commit(commit_error)) {
+            outcome.error_message = commit_error;
+            outcome.written_bytes = write_context.committed_bytes;
+            return outcome;
+        }
+
+        outcome.ok = true;
+        outcome.written_bytes = write_context.committed_bytes;
+        return outcome;
+    }
+
+    outcome.error_message = "streamed download failed";
+    return outcome;
+}
 
 std::string normalize_slashes(std::string value) {
     for (auto& ch : value) {
@@ -221,6 +541,27 @@ std::string normalize_slashes(std::string value) {
         }
     }
     return value;
+}
+
+void filter_cloud_routes_in_place(
+    const cauth::core::platform::RouteSelection* route_selection,
+    std::vector<SteamCloudRouteEntry>& routes) {
+    if (route_selection == nullptr || route_selection->empty()) {
+        return;
+    }
+
+    routes.erase(
+        std::remove_if(
+            routes.begin(),
+            routes.end(),
+            [&](const SteamCloudRouteEntry& route) {
+                return !cauth::core::platform::route_selection_matches(
+                    route_selection,
+                    route.endpoint,
+                    route.protocol,
+                    route.role);
+            }),
+        routes.end());
 }
 
 bool starts_with_path_prefix(std::string_view path, std::string_view prefix) {
@@ -401,6 +742,23 @@ bool should_use_cm_cloud_backend(const SteamCloudRequest& request) {
         return false;
     }
     return request.access_token.empty();
+}
+
+std::optional<std::string> unsupported_cloud_web_backend_message(
+    const SteamCloudRequest& request) {
+    const bool explicit_web_backend = request.backend == SteamCloudBackend::WebApi;
+    const bool has_web_cookies =
+        !request.web_cookie_header.empty() || !request.store_cookie_header.empty();
+    const bool web_like_session =
+        request.session_type == cauth::steam::auth::kSteamSessionTypeWebBrowser ||
+        request.session_type == cauth::steam::auth::kSteamSessionTypeMobileApp;
+    if (!explicit_web_backend && !has_web_cookies && !web_like_session) {
+        return std::nullopt;
+    }
+    return std::string{
+        "Steam Cloud web backend is currently unsupported. WebBrowser sessions can produce "
+        "web cookies, but Steam does not currently provide a stable usable web enumerate/"
+        "download path for Steam Cloud. Use `steam auth login` and the CM backend."};
 }
 
 std::optional<std::uint64_t> file_time_to_epoch_seconds(
@@ -629,7 +987,13 @@ void print_cloud_result_summary(const SteamCloudResult& result, std::ostream& ou
         << "Deleted: " << result.deleted_count << '\n'
         << "Skipped: " << result.skipped_count << '\n'
         << "Conflicts: " << result.conflict_count << '\n'
-        << "Bytes: " << result.transferred_bytes << '\n'
+        << "Bytes: " << result.transferred_bytes << '\n';
+    if (result.direction == SteamCloudDirection::Push) {
+        out << "Resumable: " << (result.resumable ? "yes" : "no") << '\n'
+            << "Resumed: " << (result.resumed ? "yes" : "no") << '\n'
+            << "Resume From Bytes: " << result.resume_from_bytes << '\n';
+    }
+    out
         << "Message: " << result.message << '\n';
 }
 
@@ -638,16 +1002,145 @@ void print_cloud_result_summary(const SteamCloudResult& result, std::ostream& ou
 void set_current_thread_steam_cloud_transfer_hooks(
     SteamCloudTransferProgressHook progress_hook,
     SteamCloudTransferCancelHook cancel_hook,
+    SteamCloudTransferPauseHook pause_hook,
     void* user_data) {
     g_transfer_progress_hook = progress_hook;
     g_transfer_cancel_hook = cancel_hook;
+    g_transfer_pause_hook = pause_hook;
     g_transfer_hook_user_data = user_data;
 }
 
 void clear_current_thread_steam_cloud_transfer_hooks() {
     g_transfer_progress_hook = nullptr;
     g_transfer_cancel_hook = nullptr;
+    g_transfer_pause_hook = nullptr;
     g_transfer_hook_user_data = nullptr;
+}
+
+SteamCloudRouteReport probe_cloud_routes(core::session::SessionRepository& store,
+                                         const SteamCloudRequest& request,
+                                         SteamCloudRouteTask task,
+                                         std::uint32_t max_count) {
+    SteamCloudRouteReport report;
+    if (request.app_id == 0) {
+        report.ok = false;
+        report.module_status = "failed";
+        report.message = "app_id is required";
+        return report;
+    }
+    if (request.steam_id == 0) {
+        report.ok = false;
+        report.module_status = "failed";
+        report.message = "steam_id is required";
+        return report;
+    }
+
+    const auto effective_request = with_saved_auth_session(store, request);
+    if (const auto unsupported = unsupported_cloud_web_backend_message(effective_request);
+        unsupported.has_value()) {
+        report.ok = false;
+        report.module_status = "failed";
+        report.backend = "web";
+        report.message = *unsupported;
+        return report;
+    }
+    if (should_use_cm_cloud_backend(effective_request)) {
+        const auto cm_report = cauth::core::cm::probe_websocket_routes(
+            max_count,
+            nullptr,
+            effective_request.route_selection.empty() ? nullptr
+                                                      : &effective_request.route_selection);
+        report.ok = cm_report.ok;
+        report.module_status = cm_report.module_status;
+        report.backend = "cm";
+        report.message = cm_report.message;
+        report.routes.reserve(cm_report.routes.size());
+        for (const auto& route : cm_report.routes) {
+            report.routes.push_back(SteamCloudRouteEntry{
+                route.route.endpoint,
+                route.route.protocol,
+                task == SteamCloudRouteTask::Pull || task == SteamCloudRouteTask::Push
+                    ? "cm-control"
+                    : "control",
+                task == SteamCloudRouteTask::Pull
+                    ? "file download hosts are assigned per file after CM Cloud RPC"
+                : task == SteamCloudRouteTask::Push
+                    ? "upload block hosts are assigned at runtime by CM Cloud"
+                    : std::string{},
+                route.route.latency_known,
+                route.route.latency_ms,
+                route.route.recent_success,
+                route.route.recent_failure,
+                route.route.success_count,
+                route.route.failure_count,
+            });
+        }
+        const auto route_count_before_filter = report.routes.size();
+        filter_cloud_routes_in_place(
+            effective_request.route_selection.empty() ? nullptr
+                                                      : &effective_request.route_selection,
+            report.routes);
+        if (!effective_request.route_selection.empty() && route_count_before_filter != 0 &&
+            report.routes.empty()) {
+            report.ok = false;
+            report.module_status = "failed";
+            report.message = "selected cloud route is not available: " +
+                             effective_request.route_selection.endpoint;
+            if (!effective_request.route_selection.protocol.empty()) {
+                report.message +=
+                    " (protocol=" + effective_request.route_selection.protocol + ")";
+            }
+            if (!effective_request.route_selection.role.empty()) {
+                report.message += " role=" + effective_request.route_selection.role;
+            }
+            return report;
+        }
+        if (report.ok && report.message.empty()) {
+            report.message = "cloud auto selected cm backend";
+        }
+        return report;
+    }
+
+    report.ok = false;
+    report.module_status = "failed";
+    report.backend = "web";
+    report.message = "Steam Cloud route probing resolved to the unsupported web backend";
+    return report;
+}
+
+int print_cloud_routes(core::session::SessionRepository& store,
+                       const SteamCloudRequest& request,
+                       SteamCloudRouteTask task,
+                       std::uint32_t max_count,
+                       std::ostream& out,
+                       std::ostream& err) {
+    const auto report = probe_cloud_routes(store, request, task, max_count);
+    if (!report.ok) {
+        err << report.message << '\n';
+        return 1;
+    }
+
+    out << "Steam cloud routes: backend=" << report.backend
+        << " count=" << report.routes.size() << '\n';
+    for (std::size_t index = 0; index < report.routes.size(); ++index) {
+        const auto& route = report.routes[index];
+        out << "  [" << (index + 1) << "] " << route.protocol << " " << route.endpoint
+            << " role=" << route.role
+            << " latency="
+            << (route.latency_known ? std::to_string(route.latency_ms) + "ms" : "unknown")
+            << " recent_success=" << (route.recent_success ? "true" : "false")
+            << " recent_failure=" << (route.recent_failure ? "true" : "false")
+            << " success_count=" << route.success_count
+            << " failure_count=" << route.failure_count;
+        if (!route.note.empty()) {
+            out << " note=" << route.note;
+        }
+        out << '\n';
+    }
+    if (!report.message.empty() && report.message != "ok") {
+        out << "Note: " << report.message << '\n';
+    }
+    return 0;
 }
 
 SteamCloudFileListResult list_remote_files(const SteamCloudRequest& request,
@@ -661,7 +1154,83 @@ SteamCloudFileListResult list_remote_files(const SteamCloudRequest& request,
         }
         return result;
     }
+    if (const auto unsupported = unsupported_cloud_web_backend_message(request);
+        unsupported.has_value()) {
+        SteamCloudFileListResult result;
+        result.app_id = request.app_id;
+        result.module_status = "failed";
+        result.message = *unsupported;
+        return result;
+    }
     auto result = fetch_remote_file_list(request, count, start_index, extended_details);
+    if (result.module_status == "idle") {
+        result.module_status = result.ok ? "succeeded" : "failed";
+    }
+    return result;
+}
+
+SteamCloudFileListResult list_remote_files_via_web_page_diagnostic(
+    core::session::SessionRepository& store,
+    const SteamCloudRequest& request,
+    std::uint32_t count,
+    std::uint32_t start_index) {
+    SteamCloudFileListResult result;
+    result.app_id = request.app_id;
+
+    if (request.app_id == 0) {
+        result.module_status = "failed";
+        result.message = "app_id is required";
+        return result;
+    }
+    if (request.steam_id == 0) {
+        result.module_status = "failed";
+        result.message = "steam_id is required";
+        return result;
+    }
+    if (count == 0) {
+        result.module_status = "failed";
+        result.message = "count must be greater than 0";
+        return result;
+    }
+
+    SteamCloudRequest effective_request;
+    try {
+        auto selection_request = request;
+        selection_request.backend = SteamCloudBackend::WebApi;
+        effective_request = with_saved_auth_session(store, selection_request);
+    } catch (const std::exception& ex) {
+        result.module_status = "failed";
+        result.message = "Steam cloud web page list session prep threw: " + std::string{ex.what()};
+        return result;
+    } catch (...) {
+        result.module_status = "failed";
+        result.message = "Steam cloud web page list session prep threw: unknown exception";
+        return result;
+    }
+
+    try {
+        result = fetch_remote_file_list_via_web_page_diagnostic(effective_request);
+    } catch (const std::exception& ex) {
+        result.app_id = request.app_id;
+        result.module_status = "failed";
+        result.message = "Steam cloud web page list threw: " + std::string{ex.what()};
+        return result;
+    } catch (...) {
+        result.app_id = request.app_id;
+        result.module_status = "failed";
+        result.message = "Steam cloud web page list threw: unknown exception";
+        return result;
+    }
+
+    if (result.ok) {
+        const auto begin_index =
+            std::min<std::size_t>(start_index, result.files.size());
+        const auto end_index =
+            std::min<std::size_t>(begin_index + count, result.files.size());
+        result.files = std::vector<SteamCloudFileEntry>{
+            result.files.begin() + static_cast<std::ptrdiff_t>(begin_index),
+            result.files.begin() + static_cast<std::ptrdiff_t>(end_index)};
+    }
     if (result.module_status == "idle") {
         result.module_status = result.ok ? "succeeded" : "failed";
     }
@@ -676,6 +1245,26 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
     result.app_id = request.app_id;
     result.include_extra_local = include_extra_local;
     result.module_status = "verifying";
+
+    if (request.app_id == 0) {
+        result.fatal_error = true;
+        result.module_status = "failed";
+        result.message = "app_id is required";
+        return result;
+    }
+    if (request.local_root.empty()) {
+        result.fatal_error = true;
+        result.module_status = "failed";
+        result.message = "local_root is required";
+        return result;
+    }
+    if (const auto unsupported = unsupported_cloud_web_backend_message(request);
+        unsupported.has_value()) {
+        result.fatal_error = true;
+        result.module_status = "failed";
+        result.message = *unsupported;
+        return result;
+    }
 
     std::string auth_error;
     const auto effective_request = materialize_cloud_web_api_auth(request, &auth_error);
@@ -693,10 +1282,13 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
         result.message = "local_root is required";
         return result;
     }
-    if (is_transfer_canceled()) {
+    if (const auto action = current_transfer_interrupt_action();
+        action != TransferInterruptAction::None) {
         result.fatal_error = true;
-        result.module_status = "canceled";
-        result.message = "operation canceled during preparation";
+        result.module_status = action == TransferInterruptAction::Pause ? "paused" : "canceled";
+        result.message = action == TransferInterruptAction::Pause
+                             ? "operation paused during preparation"
+                             : "operation canceled during preparation";
         return result;
     }
 
@@ -753,10 +1345,13 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
 
     const auto remote_prefix = normalize_slashes(effective_request.remote_root);
     for (const auto& remote_file : *remote_files) {
-        if (is_transfer_canceled()) {
+        if (const auto action = current_transfer_interrupt_action();
+            action != TransferInterruptAction::None) {
             result.fatal_error = true;
-            result.module_status = "canceled";
-            result.message = "operation canceled during verify";
+            result.module_status = action == TransferInterruptAction::Pause ? "paused" : "canceled";
+            result.message = action == TransferInterruptAction::Pause
+                                 ? "operation paused during verify"
+                                 : "operation canceled during verify";
             return result;
         }
         const auto normalized_name = normalize_slashes(remote_file.filename);
@@ -974,10 +1569,13 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
 
     if (include_extra_local) {
         for (const auto& disk_entry : std::filesystem::recursive_directory_iterator(local_root, ec)) {
-            if (is_transfer_canceled()) {
+            if (const auto action = current_transfer_interrupt_action();
+                action != TransferInterruptAction::None) {
                 result.fatal_error = true;
-                result.module_status = "canceled";
-                result.message = "operation canceled during verify";
+                result.module_status = action == TransferInterruptAction::Pause ? "paused" : "canceled";
+                result.message = action == TransferInterruptAction::Pause
+                                     ? "operation paused during verify"
+                                     : "operation canceled during verify";
                 return result;
             }
             if (ec) {
@@ -1033,22 +1631,28 @@ SteamCloudVerifyResult verify_cloud_local_files(const SteamCloudRequest& request
 }
 
 SteamCloudResult pull_cloud_save(const SteamCloudRequest& request) {
-    std::string auth_error;
-    const auto effective_request = materialize_cloud_web_api_auth(request, &auth_error);
     CloudProgress progress;
     report_transfer_progress(
         SteamCloudTransferProgress{SteamCloudTransferKind::Pull, "Preparing pull", {}});
-    if (effective_request.app_id == 0) {
-        return make_result(
-            effective_request, SteamCloudDirection::Pull, false, "app_id is required");
+    if (request.app_id == 0) {
+        return make_result(request, SteamCloudDirection::Pull, false, "app_id is required");
     }
-    if (effective_request.local_root.empty()) {
-        return make_result(
-            effective_request, SteamCloudDirection::Pull, false, "local_root is required");
+    if (request.local_root.empty()) {
+        return make_result(request, SteamCloudDirection::Pull, false, "local_root is required");
     }
-    if (is_transfer_canceled()) {
-        return make_canceled_result(
-            effective_request, SteamCloudDirection::Pull, progress, "preparation");
+    if (const auto unsupported = unsupported_cloud_web_backend_message(request);
+        unsupported.has_value()) {
+        return make_result(request, SteamCloudDirection::Pull, false, *unsupported);
+    }
+    std::string auth_error;
+    const auto effective_request = materialize_cloud_web_api_auth(request, &auth_error);
+    if (const auto action = current_transfer_interrupt_action();
+        action != TransferInterruptAction::None) {
+        return action == TransferInterruptAction::Pause
+                   ? make_paused_result(
+                         effective_request, SteamCloudDirection::Pull, progress, "preparation")
+                   : make_canceled_result(
+                         effective_request, SteamCloudDirection::Pull, progress, "preparation");
     }
 
     report_transfer_progress(
@@ -1084,9 +1688,13 @@ SteamCloudResult pull_cloud_save(const SteamCloudRequest& request) {
     report_pull_state("Filtering remote files");
 
     for (const auto& file : list_result.files) {
-        if (is_transfer_canceled()) {
-            return make_canceled_result(
-                effective_request, SteamCloudDirection::Pull, progress, "pull");
+        if (const auto action = current_transfer_interrupt_action();
+            action != TransferInterruptAction::None) {
+            return action == TransferInterruptAction::Pause
+                       ? make_paused_result(
+                             effective_request, SteamCloudDirection::Pull, progress, "pull")
+                       : make_canceled_result(
+                             effective_request, SteamCloudDirection::Pull, progress, "pull");
         }
         const auto normalized_name = normalize_slashes(file.filename);
         if (!starts_with_path_prefix(normalized_name, remote_prefix)) {
@@ -1186,8 +1794,11 @@ SteamCloudResult pull_cloud_save(const SteamCloudRequest& request) {
             continue;
         }
 
+        auto local_write_options = effective_request.local_write_options;
+        local_write_options.allow_resume = true;
+        local_write_options.resume_token = make_cloud_pull_resume_token(effective_request, file);
         auto prepared_output = cauth::core::platform::prepare_file_write(
-            output_path, effective_request.local_write_options);
+            output_path, local_write_options);
         if (!prepared_output.ok()) {
             return make_result(
                 effective_request,
@@ -1219,36 +1830,30 @@ SteamCloudResult pull_cloud_save(const SteamCloudRequest& request) {
             &is_http_phase_canceled,
             &download_progress_context,
         };
-        const auto download_result =
-            g_download_file_hook != nullptr
-                ? g_download_file_hook(effective_request, file)
-                : download_remote_file(effective_request, file, download_callbacks);
+        const auto download_result = download_remote_file_to_prepared_output(
+            effective_request,
+            file,
+            prepared_output,
+            download_callbacks);
+        if (download_result.paused) {
+            return make_paused_result(
+                effective_request, SteamCloudDirection::Pull, progress, normalized_name);
+        }
+        if (download_result.canceled) {
+            return make_canceled_result(
+                effective_request, SteamCloudDirection::Pull, progress, normalized_name);
+        }
         if (!download_result.ok) {
             return make_result(
                 effective_request,
                 SteamCloudDirection::Pull,
                 false,
-                "failed to download " + normalized_name + ": " + download_result.message,
-                progress);
-        }
-
-        if (is_transfer_canceled()) {
-            return make_canceled_result(
-                effective_request, SteamCloudDirection::Pull, progress, normalized_name);
-        }
-        report_pull_state("Writing file", normalized_name);
-        std::string write_error;
-        if (!prepared_output.write_all(download_result.bytes, write_error)) {
-            return make_result(
-                effective_request,
-                SteamCloudDirection::Pull,
-                false,
-                write_error.empty() ? "failed to write " + output_path.string() : write_error,
+                "failed to download " + normalized_name + ": " + download_result.error_message,
                 progress);
         }
 
         ++progress.transferred_count;
-        progress.transferred_bytes += download_result.bytes.size();
+        progress.transferred_bytes += download_result.written_bytes;
         report_pull_state("Downloaded file", normalized_name);
     }
 
@@ -1270,19 +1875,21 @@ SteamCloudResult pull_cloud_save(const SteamCloudRequest& request) {
 }
 
 SteamCloudResult push_cloud_save(const SteamCloudRequest& request) {
-    std::string auth_error;
-    const auto effective_request = materialize_cloud_web_api_auth(request, &auth_error);
     CloudProgress progress;
     report_transfer_progress(
         SteamCloudTransferProgress{SteamCloudTransferKind::Push, "Preparing push", {}});
-    if (effective_request.app_id == 0) {
-        return make_result(
-            effective_request, SteamCloudDirection::Push, false, "app_id is required");
+    if (request.app_id == 0) {
+        return make_result(request, SteamCloudDirection::Push, false, "app_id is required");
     }
-    if (effective_request.local_root.empty()) {
-        return make_result(
-            effective_request, SteamCloudDirection::Push, false, "local_root is required");
+    if (request.local_root.empty()) {
+        return make_result(request, SteamCloudDirection::Push, false, "local_root is required");
     }
+    if (const auto unsupported = unsupported_cloud_web_backend_message(request);
+        unsupported.has_value()) {
+        return make_result(request, SteamCloudDirection::Push, false, *unsupported);
+    }
+    std::string auth_error;
+    const auto effective_request = materialize_cloud_web_api_auth(request, &auth_error);
     const auto use_cm_upload = should_use_cm_cloud_backend(effective_request);
     if (!use_cm_upload && effective_request.access_token.empty() &&
         effective_request.web_cookie_header.empty()) {
@@ -1293,9 +1900,13 @@ SteamCloudResult push_cloud_save(const SteamCloudRequest& request) {
             auth_error.empty() ? "access token with write_cloud scope or web cookie session is required"
                                : auth_error);
     }
-    if (is_transfer_canceled()) {
-        return make_canceled_result(
-            effective_request, SteamCloudDirection::Push, progress, "preparation");
+    if (const auto action = current_transfer_interrupt_action();
+        action != TransferInterruptAction::None) {
+        return action == TransferInterruptAction::Pause
+                   ? make_paused_result(
+                         effective_request, SteamCloudDirection::Push, progress, "preparation")
+                   : make_canceled_result(
+                         effective_request, SteamCloudDirection::Push, progress, "preparation");
     }
 
     const auto input_root = std::filesystem::path{effective_request.local_root};
@@ -1342,9 +1953,13 @@ SteamCloudResult push_cloud_save(const SteamCloudRequest& request) {
     report_transfer_progress(
         SteamCloudTransferProgress{SteamCloudTransferKind::Push, "Scanning local files", {}});
     for (const auto& entry : std::filesystem::recursive_directory_iterator(input_root, ec)) {
-        if (is_transfer_canceled()) {
-            return make_canceled_result(
-                effective_request, SteamCloudDirection::Push, progress, "local scan");
+        if (const auto action = current_transfer_interrupt_action();
+            action != TransferInterruptAction::None) {
+            return action == TransferInterruptAction::Pause
+                       ? make_paused_result(
+                             effective_request, SteamCloudDirection::Push, progress, "local scan")
+                       : make_canceled_result(
+                             effective_request, SteamCloudDirection::Push, progress, "local scan");
         }
         if (ec) {
             return make_result(
@@ -1430,9 +2045,13 @@ SteamCloudResult push_cloud_save(const SteamCloudRequest& request) {
     if (effective_request.delete_remote_orphans) {
         files_to_delete.reserve(remote_file_by_name.size());
         for (const auto& [filename, remote_file] : remote_file_by_name) {
-            if (is_transfer_canceled()) {
-                return make_canceled_result(
-                    effective_request, SteamCloudDirection::Push, progress, "delete planning");
+            if (const auto action = current_transfer_interrupt_action();
+                action != TransferInterruptAction::None) {
+                return action == TransferInterruptAction::Pause
+                           ? make_paused_result(
+                                 effective_request, SteamCloudDirection::Push, progress, "delete planning")
+                           : make_canceled_result(
+                                 effective_request, SteamCloudDirection::Push, progress, "delete planning");
             }
             (void)remote_file;
             if (local_remote_filenames.find(filename) == local_remote_filenames.end()) {
@@ -1480,9 +2099,13 @@ SteamCloudResult push_cloud_save(const SteamCloudRequest& request) {
             progress);
     }
 
-    if (is_transfer_canceled()) {
-        return make_canceled_result(
-            effective_request, SteamCloudDirection::Push, progress, "upload preparation");
+    if (const auto action = current_transfer_interrupt_action();
+        action != TransferInterruptAction::None) {
+        return action == TransferInterruptAction::Pause
+                   ? make_paused_result(
+                         effective_request, SteamCloudDirection::Push, progress, "upload preparation")
+                   : make_canceled_result(
+                         effective_request, SteamCloudDirection::Push, progress, "upload preparation");
     }
     const auto total_push_steps = static_cast<std::uint64_t>(files_to_upload.size() + files_to_delete.size());
     UploadBatchProgressContext upload_progress_context;
@@ -1490,7 +2113,9 @@ SteamCloudResult push_cloud_save(const SteamCloudRequest& request) {
     upload_progress_context.total_bytes = planned_transfer_bytes;
     const SteamCloudUploadCallbacks upload_callbacks{
         &report_upload_batch_progress,
-        &is_upload_batch_canceled,
+        &report_upload_batch_resume_state,
+        &is_upload_batch_interrupted,
+        &is_upload_batch_paused,
         &upload_progress_context,
     };
     report_transfer_progress(SteamCloudTransferProgress{
@@ -1516,6 +2141,7 @@ SteamCloudResult push_cloud_save(const SteamCloudRequest& request) {
                                effective_request.access_token,
                                effective_request.web_cookie_header,
                                effective_request.store_cookie_header,
+                               effective_request.route_selection,
                            },
                            effective_request.app_id,
                            "CAuth",
@@ -1526,6 +2152,7 @@ SteamCloudResult push_cloud_save(const SteamCloudRequest& request) {
                                effective_request.access_token,
                                effective_request.web_cookie_header,
                                effective_request.store_cookie_header,
+                               effective_request.route_selection,
                            },
                            effective_request.app_id,
                            "CAuth",
@@ -1533,8 +2160,22 @@ SteamCloudResult push_cloud_save(const SteamCloudRequest& request) {
                            files_to_delete,
                            upload_callbacks));
     if (!upload_result.ok) {
-        return make_result(
+        if (const auto action = current_transfer_interrupt_action();
+            action != TransferInterruptAction::None) {
+            auto result = action == TransferInterruptAction::Pause
+                              ? make_paused_result(
+                                    effective_request, SteamCloudDirection::Push, progress, "upload")
+                              : make_canceled_result(
+                                    effective_request, SteamCloudDirection::Push, progress, "upload");
+            apply_upload_resume_state(result, upload_progress_context);
+            return result;
+        }
+        auto result = make_result(
             effective_request, SteamCloudDirection::Push, false, upload_result.message, progress);
+        result.resumable = upload_result.resumable;
+        result.resumed = upload_result.resumed;
+        result.resume_from_bytes = upload_result.resume_from_bytes;
+        return result;
     }
 
     progress.transferred_bytes = planned_transfer_bytes;
@@ -1548,13 +2189,21 @@ SteamCloudResult push_cloud_save(const SteamCloudRequest& request) {
         total_push_steps,
         progress.transferred_bytes,
         progress.transferred_bytes,
+        {},
+        upload_result.resumable,
+        upload_result.resumed,
+        upload_result.resume_from_bytes,
     });
-    return make_result(
+    auto result = make_result(
         effective_request,
         SteamCloudDirection::Push,
         true,
         describe_push_summary(progress, false),
         progress);
+    result.resumable = upload_result.resumable;
+    result.resumed = upload_result.resumed;
+    result.resume_from_bytes = upload_result.resume_from_bytes;
+    return result;
 }
 
 int print_remote_files(core::session::SessionRepository& store,
@@ -1631,6 +2280,65 @@ int print_remote_files(core::session::SessionRepository& store,
             out << " platforms=" << file.platforms_to_sync;
         }
         out << '\n';
+    }
+    return 0;
+}
+
+int print_remote_files_via_web_page_diagnostic(core::session::SessionRepository& store,
+                                               const SteamCloudRequest& request,
+                                               std::uint32_t count,
+                                               std::uint32_t start_index,
+                                               std::ostream& out,
+                                               std::ostream& err) {
+    if (request.steam_id == 0) {
+        err << "Steam cloud web-page-list: --steam-id <id> is required\n";
+        return 2;
+    }
+
+    const auto result =
+        list_remote_files_via_web_page_diagnostic(store, request, count, start_index);
+    if (!result.ok) {
+        err << result.message << '\n';
+        return 1;
+    }
+
+    const auto remote_prefix = normalize_slashes(request.remote_root);
+    std::uint64_t matched_count = 0;
+    std::uint64_t skipped_count = 0;
+    for (const auto& file : result.files) {
+        const auto normalized_name = normalize_slashes(file.filename);
+        if (!starts_with_path_prefix(normalized_name, remote_prefix)) {
+            ++skipped_count;
+            continue;
+        }
+        ++matched_count;
+    }
+
+    out << "Steam Cloud web page files for app " << result.app_id
+        << ": returned=" << result.files.size()
+        << " matched=" << matched_count
+        << " filtered_out=" << skipped_count
+        << " total=" << result.total_files
+        << " eresult=" << result.eresult;
+    if (!request.remote_root.empty()) {
+        out << " remote_root=" << request.remote_root;
+    }
+    out << " note=diagnostic-store-page\n";
+    for (const auto& file : result.files) {
+        const auto normalized_name = normalize_slashes(file.filename);
+        if (!starts_with_path_prefix(normalized_name, remote_prefix)) {
+            continue;
+        }
+        out << "  file=" << file.filename
+            << " size=" << file.file_size
+            << " timestamp=" << file.timestamp;
+        if (!file.url.empty()) {
+            out << " url=" << file.url;
+        }
+        out << '\n';
+    }
+    if (!result.message.empty()) {
+        out << "Note: " << result.message << '\n';
     }
     return 0;
 }

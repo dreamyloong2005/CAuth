@@ -41,6 +41,7 @@ import com.cauth.android.compose.CAuthSteamAuthActionButtons
 import com.cauth.android.compose.CAuthSteamAuthForm
 import com.cauth.android.compose.CAuthSteamAuthHeader
 import com.cauth.android.compose.CAuthSteamAuthPlatformSelector
+import com.cauth.android.compose.CAuthSteamAuthRouteSection
 import com.cauth.android.compose.CAuthSteamAuthResults
 import com.cauth.android.compose.CAuthSteamAuthStatus
 import com.cauth.android.compose.CAuthSteamAuthTrace
@@ -541,6 +542,10 @@ private fun ExampleScreen(modifier: Modifier = Modifier) {
                         CAuthSteamAuthPlatformSelector(
                             selectedPlatform = authState.loginPlatform,
                             onPlatformSelected = authController::setLoginPlatform,
+                        )
+                        CAuthSteamAuthRouteSection(
+                            state = authState,
+                            controller = authController,
                         )
                         CAuthSteamAuthActionButtons(controller = authController)
                         CAuthSteamAuthStatus(
@@ -1907,6 +1912,7 @@ private fun buildDepotSummary(state: CAuthSteamDepotState): String = buildString
         appendLine("downloadTask.active=${it.active}")
         appendLine("downloadTask.finished=${it.finished}")
         appendLine("downloadTask.canceled=${it.canceled}")
+        appendLine("downloadTask.paused=${it.paused}")
         appendLine("downloadTask.succeeded=${it.succeeded}")
         appendLine("downloadTask.moduleStatus=${it.moduleStatus}")
         appendLine("downloadTask.phase=${it.phase}")
@@ -1985,6 +1991,9 @@ private fun buildCloudSummary(state: CAuthSteamCloudState): String = buildString
         appendLine("result.skipped=${it.skippedCount}")
         appendLine("result.conflicts=${it.conflictCount}")
         appendLine("result.bytes=${it.transferredBytes}")
+        appendLine("result.resumable=${it.resumable}")
+        appendLine("result.resumed=${it.resumed}")
+        appendLine("result.resumeBytes=${it.resumeFromBytes}")
         appendLine("result.message=${it.message}")
     }
     state.transferTask?.let {
@@ -1992,10 +2001,14 @@ private fun buildCloudSummary(state: CAuthSteamCloudState): String = buildString
         appendLine("transferTask.active=${it.active}")
         appendLine("transferTask.finished=${it.finished}")
         appendLine("transferTask.canceled=${it.canceled}")
+        appendLine("transferTask.paused=${it.paused}")
         appendLine("transferTask.succeeded=${it.succeeded}")
         appendLine("transferTask.moduleStatus=${it.moduleStatus}")
         appendLine("transferTask.phase=${it.phase}")
         appendLine("transferTask.progress=${it.progressSummary}")
+        appendLine("transferTask.resumable=${it.resumable}")
+        appendLine("transferTask.resumed=${it.resumed}")
+        appendLine("transferTask.resumeBytes=${it.resumeFromBytes}")
         appendLine("transferTask.target=${it.target}")
         appendLine("transferTask.message=${it.message}")
         it.result?.let { result ->
@@ -2007,6 +2020,9 @@ private fun buildCloudSummary(state: CAuthSteamCloudState): String = buildString
             appendLine("transferTask.result.skipped=${result.skippedCount}")
             appendLine("transferTask.result.conflicts=${result.conflictCount}")
             appendLine("transferTask.result.bytes=${result.transferredBytes}")
+            appendLine("transferTask.result.resumable=${result.resumable}")
+            appendLine("transferTask.result.resumed=${result.resumed}")
+            appendLine("transferTask.result.resumeBytes=${result.resumeFromBytes}")
             appendLine("transferTask.result.message=${result.message}")
         }
         it.verifyResult?.let { result ->

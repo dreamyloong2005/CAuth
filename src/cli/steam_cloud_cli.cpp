@@ -17,13 +17,23 @@ namespace {
 using namespace cauth::cli::support;
 
 std::atomic_bool g_cloud_cli_cancel_requested{false};
+std::atomic_bool g_cloud_cli_pause_requested{false};
+std::atomic_bool g_cloud_cli_pause_on_sigint{false};
 
 void on_cloud_cli_signal(int) {
-    g_cloud_cli_cancel_requested.store(true);
+    if (g_cloud_cli_pause_on_sigint.load()) {
+        g_cloud_cli_pause_requested.store(true);
+    } else {
+        g_cloud_cli_cancel_requested.store(true);
+    }
 }
 
 bool cloud_cli_cancel_requested(void*) {
     return g_cloud_cli_cancel_requested.load();
+}
+
+bool cloud_cli_pause_requested(void*) {
+    return g_cloud_cli_pause_requested.load();
 }
 
 int apply_write_mode_flag(cauth::core::platform::FileWriteOptions& write_options,
@@ -89,12 +99,16 @@ void on_cloud_progress(const cauth::steam::cloud::SteamCloudTransferProgress& pr
 }
 
 struct ScopedCloudCliProgress {
-    explicit ScopedCloudCliProgress(bool enabled) : enabled_(enabled) {
+    explicit ScopedCloudCliProgress(bool enabled, bool pause_on_sigint)
+        : enabled_(enabled), pause_on_sigint_(pause_on_sigint) {
         g_cloud_cli_cancel_requested.store(false);
+        g_cloud_cli_pause_requested.store(false);
+        g_cloud_cli_pause_on_sigint.store(pause_on_sigint_);
         previous_handler_ = std::signal(SIGINT, &on_cloud_cli_signal);
         cauth::steam::cloud::set_current_thread_steam_cloud_transfer_hooks(
             enabled_ ? &on_cloud_progress : nullptr,
             &cloud_cli_cancel_requested,
+            &cloud_cli_pause_requested,
             &state_);
     }
 
@@ -103,30 +117,47 @@ struct ScopedCloudCliProgress {
         if (enabled_) {
             finish_progress_line(std::cerr, state_.line_state);
         }
+        g_cloud_cli_pause_on_sigint.store(false);
         std::signal(SIGINT, previous_handler_);
     }
 
   private:
     bool enabled_ = false;
+    bool pause_on_sigint_ = false;
     CloudCliProgressState state_;
     void (*previous_handler_)(int) = SIG_DFL;
 };
 
 enum class CloudCommandKind {
+    Routes,
     List,
+    WebPageList,
     Verify,
     Pull,
     Push,
 };
 
+std::optional<cauth::steam::cloud::SteamCloudRouteTask> parse_cloud_route_task(
+    std::string_view value) {
+    using Task = cauth::steam::cloud::SteamCloudRouteTask;
+    if (value == "list") return Task::List;
+    if (value == "verify") return Task::Verify;
+    if (value == "pull") return Task::Pull;
+    if (value == "push") return Task::Push;
+    return std::nullopt;
+}
+
 struct ParsedCloudCommand {
     CloudCommandKind kind = CloudCommandKind::List;
     cauth::steam::cloud::SteamCloudRequest request;
+    cauth::steam::cloud::SteamCloudRouteTask route_task =
+        cauth::steam::cloud::SteamCloudRouteTask::Pull;
     std::uint32_t count = 100;
     std::uint32_t start_index = 0;
     bool extended_details = true;
     bool include_extra_local = false;
     bool has_write_mode = false;
+    bool pause_on_sigint = false;
 };
 
 struct ParsedCloudResult {
@@ -163,8 +194,12 @@ ParsedCloudResult parse_cloud_command(int argc, char** argv) {
     }
 
     const std::string_view subcommand = argv[2];
-    if (subcommand == "list") {
+    if (subcommand == "routes") {
+        result.command.kind = CloudCommandKind::Routes;
+    } else if (subcommand == "list") {
         result.command.kind = CloudCommandKind::List;
+    } else if (subcommand == "web-page-list") {
+        result.command.kind = CloudCommandKind::WebPageList;
     } else if (subcommand == "verify") {
         result.command.kind = CloudCommandKind::Verify;
     } else if (subcommand == "pull") {
@@ -246,6 +281,43 @@ ParsedCloudResult parse_cloud_command(int argc, char** argv) {
             result.command.request.backend = *parsed;
             continue;
         }
+        if ((result.command.kind == CloudCommandKind::Pull ||
+             result.command.kind == CloudCommandKind::Push ||
+             result.command.kind == CloudCommandKind::Verify) &&
+            arg == "--signal-action" && index + 1 < argc) {
+            const std::string_view action = argv[++index];
+            if (action == "pause") {
+                result.command.pause_on_sigint = true;
+            } else if (action == "cancel") {
+                result.command.pause_on_sigint = false;
+            } else {
+                std::cerr << "unknown signal action: " << action << '\n';
+                return result;
+            }
+            continue;
+        }
+        if (arg == "--route-endpoint" && index + 1 < argc) {
+            result.command.request.route_selection.endpoint = argv[++index];
+            continue;
+        }
+        if (arg == "--route-protocol" && index + 1 < argc) {
+            result.command.request.route_selection.protocol = argv[++index];
+            continue;
+        }
+        if (arg == "--route-role" && index + 1 < argc) {
+            result.command.request.route_selection.role = argv[++index];
+            continue;
+        }
+        if (result.command.kind == CloudCommandKind::Routes &&
+            arg == "--task" && index + 1 < argc) {
+            const auto parsed = parse_cloud_route_task(argv[++index]);
+            if (!parsed.has_value()) {
+                std::cerr << "unknown steam cloud route task\n";
+                return result;
+            }
+            result.command.route_task = *parsed;
+            continue;
+        }
         if (result.command.kind == CloudCommandKind::Pull) {
             const auto write_flag_result = apply_write_mode_flag(
                 result.command.request.local_write_options,
@@ -311,9 +383,17 @@ int run_steam_cloud(int argc, char** argv) {
             parsed.command.kind == CloudCommandKind::Verify ||
             parsed.command.kind == CloudCommandKind::Pull ||
             parsed.command.kind == CloudCommandKind::Push;
-        ScopedCloudCliProgress scoped_progress{enable_progress};
+        ScopedCloudCliProgress scoped_progress{enable_progress, parsed.command.pause_on_sigint};
         const auto store = cauth::core::platform::make_platform_session_repository();
         switch (parsed.command.kind) {
+        case CloudCommandKind::Routes:
+            return cauth::steam::cloud::print_cloud_routes(
+                *store,
+                parsed.command.request,
+                parsed.command.route_task,
+                parsed.command.count,
+                std::cout,
+                std::cerr);
         case CloudCommandKind::List:
             return cauth::steam::cloud::print_remote_files(
                 *store,
@@ -321,6 +401,14 @@ int run_steam_cloud(int argc, char** argv) {
                 parsed.command.count,
                 parsed.command.start_index,
                 parsed.command.extended_details,
+                std::cout,
+                std::cerr);
+        case CloudCommandKind::WebPageList:
+            return cauth::steam::cloud::print_remote_files_via_web_page_diagnostic(
+                *store,
+                parsed.command.request,
+                parsed.command.count,
+                parsed.command.start_index,
                 std::cout,
                 std::cerr);
         case CloudCommandKind::Verify:

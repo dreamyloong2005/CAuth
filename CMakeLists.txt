@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 
 project(
     CAuth
-    VERSION 0.5.1
+    VERSION 0.6.0
     DESCRIPTION "Native Steam authentication, depot, and cloud toolkit"
     LANGUAGES C CXX
 )
@@ -37,11 +37,14 @@ set(CAUTH_CORE_SOURCES
     src/core/crypto/aes.cpp
     src/core/encoding/base64url.cpp
     src/core/hash/sha1.cpp
+    src/core/platform/endpoint_route_cache.cpp
     src/core/platform/file_write.cpp
     src/core/platform/http_client.cpp
     src/core/platform/password_crypto.cpp
     src/core/platform/session_repository_factory.cpp
     src/core/platform/websocket_client.cpp
+    src/core/transfer/transfer_checkpoint.cpp
+    src/core/transfer/transfer_resume.cpp
     src/core/runtime/android/bridge.cpp
     src/core/runtime/android/secure_storage_bridge.cpp
     src/core/runtime/session/android_session_repository.cpp
@@ -437,6 +440,22 @@ if(CAUTH_BUILD_TESTS)
     endif()
 
     add_test(NAME cauth_core_tests COMMAND cauth_core_tests)
+
+    add_executable(cauth_endpoint_route_cache_tests tests/endpoint_route_cache_tests.cpp)
+    target_link_libraries(cauth_endpoint_route_cache_tests PRIVATE cauth::core)
+    target_include_directories(cauth_endpoint_route_cache_tests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    add_test(NAME cauth_endpoint_route_cache_tests COMMAND cauth_endpoint_route_cache_tests)
+
+    add_executable(cauth_transfer_checkpoint_tests tests/transfer_checkpoint_tests.cpp)
+    target_link_libraries(cauth_transfer_checkpoint_tests PRIVATE cauth::core)
+    target_include_directories(cauth_transfer_checkpoint_tests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    add_test(NAME cauth_transfer_checkpoint_tests COMMAND cauth_transfer_checkpoint_tests)
 
     add_executable(cauth_public_module_headers_tests tests/public_module_headers_tests.cpp)
     target_link_libraries(cauth_public_module_headers_tests PRIVATE cauth::steam_depot)

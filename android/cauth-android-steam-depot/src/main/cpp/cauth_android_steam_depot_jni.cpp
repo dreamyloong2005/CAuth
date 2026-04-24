@@ -46,6 +46,10 @@ constexpr const char* kDepotLocalVerifySnapshotClassName =
     "com/cauth/android/steam/depot/DepotLocalVerifySnapshot";
 constexpr const char* kDepotDownloadTaskSnapshotClassName =
     "com/cauth/android/steam/depot/DepotDownloadTaskSnapshot";
+constexpr const char* kRouteProbeEntrySnapshotClassName =
+    "com/cauth/android/CAuthRouteProbeEntrySnapshot";
+constexpr const char* kRouteProbeSnapshotClassName =
+    "com/cauth/android/CAuthRouteProbeSnapshot";
 
 jclass g_app_branch_entry_snapshot_class = nullptr;
 jclass g_app_branch_list_snapshot_class = nullptr;
@@ -61,6 +65,8 @@ jclass g_manifest_file_list_snapshot_class = nullptr;
 jclass g_depot_local_verify_entry_snapshot_class = nullptr;
 jclass g_depot_local_verify_snapshot_class = nullptr;
 jclass g_depot_download_task_snapshot_class = nullptr;
+jclass g_route_probe_entry_snapshot_class = nullptr;
+jclass g_route_probe_snapshot_class = nullptr;
 
 struct DepotVerifyStorage {
     std::vector<std::string> manifest_filenames;
@@ -69,6 +75,21 @@ struct DepotVerifyStorage {
     std::vector<std::string> actual_sha_hex;
     std::vector<std::string> reasons;
     std::vector<cauth_depot_local_verify_entry_t> entries;
+};
+
+struct RouteSelectionStorage {
+    std::string endpoint;
+    std::string protocol;
+    std::string role;
+    cauth_route_selection_t selection{};
+
+    const cauth_route_selection_t* pointer_or_null() const {
+        return empty() ? nullptr : &selection;
+    }
+
+    bool empty() const {
+        return endpoint.empty() && protocol.empty() && role.empty();
+    }
 };
 
 enum class DepotDownloadTaskKind : jint {
@@ -84,10 +105,12 @@ struct DepotDownloadTask {
 
     std::mutex mutex;
     std::atomic_bool cancel_requested{false};
+    std::atomic_bool pause_requested{false};
     std::atomic_bool finished{false};
     DepotDownloadTaskKind kind = DepotDownloadTaskKind::Manifest;
     bool succeeded = false;
     bool canceled = false;
+    bool paused = false;
     bool has_verify_report = false;
     std::string module_status = "idle";
     std::string phase = "Queued";
@@ -138,6 +161,19 @@ void throw_result_exception_with_detail(JNIEnv* env,
     }
     __android_log_print(ANDROID_LOG_ERROR, kLogTag, "%s", message.c_str());
     env->ThrowNew(env->FindClass(kIllegalStateException), message.c_str());
+}
+
+std::string copy_jstring(JNIEnv* env, jstring value) {
+    if (value == nullptr) {
+        return {};
+    }
+    const char* chars = env->GetStringUTFChars(value, nullptr);
+    if (chars == nullptr) {
+        return {};
+    }
+    std::string result{chars};
+    env->ReleaseStringUTFChars(value, chars);
+    return result;
 }
 
 jclass require_global_class(JNIEnv* env, jclass& slot, const char* name) {
@@ -216,6 +252,15 @@ jclass ensure_depot_local_verify_snapshot_class(JNIEnv* env) {
 jclass ensure_depot_download_task_snapshot_class(JNIEnv* env) {
     return require_global_class(
         env, g_depot_download_task_snapshot_class, kDepotDownloadTaskSnapshotClassName);
+}
+
+jclass ensure_route_probe_entry_snapshot_class(JNIEnv* env) {
+    return require_global_class(
+        env, g_route_probe_entry_snapshot_class, kRouteProbeEntrySnapshotClassName);
+}
+
+jclass ensure_route_probe_snapshot_class(JNIEnv* env) {
+    return require_global_class(env, g_route_probe_snapshot_class, kRouteProbeSnapshotClassName);
 }
 
 jobject make_app_branch_entry(JNIEnv* env, const cauth_app_branch_entry_t& entry) {
@@ -642,6 +687,11 @@ bool is_download_task_canceled(void* user_data) {
     return task != nullptr && task->cancel_requested.load();
 }
 
+bool is_download_task_paused(void* user_data) {
+    auto* task = static_cast<DepotDownloadTask*>(user_data);
+    return task != nullptr && task->pause_requested.load();
+}
+
 jobject make_depot_download_task_snapshot(JNIEnv* env,
                                           jlong handle,
                                           const DepotDownloadTask& task) {
@@ -652,7 +702,7 @@ jobject make_depot_download_task_snapshot(JNIEnv* env,
     jmethodID ctor = env->GetMethodID(
         cls,
         "<init>",
-        "(JIZZZZLjava/lang/String;Ljava/lang/String;JJJJLjava/lang/String;Ljava/lang/String;Lcom/cauth/android/steam/depot/DepotLocalVerifySnapshot;)V");
+        "(JIZZZZZLjava/lang/String;Ljava/lang/String;JJJJLjava/lang/String;Ljava/lang/String;Lcom/cauth/android/steam/depot/DepotLocalVerifySnapshot;)V");
     if (ctor == nullptr) {
         return nullptr;
     }
@@ -670,6 +720,7 @@ jobject make_depot_download_task_snapshot(JNIEnv* env,
         static_cast<jboolean>(!task.finished.load()),
         static_cast<jboolean>(task.finished.load()),
         static_cast<jboolean>(task.canceled),
+        static_cast<jboolean>(task.paused),
         static_cast<jboolean>(task.succeeded),
         module_status,
         phase,
@@ -690,6 +741,101 @@ jobject make_depot_download_task_snapshot(JNIEnv* env,
     return instance;
 }
 
+RouteSelectionStorage make_route_selection(JNIEnv* env,
+                                           jstring route_endpoint,
+                                           jstring route_protocol,
+                                           jstring route_role) {
+    RouteSelectionStorage storage;
+    storage.endpoint = copy_jstring(env, route_endpoint);
+    storage.protocol = copy_jstring(env, route_protocol);
+    storage.role = copy_jstring(env, route_role);
+    storage.selection.endpoint = storage.endpoint.empty() ? nullptr : storage.endpoint.c_str();
+    storage.selection.protocol = storage.protocol.empty() ? nullptr : storage.protocol.c_str();
+    storage.selection.role = storage.role.empty() ? nullptr : storage.role.c_str();
+    return storage;
+}
+
+jobject make_route_probe_entry(JNIEnv* env, const cauth_route_probe_entry_t& entry) {
+    jclass cls = ensure_route_probe_entry_snapshot_class(env);
+    if (cls == nullptr) {
+        return nullptr;
+    }
+    jmethodID ctor = env->GetMethodID(
+        cls,
+        "<init>",
+        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JZZII)V");
+    if (ctor == nullptr) {
+        return nullptr;
+    }
+    jstring endpoint = env->NewStringUTF(entry.endpoint == nullptr ? "" : entry.endpoint);
+    jstring protocol = env->NewStringUTF(entry.protocol == nullptr ? "" : entry.protocol);
+    jstring role = env->NewStringUTF(entry.role == nullptr ? "" : entry.role);
+    jstring note = env->NewStringUTF(entry.note == nullptr ? "" : entry.note);
+    jobject instance = env->NewObject(
+        cls,
+        ctor,
+        endpoint,
+        protocol,
+        role,
+        note,
+        static_cast<jlong>(entry.latency_ms),
+        static_cast<jboolean>(entry.latency_known != 0),
+        static_cast<jboolean>(entry.recent_success != 0),
+        static_cast<jboolean>(entry.recent_failure != 0),
+        static_cast<jint>(entry.success_count),
+        static_cast<jint>(entry.failure_count));
+    env->DeleteLocalRef(endpoint);
+    env->DeleteLocalRef(protocol);
+    env->DeleteLocalRef(role);
+    env->DeleteLocalRef(note);
+    return instance;
+}
+
+jobject make_route_probe_snapshot(JNIEnv* env, const cauth_route_probe_result_t& result) {
+    jclass entry_cls = ensure_route_probe_entry_snapshot_class(env);
+    jclass cls = ensure_route_probe_snapshot_class(env);
+    if (entry_cls == nullptr || cls == nullptr) {
+        return nullptr;
+    }
+    jmethodID ctor = env->GetMethodID(
+        cls,
+        "<init>",
+        "(ZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;[Lcom/cauth/android/CAuthRouteProbeEntrySnapshot;)V");
+    if (ctor == nullptr) {
+        return nullptr;
+    }
+    jobjectArray entries =
+        env->NewObjectArray(static_cast<jsize>(result.route_count), entry_cls, nullptr);
+    if (entries == nullptr) {
+        return nullptr;
+    }
+    for (jsize index = 0; index < static_cast<jsize>(result.route_count); ++index) {
+        jobject item = make_route_probe_entry(env, result.routes[index]);
+        if (item == nullptr) {
+            return nullptr;
+        }
+        env->SetObjectArrayElement(entries, index, item);
+        env->DeleteLocalRef(item);
+    }
+    jstring module_status =
+        env->NewStringUTF(result.module_status == nullptr ? "idle" : result.module_status);
+    jstring backend = env->NewStringUTF(result.backend == nullptr ? "" : result.backend);
+    jstring message = env->NewStringUTF(result.message == nullptr ? "" : result.message);
+    jobject instance = env->NewObject(
+        cls,
+        ctor,
+        static_cast<jboolean>(result.ok != 0),
+        module_status,
+        backend,
+        message,
+        entries);
+    env->DeleteLocalRef(module_status);
+    env->DeleteLocalRef(backend);
+    env->DeleteLocalRef(message);
+    env->DeleteLocalRef(entries);
+    return instance;
+}
+
 template <typename Runner>
 jlong start_download_task(DepotDownloadTaskKind kind, Runner&& runner) {
     const auto handle = g_next_download_task_handle.fetch_add(1);
@@ -699,7 +845,7 @@ jlong start_download_task(DepotDownloadTaskKind kind, Runner&& runner) {
         g_download_tasks.emplace(handle, task);
     }
 
-    std::thread([task, runner = std::forward<Runner>(runner)]() mutable {
+std::thread([task, runner = std::forward<Runner>(runner)]() mutable {
         std::string message;
         bool succeeded = false;
         bool canceled = false;
@@ -707,6 +853,7 @@ jlong start_download_task(DepotDownloadTaskKind kind, Runner&& runner) {
             cauth::steam::depot::set_current_thread_depot_download_hooks(
                 update_download_task_progress,
                 is_download_task_canceled,
+                is_download_task_paused,
                 task.get());
             runner(task, message, succeeded, canceled);
             cauth::steam::depot::clear_current_thread_depot_download_hooks();
@@ -722,11 +869,18 @@ jlong start_download_task(DepotDownloadTaskKind kind, Runner&& runner) {
 
         std::lock_guard lock(task->mutex);
         task->succeeded = succeeded;
-        task->canceled = canceled;
-        task->module_status = canceled ? "canceled" : (succeeded ? "succeeded" : "failed");
+        task->paused = !succeeded &&
+            (message.find("operation paused") != std::string::npos || task->pause_requested.load());
+        task->canceled = !task->paused &&
+            (canceled || (!succeeded &&
+                          (message.find("operation canceled") != std::string::npos ||
+                           task->cancel_requested.load())));
+        task->module_status =
+            task->paused ? "paused" : (task->canceled ? "canceled" : (succeeded ? "succeeded" : "failed"));
         task->message = message;
         if (task->phase.empty()) {
-            task->phase = canceled ? "Canceled" : (succeeded ? "Complete" : "Failed");
+            task->phase =
+                task->paused ? "Paused" : (task->canceled ? "Canceled" : (succeeded ? "Complete" : "Failed"));
         }
         task->finished.store(true);
     }).detach();
@@ -743,12 +897,21 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeFetchDepotBranche
     jlong handle,
     jlong steam_id,
     jint app_id,
-    jint max_count) {
+    jint max_count,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role) {
+    const auto route_selection = make_route_selection(env, route_endpoint, route_protocol, route_role);
     cauth_app_branch_list_t result{};
-    const cauth_result_t native_result = cauth_depot_fetch_branches(
-        client_from_handle(handle), static_cast<unsigned long long>(steam_id),
-        static_cast<unsigned int>(app_id),
-        static_cast<unsigned int>(max_count), &result);
+    const cauth_result_t native_result =
+        route_selection.empty()
+            ? cauth_depot_fetch_branches(
+                  client_from_handle(handle), static_cast<unsigned long long>(steam_id),
+                  static_cast<unsigned int>(app_id), static_cast<unsigned int>(max_count), &result)
+            : cauth_depot_fetch_branches_on_route(
+                  client_from_handle(handle), static_cast<unsigned long long>(steam_id),
+                  static_cast<unsigned int>(app_id), static_cast<unsigned int>(max_count),
+                  route_selection.pointer_or_null(), &result);
     if (native_result != CAUTH_OK) {
         throw_result_exception(env, "Depot branches failed", native_result);
         return nullptr;
@@ -764,13 +927,23 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeFetchDepotManifes
     jlong steam_id,
     jint app_id,
     jstring branch,
-    jint max_count) {
+    jint max_count,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role) {
     const char* branch_chars = branch == nullptr ? nullptr : env->GetStringUTFChars(branch, nullptr);
+    const auto route_selection = make_route_selection(env, route_endpoint, route_protocol, route_role);
     cauth_depot_manifest_list_t result{};
-    const cauth_result_t native_result = cauth_depot_fetch_manifests(
-        client_from_handle(handle), static_cast<unsigned long long>(steam_id),
-        static_cast<unsigned int>(app_id), branch_chars,
-        static_cast<unsigned int>(max_count), &result);
+    const cauth_result_t native_result =
+        route_selection.empty()
+            ? cauth_depot_fetch_manifests(
+                  client_from_handle(handle), static_cast<unsigned long long>(steam_id),
+                  static_cast<unsigned int>(app_id), branch_chars,
+                  static_cast<unsigned int>(max_count), &result)
+            : cauth_depot_fetch_manifests_on_route(
+                  client_from_handle(handle), static_cast<unsigned long long>(steam_id),
+                  static_cast<unsigned int>(app_id), branch_chars,
+                  static_cast<unsigned int>(max_count), route_selection.pointer_or_null(), &result);
     if (branch_chars != nullptr) {
         env->ReleaseStringUTFChars(branch, branch_chars);
     }
@@ -789,13 +962,23 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeFetchDepotPreflig
     jlong steam_id,
     jint app_id,
     jstring branch,
-    jint max_count) {
+    jint max_count,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role) {
     const char* branch_chars = branch == nullptr ? nullptr : env->GetStringUTFChars(branch, nullptr);
+    const auto route_selection = make_route_selection(env, route_endpoint, route_protocol, route_role);
     cauth_depot_preflight_report_t result{};
-    const cauth_result_t native_result = cauth_depot_fetch_preflight(
-        client_from_handle(handle), static_cast<unsigned long long>(steam_id),
-        static_cast<unsigned int>(app_id), branch_chars,
-        static_cast<unsigned int>(max_count), &result);
+    const cauth_result_t native_result =
+        route_selection.empty()
+            ? cauth_depot_fetch_preflight(
+                  client_from_handle(handle), static_cast<unsigned long long>(steam_id),
+                  static_cast<unsigned int>(app_id), branch_chars,
+                  static_cast<unsigned int>(max_count), &result)
+            : cauth_depot_fetch_preflight_on_route(
+                  client_from_handle(handle), static_cast<unsigned long long>(steam_id),
+                  static_cast<unsigned int>(app_id), branch_chars,
+                  static_cast<unsigned int>(max_count), route_selection.pointer_or_null(), &result);
     if (branch_chars != nullptr) {
         env->ReleaseStringUTFChars(branch, branch_chars);
     }
@@ -814,12 +997,22 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeFetchDepotKey(
     jlong steam_id,
     jint app_id,
     jint depot_id,
-    jint max_count) {
+    jint max_count,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role) {
+    const auto route_selection = make_route_selection(env, route_endpoint, route_protocol, route_role);
     cauth_depot_key_response_t result{};
-    const cauth_result_t native_result = cauth_depot_fetch_key(
-        client_from_handle(handle), static_cast<unsigned long long>(steam_id),
-        static_cast<unsigned int>(app_id),
-        static_cast<unsigned int>(depot_id), static_cast<unsigned int>(max_count), &result);
+    const cauth_result_t native_result =
+        route_selection.empty()
+            ? cauth_depot_fetch_key(
+                  client_from_handle(handle), static_cast<unsigned long long>(steam_id),
+                  static_cast<unsigned int>(app_id), static_cast<unsigned int>(depot_id),
+                  static_cast<unsigned int>(max_count), &result)
+            : cauth_depot_fetch_key_on_route(
+                  client_from_handle(handle), static_cast<unsigned long long>(steam_id),
+                  static_cast<unsigned int>(app_id), static_cast<unsigned int>(depot_id),
+                  static_cast<unsigned int>(max_count), route_selection.pointer_or_null(), &result);
     if (native_result != CAUTH_OK) {
         throw_result_exception(env, "Depot key failed", native_result);
         return nullptr;
@@ -838,17 +1031,29 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeFetchManifestRequ
     jlong manifest_gid,
     jstring branch,
     jstring branch_password_hash,
-    jint max_count) {
+    jint max_count,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role) {
     const char* branch_chars = branch == nullptr ? nullptr : env->GetStringUTFChars(branch, nullptr);
     const char* branch_password_hash_chars = branch_password_hash == nullptr
                                                  ? nullptr
                                                  : env->GetStringUTFChars(branch_password_hash, nullptr);
+    const auto route_selection = make_route_selection(env, route_endpoint, route_protocol, route_role);
     cauth_manifest_request_code_response_t result{};
-    const cauth_result_t native_result = cauth_depot_fetch_manifest_request_code(
-        client_from_handle(handle), static_cast<unsigned long long>(steam_id),
-        static_cast<unsigned int>(app_id),
-        static_cast<unsigned int>(depot_id), static_cast<unsigned long long>(manifest_gid),
-        branch_chars, branch_password_hash_chars, static_cast<unsigned int>(max_count), &result);
+    const cauth_result_t native_result =
+        route_selection.empty()
+            ? cauth_depot_fetch_manifest_request_code(
+                  client_from_handle(handle), static_cast<unsigned long long>(steam_id),
+                  static_cast<unsigned int>(app_id),
+                  static_cast<unsigned int>(depot_id), static_cast<unsigned long long>(manifest_gid),
+                  branch_chars, branch_password_hash_chars, static_cast<unsigned int>(max_count), &result)
+            : cauth_depot_fetch_manifest_request_code_on_route(
+                  client_from_handle(handle), static_cast<unsigned long long>(steam_id),
+                  static_cast<unsigned int>(app_id),
+                  static_cast<unsigned int>(depot_id), static_cast<unsigned long long>(manifest_gid),
+                  branch_chars, branch_password_hash_chars, static_cast<unsigned int>(max_count),
+                  route_selection.pointer_or_null(), &result);
     if (branch_chars != nullptr) {
         env->ReleaseStringUTFChars(branch, branch_chars);
     }
@@ -862,6 +1067,21 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeFetchManifestRequ
     return make_manifest_request_code(env, result);
 }
 
+extern "C" JNIEXPORT jobject JNICALL
+Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeProbeDepotDownloadRoutes(
+    JNIEnv* env,
+    jclass,
+    jint max_count) {
+    cauth_route_probe_result_t result{};
+    const cauth_result_t native_result =
+        cauth_depot_probe_download_routes(static_cast<unsigned int>(max_count), &result);
+    if (native_result != CAUTH_OK) {
+        throw_result_exception(env, "Depot routes failed", native_result);
+        return nullptr;
+    }
+    return make_route_probe_snapshot(env, result);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeDownloadDepotManifest(
     JNIEnv* env,
@@ -871,14 +1091,19 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeDownloadDepotMani
     jlong request_code,
     jint max_count,
     jstring output_path,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role,
     jint write_mode,
     jboolean atomic_write) {
     const char* output_path_chars =
         output_path == nullptr ? nullptr : env->GetStringUTFChars(output_path, nullptr);
-    const cauth_result_t native_result = cauth_depot_download_manifest(
+    const auto route_selection = make_route_selection(env, route_endpoint, route_protocol, route_role);
+    const cauth_result_t native_result = cauth_depot_download_manifest_on_route(
         static_cast<unsigned int>(depot_id), static_cast<unsigned long long>(manifest_gid),
         static_cast<unsigned long long>(request_code), static_cast<unsigned int>(max_count),
         output_path_chars,
+        route_selection.pointer_or_null(),
         static_cast<cauth_file_write_mode_t>(write_mode),
         atomic_write ? 1 : 0);
     if (output_path_chars != nullptr) {
@@ -1020,6 +1245,9 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeDownloadDepotChun
     jboolean process_chunk,
     jint max_count,
     jstring output_path,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role,
     jint write_mode,
     jboolean atomic_write) {
     const char* input_path_chars =
@@ -1030,11 +1258,13 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeDownloadDepotChun
         file_path == nullptr ? nullptr : env->GetStringUTFChars(file_path, nullptr);
     const char* output_path_chars =
         output_path == nullptr ? nullptr : env->GetStringUTFChars(output_path, nullptr);
+    const auto route_selection = make_route_selection(env, route_endpoint, route_protocol, route_role);
     const cauth_result_t native_result = cauth_depot_download_chunk(
         input_path_chars, depot_key_hex_chars, file_path_chars,
         static_cast<unsigned long long>(file_index), has_file_index ? 1 : 0,
         static_cast<unsigned long long>(chunk_index), process_chunk ? 1 : 0,
         static_cast<unsigned int>(max_count), output_path_chars,
+        route_selection.pointer_or_null(),
         static_cast<cauth_file_write_mode_t>(write_mode), atomic_write ? 1 : 0);
     if (input_path_chars != nullptr) {
         env->ReleaseStringUTFChars(input_path, input_path_chars);
@@ -1068,6 +1298,9 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeDownloadDepotFile
     jboolean has_file_index,
     jint max_count,
     jstring output_path,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role,
     jint write_mode,
     jboolean atomic_write) {
     const char* input_path_chars =
@@ -1078,10 +1311,12 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeDownloadDepotFile
         file_path == nullptr ? nullptr : env->GetStringUTFChars(file_path, nullptr);
     const char* output_path_chars =
         output_path == nullptr ? nullptr : env->GetStringUTFChars(output_path, nullptr);
+    const auto route_selection = make_route_selection(env, route_endpoint, route_protocol, route_role);
     const cauth_result_t native_result = cauth_depot_download_file(
         input_path_chars, depot_key_hex_chars, file_path_chars,
         static_cast<unsigned long long>(file_index), has_file_index ? 1 : 0,
         static_cast<unsigned int>(max_count), output_path_chars,
+        route_selection.pointer_or_null(),
         static_cast<cauth_file_write_mode_t>(write_mode), atomic_write ? 1 : 0);
     if (input_path_chars != nullptr) {
         env->ReleaseStringUTFChars(input_path, input_path_chars);
@@ -1112,6 +1347,9 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeDownloadDepotAllF
     jstring depot_key_hex,
     jint max_count,
     jstring output_root,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role,
     jint write_mode,
     jboolean atomic_write) {
     const char* input_path_chars =
@@ -1120,11 +1358,13 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeDownloadDepotAllF
         depot_key_hex == nullptr ? nullptr : env->GetStringUTFChars(depot_key_hex, nullptr);
     const char* output_root_chars =
         output_root == nullptr ? nullptr : env->GetStringUTFChars(output_root, nullptr);
+    const auto route_selection = make_route_selection(env, route_endpoint, route_protocol, route_role);
     const cauth_result_t native_result = cauth_depot_download_all_files(
         input_path_chars,
         depot_key_hex_chars,
         static_cast<unsigned int>(max_count),
         output_root_chars,
+        route_selection.pointer_or_null(),
         static_cast<cauth_file_write_mode_t>(write_mode),
         atomic_write ? 1 : 0);
     if (input_path_chars != nullptr) {
@@ -1154,11 +1394,17 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeStartDepotManifes
     jlong request_code,
     jint max_count,
     jstring output_path,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role,
     jint write_mode,
     jboolean atomic_write) {
     const char* output_path_chars =
         output_path == nullptr ? nullptr : env->GetStringUTFChars(output_path, nullptr);
     const std::string output_path_text = output_path_chars == nullptr ? "" : output_path_chars;
+    const std::string route_endpoint_text = copy_jstring(env, route_endpoint);
+    const std::string route_protocol_text = copy_jstring(env, route_protocol);
+    const std::string route_role_text = copy_jstring(env, route_role);
     if (output_path_chars != nullptr) {
         env->ReleaseStringUTFChars(output_path, output_path_chars);
     }
@@ -1170,17 +1416,29 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeStartDepotManifes
          request_code,
          max_count,
          output_path_text,
+         route_endpoint_text,
+         route_protocol_text,
+         route_role_text,
          write_mode,
          atomic_write](const std::shared_ptr<DepotDownloadTask>&,
                        std::string& message,
                        bool& succeeded,
                        bool& canceled) {
-            const auto native_result = cauth_depot_download_manifest(
+            cauth_route_selection_t route_selection{};
+            route_selection.endpoint =
+                route_endpoint_text.empty() ? nullptr : route_endpoint_text.c_str();
+            route_selection.protocol =
+                route_protocol_text.empty() ? nullptr : route_protocol_text.c_str();
+            route_selection.role = route_role_text.empty() ? nullptr : route_role_text.c_str();
+            const auto native_result = cauth_depot_download_manifest_on_route(
                 static_cast<unsigned int>(depot_id),
                 static_cast<unsigned long long>(manifest_gid),
                 static_cast<unsigned long long>(request_code),
                 static_cast<unsigned int>(max_count),
                 output_path_text.c_str(),
+                (route_endpoint_text.empty() && route_protocol_text.empty() && route_role_text.empty())
+                    ? nullptr
+                    : &route_selection,
                 static_cast<cauth_file_write_mode_t>(write_mode),
                 atomic_write ? 1 : 0);
             const char* detail = cauth_depot_last_error_detail();
@@ -1207,6 +1465,9 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeStartDepotChunkDo
     jboolean process_chunk,
     jint max_count,
     jstring output_path,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role,
     jint write_mode,
     jboolean atomic_write) {
     const char* input_path_chars =
@@ -1222,6 +1483,9 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeStartDepotChunkDo
         depot_key_hex_chars == nullptr ? "" : depot_key_hex_chars;
     const std::string file_path_text = file_path_chars == nullptr ? "" : file_path_chars;
     const std::string output_path_text = output_path_chars == nullptr ? "" : output_path_chars;
+    const std::string route_endpoint_text = copy_jstring(env, route_endpoint);
+    const std::string route_protocol_text = copy_jstring(env, route_protocol);
+    const std::string route_role_text = copy_jstring(env, route_role);
     if (input_path_chars != nullptr) env->ReleaseStringUTFChars(input_path, input_path_chars);
     if (depot_key_hex_chars != nullptr) {
         env->ReleaseStringUTFChars(depot_key_hex, depot_key_hex_chars);
@@ -1240,11 +1504,20 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeStartDepotChunkDo
          process_chunk,
          max_count,
          output_path_text,
+         route_endpoint_text,
+         route_protocol_text,
+         route_role_text,
          write_mode,
          atomic_write](const std::shared_ptr<DepotDownloadTask>&,
                        std::string& message,
                        bool& succeeded,
                        bool& canceled) {
+            cauth_route_selection_t route_selection{};
+            route_selection.endpoint =
+                route_endpoint_text.empty() ? nullptr : route_endpoint_text.c_str();
+            route_selection.protocol =
+                route_protocol_text.empty() ? nullptr : route_protocol_text.c_str();
+            route_selection.role = route_role_text.empty() ? nullptr : route_role_text.c_str();
             const auto native_result = cauth_depot_download_chunk(
                 input_path_text.c_str(),
                 depot_key_hex_text.empty() ? nullptr : depot_key_hex_text.c_str(),
@@ -1255,6 +1528,9 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeStartDepotChunkDo
                 process_chunk ? 1 : 0,
                 static_cast<unsigned int>(max_count),
                 output_path_text.c_str(),
+                (route_endpoint_text.empty() && route_protocol_text.empty() && route_role_text.empty())
+                    ? nullptr
+                    : &route_selection,
                 static_cast<cauth_file_write_mode_t>(write_mode),
                 atomic_write ? 1 : 0);
             const char* detail = cauth_depot_last_error_detail();
@@ -1279,6 +1555,9 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeStartDepotFileDow
     jboolean has_file_index,
     jint max_count,
     jstring output_path,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role,
     jint write_mode,
     jboolean atomic_write) {
     const char* input_path_chars =
@@ -1294,6 +1573,9 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeStartDepotFileDow
         depot_key_hex_chars == nullptr ? "" : depot_key_hex_chars;
     const std::string file_path_text = file_path_chars == nullptr ? "" : file_path_chars;
     const std::string output_path_text = output_path_chars == nullptr ? "" : output_path_chars;
+    const std::string route_endpoint_text = copy_jstring(env, route_endpoint);
+    const std::string route_protocol_text = copy_jstring(env, route_protocol);
+    const std::string route_role_text = copy_jstring(env, route_role);
     if (input_path_chars != nullptr) env->ReleaseStringUTFChars(input_path, input_path_chars);
     if (depot_key_hex_chars != nullptr) {
         env->ReleaseStringUTFChars(depot_key_hex, depot_key_hex_chars);
@@ -1310,11 +1592,20 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeStartDepotFileDow
          has_file_index,
          max_count,
          output_path_text,
+         route_endpoint_text,
+         route_protocol_text,
+         route_role_text,
          write_mode,
          atomic_write](const std::shared_ptr<DepotDownloadTask>&,
                        std::string& message,
                        bool& succeeded,
                        bool& canceled) {
+            cauth_route_selection_t route_selection{};
+            route_selection.endpoint =
+                route_endpoint_text.empty() ? nullptr : route_endpoint_text.c_str();
+            route_selection.protocol =
+                route_protocol_text.empty() ? nullptr : route_protocol_text.c_str();
+            route_selection.role = route_role_text.empty() ? nullptr : route_role_text.c_str();
             const auto native_result = cauth_depot_download_file(
                 input_path_text.c_str(),
                 depot_key_hex_text.c_str(),
@@ -1323,6 +1614,9 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeStartDepotFileDow
                 has_file_index ? 1 : 0,
                 static_cast<unsigned int>(max_count),
                 output_path_text.c_str(),
+                (route_endpoint_text.empty() && route_protocol_text.empty() && route_role_text.empty())
+                    ? nullptr
+                    : &route_selection,
                 static_cast<cauth_file_write_mode_t>(write_mode),
                 atomic_write ? 1 : 0);
             const char* detail = cauth_depot_last_error_detail();
@@ -1344,6 +1638,9 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeStartDepotAllFile
     jstring depot_key_hex,
     jint max_count,
     jstring output_root,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role,
     jint write_mode,
     jboolean atomic_write) {
     const char* input_path_chars =
@@ -1356,6 +1653,9 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeStartDepotAllFile
     const std::string depot_key_hex_text =
         depot_key_hex_chars == nullptr ? "" : depot_key_hex_chars;
     const std::string output_root_text = output_root_chars == nullptr ? "" : output_root_chars;
+    const std::string route_endpoint_text = copy_jstring(env, route_endpoint);
+    const std::string route_protocol_text = copy_jstring(env, route_protocol);
+    const std::string route_role_text = copy_jstring(env, route_role);
     if (input_path_chars != nullptr) env->ReleaseStringUTFChars(input_path, input_path_chars);
     if (depot_key_hex_chars != nullptr) {
         env->ReleaseStringUTFChars(depot_key_hex, depot_key_hex_chars);
@@ -1370,16 +1670,28 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeStartDepotAllFile
          depot_key_hex_text,
          max_count,
          output_root_text,
+         route_endpoint_text,
+         route_protocol_text,
+         route_role_text,
          write_mode,
          atomic_write](const std::shared_ptr<DepotDownloadTask>&,
                        std::string& message,
                        bool& succeeded,
                        bool& canceled) {
+            cauth_route_selection_t route_selection{};
+            route_selection.endpoint =
+                route_endpoint_text.empty() ? nullptr : route_endpoint_text.c_str();
+            route_selection.protocol =
+                route_protocol_text.empty() ? nullptr : route_protocol_text.c_str();
+            route_selection.role = route_role_text.empty() ? nullptr : route_role_text.c_str();
             const auto native_result = cauth_depot_download_all_files(
                 input_path_text.c_str(),
                 depot_key_hex_text.c_str(),
                 static_cast<unsigned int>(max_count),
                 output_root_text.c_str(),
+                (route_endpoint_text.empty() && route_protocol_text.empty() && route_role_text.empty())
+                    ? nullptr
+                    : &route_selection,
                 static_cast<cauth_file_write_mode_t>(write_mode),
                 atomic_write ? 1 : 0);
             const char* detail = cauth_depot_last_error_detail();
@@ -1475,6 +1787,25 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativePollDepotDownload
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativePauseDepotDownloadTask(
+    JNIEnv*,
+    jclass,
+    jlong handle) {
+    const auto task = find_download_task(handle);
+    if (task == nullptr) {
+        return;
+    }
+    task->pause_requested = true;
+    task->cancel_requested = false;
+    std::lock_guard lock(task->mutex);
+    task->module_status = "pausing";
+    if (task->phase.empty() || task->phase == "Queued") {
+        task->phase = "Pause requested";
+    }
+    task->message = "Pause requested...";
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeCancelDepotDownloadTask(
     JNIEnv*,
     jclass,
@@ -1484,11 +1815,13 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeCancelDepotDownlo
         return;
     }
     task->cancel_requested = true;
+    task->pause_requested = false;
     std::lock_guard lock(task->mutex);
-    task->module_status = "canceled";
+    task->module_status = "canceling";
     if (task->phase.empty() || task->phase == "Queued") {
         task->phase = "Cancel requested";
     }
+    task->message = "Cancel requested...";
 }
 
 extern "C" JNIEXPORT void JNICALL

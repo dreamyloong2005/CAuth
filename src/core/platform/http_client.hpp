@@ -1,6 +1,7 @@
 #ifndef CAUTH_CORE_PLATFORM_HTTP_CLIENT_HPP
 #define CAUTH_CORE_PLATFORM_HTTP_CLIENT_HPP
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -27,6 +28,9 @@ struct HttpTransferProgress {
 
 using HttpTransferProgressHook = void (*)(const HttpTransferProgress& progress, void* user_data);
 using HttpTransferCancelHook = bool (*)(void* user_data);
+using HttpResponseWriteHook = bool (*)(const std::uint8_t* bytes,
+                                       std::size_t size,
+                                       void* user_data);
 
 struct HttpRequestCallbacks {
     HttpTransferProgressHook progress_hook = nullptr;
@@ -44,8 +48,15 @@ struct HttpRequest {
     HttpMethod method = HttpMethod::Get;
     std::string url;
     std::vector<std::uint8_t> body;
+    const std::vector<std::uint8_t>* body_view = nullptr;
+    std::uint64_t body_offset = 0;
+    std::uint64_t body_length = 0;
     std::string content_type;
     std::vector<HttpHeader> headers;
+    bool use_range = false;
+    std::uint64_t range_start = 0;
+    HttpResponseWriteHook response_write_hook = nullptr;
+    void* response_write_user_data = nullptr;
     std::int32_t connect_timeout_ms = 5000;
     std::int32_t read_timeout_ms = 10000;
     HttpRequestCallbacks callbacks;

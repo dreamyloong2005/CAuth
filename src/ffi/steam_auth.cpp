@@ -16,6 +16,7 @@
 #include "steam/cm/cm_service_method.hpp"
 #include "steam/cm/cm_session.hpp"
 #include "steam/cm/steam_directory.hpp"
+#include "steam/cm/steam_cm_connector.hpp"
 #include "steam/cm/websocket_transport.hpp"
 
 #include <cctype>
@@ -33,6 +34,18 @@ namespace {
 
 std::string nullable_string(const char* value) {
     return value == nullptr ? std::string{} : std::string{value};
+}
+
+cauth::core::platform::RouteSelection from_ffi_route_selection(
+    const cauth_route_selection_t* selection) {
+    cauth::core::platform::RouteSelection native;
+    if (selection == nullptr) {
+        return native;
+    }
+    native.endpoint = nullable_string(selection->endpoint);
+    native.protocol = nullable_string(selection->protocol);
+    native.role = nullable_string(selection->role);
+    return native;
 }
 
 std::string base64_encode_bytes(const std::vector<std::uint8_t>& bytes) {
@@ -241,6 +254,14 @@ thread_local std::string g_last_cm_logon_module_status;
 thread_local std::string g_last_cm_logon_status;
 thread_local std::string g_auth_saved_provider;
 thread_local std::string g_auth_saved_subject_id;
+thread_local std::string g_cm_route_module_status;
+thread_local std::string g_cm_route_backend;
+thread_local std::string g_cm_route_message;
+thread_local std::vector<std::string> g_cm_route_endpoints;
+thread_local std::vector<std::string> g_cm_route_protocols;
+thread_local std::vector<std::string> g_cm_route_roles;
+thread_local std::vector<std::string> g_cm_route_notes;
+thread_local std::vector<cauth_route_probe_entry_t> g_cm_route_entries;
 
 } // namespace
 
@@ -266,6 +287,7 @@ cauth_result_t cauth_auth_login_password(cauth_client_t* client,
         login_request.device_name = nullable_string(request->device_name);
         login_request.remember_session = request->remember_session != 0;
         login_request.platform_type = to_platform_type(request->platform_type);
+        login_request.route_selection = from_ffi_route_selection(&request->route_selection);
 
         const auto login_result =
             cauth::steam::auth::login_with_steam_platform_auth(*client->session_repository, login_request);
@@ -638,7 +660,8 @@ cauth_result_t cauth_get_capabilities(cauth_capabilities_t* out_capabilities) {
     return CAUTH_OK;
 }
 
-cauth_result_t cauth_cm_probe(cauth_cm_probe_result_t* out_probe) {
+cauth_result_t cauth_cm_probe_on_route(const cauth_route_selection_t* route_selection,
+                                       cauth_cm_probe_result_t* out_probe) {
     if (out_probe == nullptr) return CAUTH_ERROR_INVALID_ARGUMENT;
 
     out_probe->ok = 0;
@@ -647,52 +670,39 @@ cauth_result_t cauth_cm_probe(cauth_cm_probe_result_t* out_probe) {
     out_probe->status = "";
 
     try {
-        cauth::core::cm::SteamDirectoryClient directory;
-        cauth::core::cm::CmServerQuery query;
-        query.protocol = cauth::core::cm::CmServerProtocol::WebSocket;
-        query.max_count = 5;
-
-        const auto servers = directory.get_cm_servers(query);
-        if (!servers.ok) {
-            g_last_cm_probe_endpoint.clear();
-            g_last_cm_probe_module_status = "failed";
-            g_last_cm_probe_status = "CM directory lookup failed: " + servers.error_message;
-            out_probe->module_status = g_last_cm_probe_module_status.c_str();
-            out_probe->status = g_last_cm_probe_status.c_str();
-            return CAUTH_OK;
-        }
-
-        cauth::core::cm::CmWebSocketTransport transport;
-        for (const auto& server : servers.servers) {
-            g_last_cm_probe_endpoint = server.address + ":" + std::to_string(server.port);
-            const auto result = transport.probe(server);
-            if (result.ok) {
-                g_last_cm_probe_status = "connected";
-                g_last_cm_probe_module_status = "connected";
-                out_probe->ok = 1;
-                out_probe->endpoint = g_last_cm_probe_endpoint.c_str();
-                out_probe->module_status = g_last_cm_probe_module_status.c_str();
-                out_probe->status = g_last_cm_probe_status.c_str();
-                return CAUTH_OK;
-            }
-            g_last_cm_probe_status = result.error_message;
-        }
-
-        g_last_cm_probe_module_status = "failed";
+        const auto native_route_selection = from_ffi_route_selection(route_selection);
+        const auto report = cauth::core::cm::probe_websocket_routes(
+            5,
+            nullptr,
+            native_route_selection.empty() ? nullptr : &native_route_selection);
+        g_last_cm_probe_endpoint =
+            report.routes.empty()
+                ? std::string{}
+                : report.routes.front().endpoint.address + ":" +
+                      std::to_string(report.routes.front().endpoint.port);
+        g_last_cm_probe_module_status = report.ok ? "connected" : report.module_status;
+        g_last_cm_probe_status = report.message.empty()
+                                     ? (report.ok ? "connected"
+                                                  : "CM websocket probe failed for all endpoints")
+                                     : report.message;
+        out_probe->ok = report.ok ? 1 : 0;
         out_probe->endpoint = g_last_cm_probe_endpoint.c_str();
         out_probe->module_status = g_last_cm_probe_module_status.c_str();
-        out_probe->status = g_last_cm_probe_status.empty()
-                                ? "CM websocket probe failed for all endpoints"
-                                : g_last_cm_probe_status.c_str();
+        out_probe->status = g_last_cm_probe_status.c_str();
         return CAUTH_OK;
     } catch (...) {
         return CAUTH_ERROR_INTERNAL;
     }
 }
 
-cauth_result_t cauth_cm_logon(cauth_client_t* client,
-                              unsigned long long steam_id,
-                              cauth_cm_logon_result_t* out_result) {
+cauth_result_t cauth_cm_probe(cauth_cm_probe_result_t* out_probe) {
+    return cauth_cm_probe_on_route(nullptr, out_probe);
+}
+
+cauth_result_t cauth_cm_logon_on_route(cauth_client_t* client,
+                                       unsigned long long steam_id,
+                                       const cauth_route_selection_t* route_selection,
+                                       cauth_cm_logon_result_t* out_result) {
     if (client == nullptr || steam_id == 0 || out_result == nullptr) {
         return CAUTH_ERROR_INVALID_ARGUMENT;
     }
@@ -742,78 +752,115 @@ cauth_result_t cauth_cm_logon(cauth_client_t* client,
             return CAUTH_OK;
         }
 
-        cauth::core::cm::SteamDirectoryClient directory;
-        cauth::core::cm::CmServerQuery query;
-        query.protocol = cauth::core::cm::CmServerProtocol::WebSocket;
-        query.max_count = 5;
-        const auto servers = directory.get_cm_servers(query);
-        if (!servers.ok) {
-            g_last_cm_logon_endpoint.clear();
-            g_last_cm_logon_module_status = "failed";
-            g_last_cm_logon_status = "CM directory lookup failed: " + servers.error_message;
-            out_result->module_status = g_last_cm_logon_module_status.c_str();
-            out_result->status = g_last_cm_logon_status.c_str();
-            out_result->steam_id = cauth::steam::auth::steam_id(*session);
-            return CAUTH_OK;
-        }
-
-        cauth::core::cm::CmWebSocketTransport transport;
-        for (const auto& server : servers.servers) {
-            g_last_cm_logon_endpoint = server.address + ":" + std::to_string(server.port);
-            auto [connect_result, connection] = transport.connect(server);
-            if (!connect_result.ok || !connection) {
-                g_last_cm_logon_status = "Connect failed: " + connect_result.error_message;
-                continue;
-            }
-
-            cauth::core::cm::CmSession cm_session{std::move(connection)};
-            const auto logon = cm_session.logon(*session);
-            if (!logon.ok) {
+        const auto native_route_selection = from_ffi_route_selection(route_selection);
+        cauth::core::cm::SteamCmConnector connector;
+        const auto logon_result = connector.with_logged_on_session(
+            *session,
+            5,
+            native_route_selection.empty() ? nullptr : &native_route_selection,
+            [&](const cauth::core::cm::CmServerEndpoint& endpoint, cauth::core::cm::CmSession& cm_session) {
+                (void)cm_session;
+                g_last_cm_logon_endpoint = endpoint.address + ":" + std::to_string(endpoint.port);
+                g_last_cm_logon_status = "logged on";
+                g_last_cm_logon_module_status = "succeeded";
+                out_result->ok = 1;
                 out_result->endpoint = g_last_cm_logon_endpoint.c_str();
-                out_result->steam_id = cauth::steam::auth::steam_id(*session);
-                out_result->eresult = logon.logon_response.eresult;
-                out_result->eresult_extended = logon.logon_response.eresult_extended;
-                out_result->heartbeat_seconds = logon.logon_response.heartbeat_seconds;
-                g_last_cm_logon_status = logon.error_message;
-                continue;
-            }
-
-            const auto heartbeat_result = cm_session.send_heartbeat(*session);
-            if (!heartbeat_result.ok) {
-                out_result->endpoint = g_last_cm_logon_endpoint.c_str();
-                out_result->steam_id = cauth::steam::auth::steam_id(*session);
-                out_result->eresult = logon.logon_response.eresult;
-                out_result->eresult_extended = logon.logon_response.eresult_extended;
-                out_result->heartbeat_seconds = logon.logon_response.heartbeat_seconds;
-                g_last_cm_logon_module_status = "failed";
-                g_last_cm_logon_status =
-                    "CM heartbeat send failed: " + heartbeat_result.error_message;
                 out_result->module_status = g_last_cm_logon_module_status.c_str();
                 out_result->status = g_last_cm_logon_status.c_str();
-                return CAUTH_OK;
-            }
+                out_result->eresult = 1;
+                out_result->eresult_extended = 1;
+                out_result->heartbeat_seconds = 0;
+                out_result->steam_id = cauth::steam::auth::steam_id(*session);
+                return cauth::core::cm::SteamCmAttemptResult{
+                    cauth::core::cm::SteamCmContinuation::Stop,
+                    true,
+                    "",
+                };
+            });
 
-            g_last_cm_logon_status = "logged on";
-            g_last_cm_logon_module_status = "succeeded";
-            out_result->ok = 1;
-            out_result->endpoint = g_last_cm_logon_endpoint.c_str();
-            out_result->module_status = g_last_cm_logon_module_status.c_str();
-            out_result->status = g_last_cm_logon_status.c_str();
-            out_result->eresult = logon.logon_response.eresult;
-            out_result->eresult_extended = logon.logon_response.eresult_extended;
-            out_result->heartbeat_seconds = logon.logon_response.heartbeat_seconds;
-            out_result->steam_id = cauth::steam::auth::steam_id(*session);
+        if (logon_result.ok) {
             return CAUTH_OK;
         }
 
         g_last_cm_logon_module_status = "failed";
+        g_last_cm_logon_status = logon_result.error_message.empty()
+                                     ? "CM logon failed for all endpoints"
+                                     : logon_result.error_message;
         out_result->endpoint = g_last_cm_logon_endpoint.c_str();
         out_result->module_status = g_last_cm_logon_module_status.c_str();
-        out_result->status = g_last_cm_logon_status.empty()
-                                 ? "CM logon failed for all endpoints"
-                                 : g_last_cm_logon_status.c_str();
+        out_result->status = g_last_cm_logon_status.c_str();
         out_result->steam_id = cauth::steam::auth::steam_id(*session);
         return CAUTH_OK;
+    } catch (...) {
+        return CAUTH_ERROR_INTERNAL;
+    }
+}
+
+cauth_result_t cauth_cm_logon(cauth_client_t* client,
+                              unsigned long long steam_id,
+                              cauth_cm_logon_result_t* out_result) {
+    return cauth_cm_logon_on_route(client, steam_id, nullptr, out_result);
+}
+
+cauth_result_t cauth_auth_probe_cm_routes(unsigned int max_count,
+                                          cauth_route_probe_result_t* out_result) {
+    if (out_result == nullptr || max_count == 0) {
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+
+    out_result->ok = 0;
+    out_result->module_status = "";
+    out_result->backend = "";
+    out_result->message = "";
+    out_result->route_count = 0;
+    out_result->routes = nullptr;
+
+    try {
+        const auto report = cauth::core::cm::probe_websocket_routes(max_count);
+        g_cm_route_module_status = report.module_status;
+        g_cm_route_backend = "cm";
+        g_cm_route_message = report.message;
+        g_cm_route_endpoints.clear();
+        g_cm_route_protocols.clear();
+        g_cm_route_roles.clear();
+        g_cm_route_notes.clear();
+        g_cm_route_entries.clear();
+        g_cm_route_endpoints.reserve(report.routes.size());
+        g_cm_route_protocols.reserve(report.routes.size());
+        g_cm_route_roles.reserve(report.routes.size());
+        g_cm_route_notes.reserve(report.routes.size());
+        for (const auto& route : report.routes) {
+            g_cm_route_endpoints.push_back(route.route.endpoint);
+            g_cm_route_protocols.push_back(route.route.protocol);
+            g_cm_route_roles.push_back(route.route.role);
+            g_cm_route_notes.push_back(route.route.note);
+        }
+        g_cm_route_entries.reserve(report.routes.size());
+        for (std::size_t index = 0; index < report.routes.size(); ++index) {
+            const auto& route = report.routes[index].route;
+            g_cm_route_entries.push_back(cauth_route_probe_entry_t{
+                g_cm_route_endpoints[index].c_str(),
+                g_cm_route_protocols[index].c_str(),
+                g_cm_route_roles[index].c_str(),
+                g_cm_route_notes[index].c_str(),
+                route.latency_ms,
+                route.latency_known ? 1 : 0,
+                route.recent_success ? 1 : 0,
+                route.recent_failure ? 1 : 0,
+                route.success_count,
+                route.failure_count,
+            });
+        }
+
+        out_result->ok = report.ok ? 1 : 0;
+        out_result->module_status = g_cm_route_module_status.c_str();
+        out_result->backend = g_cm_route_backend.c_str();
+        out_result->message = g_cm_route_message.c_str();
+        out_result->route_count = static_cast<unsigned long long>(g_cm_route_entries.size());
+        out_result->routes = g_cm_route_entries.empty() ? nullptr : g_cm_route_entries.data();
+        return CAUTH_OK;
+    } catch (const std::bad_alloc&) {
+        return CAUTH_ERROR_OUT_OF_MEMORY;
     } catch (...) {
         return CAUTH_ERROR_INTERNAL;
     }

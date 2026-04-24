@@ -128,6 +128,53 @@ fun CAuthSteamAuthPlatformSelector(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
+fun CAuthSteamAuthRouteSection(
+    state: CAuthSteamAuthState,
+    controller: CAuthSteamAuthController,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("CM Route", style = MaterialTheme.typography.labelLarge)
+        OutlinedTextField(
+            value = state.routeEndpoint,
+            onValueChange = controller::setRouteEndpoint,
+            label = { Text("Route endpoint (optional)") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !state.busy,
+            singleLine = true,
+        )
+        OutlinedTextField(
+            value = state.routeProtocol,
+            onValueChange = controller::setRouteProtocol,
+            label = { Text("Route protocol (optional)") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !state.busy,
+            singleLine = true,
+        )
+        OutlinedTextField(
+            value = state.routeRole,
+            onValueChange = controller::setRouteRole,
+            label = { Text("Route role (optional)") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !state.busy,
+            singleLine = true,
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(enabled = !state.busy, onClick = controller::probeCmRoutes) {
+                Text("Probe Routes")
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
 fun CAuthSteamAuthActionButtons(
     controller: CAuthSteamAuthController,
     modifier: Modifier = Modifier,
@@ -307,6 +354,32 @@ fun CAuthSteamAuthResults(
                 "CM: ok=${it.ok} endpoint=${it.endpoint ?: "(none)"}",
                 style = MaterialTheme.typography.bodySmall,
             )
+        }
+
+        state.cmRoutes?.let { snapshot ->
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    "CM Routes (${snapshot.routes.size}) backend=${snapshot.backend.ifBlank { "(none)" }}",
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                if (snapshot.message.isNotBlank()) {
+                    Text(snapshot.message, style = MaterialTheme.typography.bodySmall)
+                }
+                snapshot.routes.take(8).forEach { route ->
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            "${route.endpoint} protocol=${route.protocol.ifBlank { "(none)" }} role=${route.role.ifBlank { "(none)" }} latency=${route.latencyLabel}",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Button(onClick = { controller.useCmRoute(route) }) {
+                            Text("Use")
+                        }
+                    }
+                }
+            }
         }
 
         state.cmLogon?.let {

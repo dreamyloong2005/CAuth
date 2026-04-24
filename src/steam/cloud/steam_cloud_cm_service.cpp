@@ -2,14 +2,17 @@
 
 #include "core/platform/http_client.hpp"
 #include "core/session/auth_session.hpp"
+#include "core/transfer/transfer_resume.hpp"
 #include "steam/auth/steam_session_identity.hpp"
 #include "steam/cm/steam_cm_connector.hpp"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cctype>
 #include <cstdint>
 #include <filesystem>
+#include <initializer_list>
 #include <limits>
 #include <optional>
 #include <string>
@@ -33,6 +36,7 @@ constexpr std::uint64_t kBeginAppUploadBatchJobId = 0x4341555448535943ULL;
 constexpr std::uint64_t kClientBeginFileUploadJobId = 0x4341555448535944ULL;
 constexpr std::uint64_t kClientCommitFileUploadJobId = 0x4341555448535945ULL;
 constexpr std::uint64_t kCompleteAppUploadBatchJobId = 0x4341555448535946ULL;
+constexpr std::string_view kCmUploadResumeFileName = ".cauthupload.resume";
 
 void append_varint(std::vector<std::uint8_t>& out, std::uint64_t value) {
     while (value >= 0x80U) {
@@ -271,6 +275,84 @@ struct PreparedUploadFile {
     std::uint64_t timestamp = 0;
     bool compressed = false;
 };
+
+using CmUploadResumeState = cauth::core::transfer::TransferResumeState;
+
+enum class UploadInterruptAction {
+    None,
+    Pause,
+    Cancel,
+};
+
+std::filesystem::path make_cm_upload_resume_state_path(std::string_view local_root) {
+    return std::filesystem::path{std::string{local_root}} /
+           std::filesystem::path{std::string{kCmUploadResumeFileName}};
+}
+
+std::string make_cm_upload_file_token(const SteamCloudRequest& request,
+                                      const PreparedUploadFile& file) {
+    return std::string{"steam-cloud-push-cm-file-v1:"} + std::to_string(request.app_id) + ":" +
+           std::to_string(request.steam_id) + ":" + file.source->filename + ":" +
+           std::to_string(file.raw_file_size) + ":" + file.source->file_sha + ":" +
+           (file.compressed ? "zip" : "raw") + ":" + std::to_string(file.upload_bytes.size());
+}
+
+std::string make_cm_upload_batch_token(const SteamCloudRequest& request,
+                                       std::string_view machine_name,
+                                       const std::vector<PreparedUploadFile>& files,
+                                       const std::vector<std::string>& files_to_delete) {
+    std::string token = std::string{"steam-cloud-push-cm-batch-v1:"} +
+                        std::to_string(request.app_id) + ":" +
+                        std::to_string(request.steam_id) + ":" +
+                        std::string{machine_name};
+    for (const auto& file : files) {
+        token.push_back('|');
+        token += make_cm_upload_file_token(request, file);
+    }
+    token += "|delete:";
+    for (const auto& filename : files_to_delete) {
+        token += filename;
+        token.push_back(';');
+    }
+    return token;
+}
+
+bool load_cm_upload_resume_state(const std::filesystem::path& path,
+                                 CmUploadResumeState& state,
+                                 std::string& error_message) {
+    if (!cauth::core::transfer::load_transfer_resume_state(path, state, error_message)) {
+        return false;
+    }
+    if (state.group_id == 0 || state.item_token.empty()) {
+        error_message = "Cloud upload resume state is incomplete: " + path.string();
+        return false;
+    }
+    return true;
+}
+
+bool save_cm_upload_resume_state(const std::filesystem::path& path,
+                                 const CmUploadResumeState& state,
+                                 std::string& error_message) {
+    return cauth::core::transfer::save_transfer_resume_state(path, state, error_message);
+}
+
+bool clear_cm_upload_resume_state(const std::filesystem::path& path, std::string& error_message) {
+    return cauth::core::transfer::clear_transfer_resume_state(path, error_message);
+}
+
+UploadInterruptAction current_upload_interrupt_action(const SteamCloudUploadCallbacks& callbacks) {
+    const auto pause_requested =
+        callbacks.pause_hook != nullptr && callbacks.pause_hook(callbacks.user_data);
+    const auto cancel_requested =
+        callbacks.cancel_hook != nullptr && callbacks.cancel_hook(callbacks.user_data);
+    if (pause_requested) {
+        return UploadInterruptAction::Pause;
+    }
+    if (cancel_requested) {
+        return UploadInterruptAction::Cancel;
+    }
+    return UploadInterruptAction::None;
+}
 
 #if defined(CAUTH_HAS_ZLIB)
 std::optional<std::vector<std::uint8_t>> raw_deflate_bytes(const std::vector<std::uint8_t>& input) {
@@ -963,13 +1045,72 @@ SteamCloudUploadResult make_upload_error(std::string message) {
     return result;
 }
 
-SteamCloudUploadResult upload_cm_block(const PreparedUploadFile& file,
-                                       const ClientFileUploadBlockRequest& block,
-                                       std::string_view filename,
-                                       std::uint64_t file_offset,
-                                       const SteamCloudUploadCallbacks& callbacks) {
+bool route_selection_applies_to_any_role(
+    const cauth::core::platform::RouteSelection& selection,
+    std::initializer_list<std::string_view> roles) {
+    if (selection.empty() || selection.role.empty()) {
+        return true;
+    }
+    for (const auto role : roles) {
+        if (selection.role == role) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void apply_selected_http_route(cauth::core::platform::RouteSelection const& selection,
+                               std::initializer_list<std::string_view> roles,
+                               std::string& url_host,
+                               bool& use_https) {
+    if (selection.empty() || !route_selection_applies_to_any_role(selection, roles)) {
+        return;
+    }
+    if (!selection.endpoint.empty()) {
+        url_host = selection.endpoint;
+    }
+    if (!selection.protocol.empty()) {
+        if (selection.protocol == "https") {
+            use_https = true;
+        } else if (selection.protocol == "http") {
+            use_https = false;
+        }
+    }
+}
+
+struct UploadBlockResult {
+    bool ok = false;
+    std::uint64_t bytes_transferred = 0;
+    std::string message;
+};
+
+std::vector<cauth::core::platform::HttpHeader> sanitize_upload_headers(
+    const std::vector<cauth::core::platform::HttpHeader>& headers) {
+    std::vector<cauth::core::platform::HttpHeader> sanitized;
+    sanitized.reserve(headers.size());
+    for (const auto& header : headers) {
+        if (header.name.size() == 14 &&
+            std::equal(header.name.begin(), header.name.end(),
+                       "Content-Length",
+                       [](char lhs, char rhs) {
+                           return std::tolower(static_cast<unsigned char>(lhs)) ==
+                                  std::tolower(static_cast<unsigned char>(rhs));
+                       })) {
+            continue;
+        }
+        sanitized.push_back(header);
+    }
+    return sanitized;
+}
+
+UploadBlockResult upload_cm_block(const PreparedUploadFile& file,
+                                  const ClientFileUploadBlockRequest& block,
+                                  const cauth::core::platform::RouteSelection* route_selection,
+                                  std::string_view filename,
+                                  std::uint64_t file_offset,
+                                  const SteamCloudUploadCallbacks& callbacks) {
     if (!cauth::core::platform::is_platform_http_client_available()) {
-        return make_upload_error("platform HTTP client is not available");
+        return {false, 0, "platform HTTP client is not available"};
     }
 
     struct UploadProgressContext {
@@ -977,38 +1118,55 @@ SteamCloudUploadResult upload_cm_block(const PreparedUploadFile& file,
         std::uint64_t file_offset = 0;
         std::uint64_t total_bytes = 0;
         const SteamCloudUploadCallbacks* callbacks = nullptr;
-    } progress_context{filename, file_offset, file.upload_bytes.size(), &callbacks};
+        std::uint64_t last_bytes_transferred = 0;
+    } progress_context{filename, file_offset, file.upload_bytes.size(), &callbacks, 0};
+
+    if (file_offset > file.upload_bytes.size()) {
+        return {false, 0, "CM Cloud upload offset is invalid"};
+    }
 
     cauth::core::platform::HttpRequest http_request;
     http_request.method = block.http_method == 2 ? cauth::core::platform::HttpMethod::Post
                                                  : cauth::core::platform::HttpMethod::Put;
-    http_request.url = std::string{block.use_https ? "https://" : "http://"} + block.url_host +
-                       block.url_path;
-    http_request.headers = block.request_headers;
+    auto block_host = block.url_host;
+    auto block_use_https = block.use_https;
+    if (route_selection != nullptr) {
+        apply_selected_http_route(*route_selection, {"upload", "content"}, block_host, block_use_https);
+    }
+    http_request.url =
+        std::string{block_use_https ? "https://" : "http://"} + block_host + block.url_path;
+    http_request.headers = sanitize_upload_headers(block.request_headers);
     http_request.content_type = "application/octet-stream";
 
     if (!block.explicit_body_data.empty()) {
-        http_request.body = block.explicit_body_data;
+        if (file_offset > block.block_offset) {
+            return {false, 0, "CM Cloud explicit upload block cannot resume from the middle"};
+        }
+        http_request.body_view = &block.explicit_body_data;
     } else {
         if (block.block_offset > file.upload_bytes.size() ||
             block.block_length > file.upload_bytes.size() - block.block_offset) {
-            return make_upload_error("CM Cloud upload block range is invalid");
+            return {false, 0, "CM Cloud upload block range is invalid"};
         }
-        const auto begin =
-            file.upload_bytes.begin() + static_cast<std::ptrdiff_t>(block.block_offset);
-        const auto end =
-            begin + static_cast<std::ptrdiff_t>(block.block_length);
-        http_request.body.assign(begin, end);
+        const auto block_end = block.block_offset + block.block_length;
+        if (file_offset > block_end) {
+            return {false, 0, "CM Cloud upload resume offset exceeds the block range"};
+        }
+        const auto request_offset = (std::max)(block.block_offset, file_offset);
+        http_request.body_view = &file.upload_bytes;
+        http_request.body_offset = request_offset;
+        http_request.body_length = block_end - request_offset;
     }
 
     http_request.callbacks.progress_hook =
         [](const cauth::core::platform::HttpTransferProgress& progress, void* user_data) {
-            const auto* context = static_cast<const UploadProgressContext*>(user_data);
+            auto* context = static_cast<UploadProgressContext*>(user_data);
             if (context == nullptr || context->callbacks == nullptr ||
                 context->callbacks->progress_hook == nullptr ||
                 progress.direction != cauth::core::platform::HttpTransferDirection::Upload) {
                 return;
             }
+            context->last_bytes_transferred = progress.bytes_transferred;
             context->callbacks->progress_hook(
                 context->filename,
                 context->file_offset + progress.bytes_transferred,
@@ -1019,22 +1177,21 @@ SteamCloudUploadResult upload_cm_block(const PreparedUploadFile& file,
         [](void* user_data) -> bool {
             const auto* context = static_cast<const UploadProgressContext*>(user_data);
             return context != nullptr && context->callbacks != nullptr &&
-                   context->callbacks->cancel_hook != nullptr &&
-                   context->callbacks->cancel_hook(context->callbacks->user_data);
+                   ((context->callbacks->pause_hook != nullptr &&
+                     context->callbacks->pause_hook(context->callbacks->user_data)) ||
+                    (context->callbacks->cancel_hook != nullptr &&
+                     context->callbacks->cancel_hook(context->callbacks->user_data)));
         };
     http_request.callbacks.user_data = &progress_context;
 
     const auto response = cauth::core::platform::perform_platform_http_request(http_request);
     if (!response.ok) {
-        return make_upload_error(response.error_message.empty()
-                                     ? "CM Cloud upload block HTTP request failed"
-                                     : response.error_message);
+        return {false,
+                progress_context.last_bytes_transferred,
+                response.error_message.empty() ? "CM Cloud upload block HTTP request failed"
+                                               : response.error_message};
     }
-
-    SteamCloudUploadResult result;
-    result.ok = true;
-    result.message = "ok";
-    return result;
+    return {true, progress_context.last_bytes_transferred, "ok"};
 }
 
 } // namespace
@@ -1065,6 +1222,7 @@ SteamCloudFileListResult fetch_remote_file_list_via_cm(const SteamCloudRequest& 
     const auto operation = connector.with_logged_on_session(
         *session,
         5,
+        request.route_selection.empty() ? nullptr : &request.route_selection,
         [&](const auto&, auto& cm_session) {
             const auto call = cm_session.call_service_method(
                 "Cloud.EnumerateUserFiles#1",
@@ -1103,6 +1261,7 @@ SteamCloudFileListResult fetch_remote_file_list_via_cm(const SteamCloudRequest& 
 SteamCloudDownloadResult download_remote_file_via_cm(
     const SteamCloudRequest& request,
     const SteamCloudFileEntry& file,
+    const SteamCloudDownloadOptions& download_options,
     const cauth::core::platform::HttpRequestCallbacks& callbacks) {
     if (request.app_id == 0) {
         return make_download_error("app_id is required");
@@ -1126,6 +1285,7 @@ SteamCloudDownloadResult download_remote_file_via_cm(
     const auto operation = connector.with_logged_on_session(
         *session,
         5,
+        request.route_selection.empty() ? nullptr : &request.route_selection,
         [&](const auto&, auto& cm_session) {
             const auto call = cm_session.call_service_method(
                 "Cloud.ClientFileDownload#1",
@@ -1159,12 +1319,21 @@ SteamCloudDownloadResult download_remote_file_via_cm(
         return make_download_error("Cloud.ClientFileDownload did not return a download host");
     }
 
+    auto download_host = download_info.url_host;
+    auto download_use_https = download_info.use_https;
+    apply_selected_http_route(request.route_selection, {"download", "content"}, download_host, download_use_https);
+
     cauth::core::platform::HttpRequest http_request;
     http_request.method = cauth::core::platform::HttpMethod::Get;
-    http_request.url = std::string{download_info.use_https ? "https://" : "http://"} +
-                       download_info.url_host + download_info.url_path;
+    http_request.url =
+        std::string{download_use_https ? "https://" : "http://"} + download_host +
+        download_info.url_path;
     http_request.headers = download_info.request_headers;
     http_request.callbacks = callbacks;
+    http_request.use_range = download_options.use_range;
+    http_request.range_start = download_options.range_start;
+    http_request.response_write_hook = download_options.response_write_hook;
+    http_request.response_write_user_data = download_options.response_write_user_data;
     const auto response = cauth::core::platform::perform_platform_http_request(http_request);
     if (!response.ok) {
         return make_download_error(response.error_message.empty()
@@ -1224,40 +1393,133 @@ SteamCloudUploadResult upload_cloud_files_via_cm(const SteamCloudRequest& reques
         prepared_files.push_back(prepare_upload_file(file));
     }
 
+    const auto resume_state_path = make_cm_upload_resume_state_path(request.local_root);
+    const auto batch_token =
+        make_cm_upload_batch_token(request, machine_name, prepared_files, files_to_delete);
+    CmUploadResumeState resume_state;
+    bool resume_state_loaded = false;
+    {
+        std::string resume_error;
+        if (load_cm_upload_resume_state(resume_state_path, resume_state, resume_error)) {
+            if (resume_state.token == batch_token) {
+                resume_state_loaded = true;
+            } else {
+                std::string clear_error;
+                (void)clear_cm_upload_resume_state(resume_state_path, clear_error);
+            }
+        }
+    }
+
     SteamCloudUploadResult final_result;
     final_result.ok = false;
+    final_result.resumable = !prepared_files.empty() || !files_to_delete.empty();
+    final_result.resumed = resume_state_loaded;
+    final_result.resume_from_bytes = resume_state_loaded ? resume_state.committed_bytes : 0;
+    const auto make_current_upload_error = [&](std::string message) {
+        auto result = make_upload_error(std::move(message));
+        result.resumable = final_result.resumable;
+        result.resumed = final_result.resumed;
+        result.resume_from_bytes = final_result.resume_from_bytes;
+        return result;
+    };
     std::uint64_t batch_id = 0;
     SteamCmConnector connector;
     const auto operation = connector.with_logged_on_session(
         *session,
         5,
+        request.route_selection.empty() ? nullptr : &request.route_selection,
         [&](const auto&, auto& cm_session) {
-            const auto begin_call = cm_session.call_service_method(
-                "Cloud.BeginAppUploadBatch#1",
-                build_begin_app_upload_batch_request(
-                    request.app_id, machine_name, upload_filenames, files_to_delete),
-                kBeginAppUploadBatchJobId);
-            if (!begin_call.ok) {
-                return SteamCmAttemptResult{
-                    is_retryable_cm_error(begin_call.error_message) ? SteamCmContinuation::Continue
-                                                                    : SteamCmContinuation::Stop,
-                    false,
-                    "Cloud.BeginAppUploadBatch failed: " + begin_call.error_message,
-                };
-            }
-
-            const auto begin_response = parse_begin_app_upload_batch_response_body(begin_call.body);
-            if (!begin_response.has_value()) {
-                return SteamCmAttemptResult{
-                    SteamCmContinuation::Stop,
-                    false,
-                    "Cloud.BeginAppUploadBatch response parse failed",
-                };
-            }
-            batch_id = begin_response->batch_id;
-
             std::string upload_error;
-            for (const auto& file : prepared_files) {
+            bool pause_requested = false;
+            bool cancel_requested = false;
+            const PreparedUploadFile* current_file = nullptr;
+            std::string current_file_token;
+
+            if (callbacks.state_hook != nullptr) {
+                callbacks.state_hook(
+                    final_result.resumable,
+                    final_result.resumed,
+                    final_result.resume_from_bytes,
+                    callbacks.user_data);
+            }
+
+            if (resume_state_loaded && resume_state.group_id != 0) {
+                batch_id = resume_state.group_id;
+            } else {
+                const auto begin_call = cm_session.call_service_method(
+                    "Cloud.BeginAppUploadBatch#1",
+                    build_begin_app_upload_batch_request(
+                        request.app_id, machine_name, upload_filenames, files_to_delete),
+                    kBeginAppUploadBatchJobId);
+                if (!begin_call.ok) {
+                    return SteamCmAttemptResult{
+                        is_retryable_cm_error(begin_call.error_message) ? SteamCmContinuation::Continue
+                                                                        : SteamCmContinuation::Stop,
+                        false,
+                        "Cloud.BeginAppUploadBatch failed: " + begin_call.error_message,
+                    };
+                }
+
+                const auto begin_response = parse_begin_app_upload_batch_response_body(begin_call.body);
+                if (!begin_response.has_value()) {
+                    return SteamCmAttemptResult{
+                        SteamCmContinuation::Stop,
+                        false,
+                        "Cloud.BeginAppUploadBatch response parse failed",
+                    };
+                }
+                batch_id = begin_response->batch_id;
+                if (!prepared_files.empty() || !files_to_delete.empty()) {
+                    std::string save_error;
+                    const CmUploadResumeState initial_state{
+                        batch_token,
+                        0,
+                        batch_id,
+                        0,
+                        prepared_files.empty() ? std::string{} :
+                                                 make_cm_upload_file_token(request, prepared_files.front()),
+                    };
+                    if (!save_cm_upload_resume_state(resume_state_path, initial_state, save_error)) {
+                        return SteamCmAttemptResult{
+                            SteamCmContinuation::Stop,
+                            false,
+                            save_error,
+                        };
+                    }
+                }
+            }
+
+            const auto start_file_index =
+                resume_state_loaded ? (std::min)(resume_state.item_index, prepared_files.size()) : 0U;
+            for (std::size_t file_index = start_file_index; file_index < prepared_files.size();
+                 ++file_index) {
+                const auto& file = prepared_files[file_index];
+                current_file = &file;
+                current_file_token = make_cm_upload_file_token(request, file);
+                auto uploaded_file_bytes =
+                    resume_state_loaded && file_index == resume_state.item_index &&
+                            resume_state.item_token == current_file_token
+                        ? resume_state.committed_bytes
+                        : 0ULL;
+
+                {
+                    std::string save_error;
+                    const CmUploadResumeState file_state{
+                        batch_token,
+                        uploaded_file_bytes,
+                        batch_id,
+                        file_index,
+                        current_file_token,
+                    };
+                    if (!save_cm_upload_resume_state(resume_state_path, file_state, save_error)) {
+                        return SteamCmAttemptResult{
+                            SteamCmContinuation::Stop,
+                            false,
+                            save_error,
+                        };
+                    }
+                }
+
                 const auto request_body =
                     build_client_begin_file_upload_request(request.app_id, batch_id, file);
                 if (!request_body.has_value()) {
@@ -1272,6 +1534,10 @@ SteamCloudUploadResult upload_cloud_files_via_cm(const SteamCloudRequest& reques
                     kClientBeginFileUploadJobId,
                     12);
                 if (!begin_file_call.ok) {
+                    if (resume_state_loaded) {
+                        std::string clear_error;
+                        (void)clear_cm_upload_resume_state(resume_state_path, clear_error);
+                    }
                     upload_error =
                         "Cloud.ClientBeginFileUpload failed for " + file.source->filename + ": " +
                         begin_file_call.error_message + " [raw_file_size=" +
@@ -1297,22 +1563,116 @@ SteamCloudUploadResult upload_cloud_files_via_cm(const SteamCloudRequest& reques
                 }
 
                 bool transfer_succeeded = true;
-                std::uint64_t uploaded_file_bytes = 0;
                 for (const auto& block : begin_file_response->block_requests) {
+                    const auto block_end = block.block_offset + block.block_length;
+                    if (uploaded_file_bytes >= block_end) {
+                        continue;
+                    }
+
+                    const auto request_offset = uploaded_file_bytes > block.block_offset
+                                                    ? uploaded_file_bytes
+                                                    : block.block_offset;
                     const auto block_result = upload_cm_block(
                         file,
                         block,
+                        &request.route_selection,
                         file.source->filename,
-                        uploaded_file_bytes,
+                        request_offset,
                         callbacks);
                     if (!block_result.ok) {
+                        const auto interrupt_action = current_upload_interrupt_action(callbacks);
+                        uploaded_file_bytes = request_offset + block_result.bytes_transferred;
+
+                        if (interrupt_action == UploadInterruptAction::Pause) {
+                            pause_requested = true;
+                        } else if (interrupt_action == UploadInterruptAction::Cancel) {
+                            cancel_requested = true;
+                        }
+
+                        if (!cancel_requested) {
+                            std::string save_error;
+                            const CmUploadResumeState file_state{
+                                batch_token,
+                                uploaded_file_bytes,
+                                batch_id,
+                                file_index,
+                                current_file_token,
+                            };
+                            if (!save_cm_upload_resume_state(
+                                    resume_state_path, file_state, save_error)) {
+                                return SteamCmAttemptResult{
+                                    SteamCmContinuation::Stop,
+                                    false,
+                                    save_error,
+                                };
+                            }
+                        }
+
+                        if (!pause_requested && !cancel_requested &&
+                            request_offset > block.block_offset) {
+                            const auto retry_result = upload_cm_block(
+                                file,
+                                block,
+                                &request.route_selection,
+                                file.source->filename,
+                                block.block_offset,
+                                callbacks);
+                            if (retry_result.ok) {
+                                uploaded_file_bytes = block_end;
+                                std::string save_error;
+                                const CmUploadResumeState file_state{
+                                    batch_token,
+                                    uploaded_file_bytes,
+                                    batch_id,
+                                    file_index,
+                                    current_file_token,
+                                };
+                                if (!save_cm_upload_resume_state(
+                                        resume_state_path, file_state, save_error)) {
+                                    return SteamCmAttemptResult{
+                                        SteamCmContinuation::Stop,
+                                        false,
+                                        save_error,
+                                    };
+                                }
+                                continue;
+                            }
+                        }
+
                         transfer_succeeded = false;
                         upload_error =
                             "failed to upload block for " + file.source->filename + ": " +
                             block_result.message;
                         break;
                     }
-                    uploaded_file_bytes += static_cast<std::uint64_t>(block.block_length);
+                    uploaded_file_bytes = block_end;
+                    std::string save_error;
+                    const CmUploadResumeState file_state{
+                        batch_token,
+                        uploaded_file_bytes,
+                        batch_id,
+                        file_index,
+                        current_file_token,
+                    };
+                    if (!save_cm_upload_resume_state(resume_state_path, file_state, save_error)) {
+                        return SteamCmAttemptResult{
+                            SteamCmContinuation::Stop,
+                            false,
+                            save_error,
+                        };
+                    }
+                }
+
+                if (pause_requested) {
+                    final_result = make_current_upload_error("operation paused");
+                    return SteamCmAttemptResult{SteamCmContinuation::Stop, false, final_result.message};
+                }
+                if (!transfer_succeeded && cancel_requested) {
+                    break;
+                }
+                if (!transfer_succeeded) {
+                    final_result = make_current_upload_error(upload_error);
+                    return SteamCmAttemptResult{SteamCmContinuation::Stop, false, final_result.message};
                 }
 
                 const auto commit_request =
@@ -1347,9 +1707,58 @@ SteamCloudUploadResult upload_cloud_files_via_cm(const SteamCloudRequest& reques
                         "Cloud.ClientCommitFileUpload did not commit " + file.source->filename;
                     break;
                 }
+
+                if (file_index + 1 < prepared_files.size()) {
+                    std::string save_error;
+                    const CmUploadResumeState next_state{
+                        batch_token,
+                        0,
+                        batch_id,
+                        file_index + 1,
+                        make_cm_upload_file_token(request, prepared_files[file_index + 1]),
+                    };
+                    if (!save_cm_upload_resume_state(resume_state_path, next_state, save_error)) {
+                        return SteamCmAttemptResult{
+                            SteamCmContinuation::Stop,
+                            false,
+                            save_error,
+                        };
+                    }
+                }
             }
 
-            const auto batch_eresult = upload_error.empty() ? 1U : 2U;
+            if (cancel_requested) {
+                if (current_file != nullptr) {
+                    const auto commit_request =
+                        build_client_commit_file_upload_request(request.app_id, *current_file, false);
+                    if (commit_request.has_value()) {
+                        (void)cm_session.call_service_method(
+                            "Cloud.ClientCommitFileUpload#1",
+                            *commit_request,
+                            kClientCommitFileUploadJobId);
+                    }
+                }
+
+                const auto complete_call = cm_session.call_service_method(
+                    "Cloud.CompleteAppUploadBatchBlocking#1",
+                    build_complete_app_upload_batch_request(request.app_id, batch_id, 2U),
+                    kCompleteAppUploadBatchJobId,
+                    12);
+                std::string clear_error;
+                (void)clear_cm_upload_resume_state(resume_state_path, clear_error);
+                final_result = make_current_upload_error(
+                    complete_call.ok ? "operation canceled"
+                                     : "operation canceled; complete batch failed: " +
+                                           complete_call.error_message);
+                return SteamCmAttemptResult{SteamCmContinuation::Stop, false, final_result.message};
+            }
+
+            if (!upload_error.empty()) {
+                final_result = make_current_upload_error(upload_error);
+                return SteamCmAttemptResult{SteamCmContinuation::Stop, false, final_result.message};
+            }
+
+            const auto batch_eresult = 1U;
             const auto complete_call = cm_session.call_service_method(
                 "Cloud.CompleteAppUploadBatchBlocking#1",
                 build_complete_app_upload_batch_request(request.app_id, batch_id, batch_eresult),
@@ -1365,14 +1774,19 @@ SteamCloudUploadResult upload_cloud_files_via_cm(const SteamCloudRequest& reques
                         "Cloud.CompleteAppUploadBatchBlocking failed: " + complete_call.error_message,
                     };
                 }
-                final_result = make_upload_error(
+                final_result = make_current_upload_error(
                     upload_error + "; complete batch failed: " + complete_call.error_message);
                 return SteamCmAttemptResult{SteamCmContinuation::Stop, false, final_result.message};
             }
 
-            if (!upload_error.empty()) {
-                final_result = make_upload_error(upload_error);
-                return SteamCmAttemptResult{SteamCmContinuation::Stop, false, final_result.message};
+            std::string clear_error;
+            if (!clear_cm_upload_resume_state(resume_state_path, clear_error) &&
+                !clear_error.empty()) {
+                return SteamCmAttemptResult{
+                    SteamCmContinuation::Stop,
+                    false,
+                    clear_error,
+                };
             }
 
             final_result.ok = true;
@@ -1384,7 +1798,7 @@ SteamCloudUploadResult upload_cloud_files_via_cm(const SteamCloudRequest& reques
         if (!final_result.message.empty()) {
             return final_result;
         }
-        return make_upload_error(operation.error_message);
+        return make_current_upload_error(operation.error_message);
     }
     return final_result;
 }

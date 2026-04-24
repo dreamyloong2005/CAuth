@@ -12,25 +12,47 @@
 
 namespace {
 
+void reset_mock_sequences();
+
 struct ScopedCloudHooksReset {
-    ~ScopedCloudHooksReset() { cauth::steam::cloud::testing::clear_cloud_test_hooks(); }
+    ~ScopedCloudHooksReset() {
+        cauth::steam::cloud::testing::clear_cloud_test_hooks();
+        reset_mock_sequences();
+    }
 };
 
 cauth::steam::cloud::SteamCloudFileListResult g_mock_list_result;
 cauth::steam::cloud::SteamCloudDownloadResult g_mock_download_response;
 cauth::steam::cloud::SteamCloudUploadResult g_mock_upload_result;
+std::vector<cauth::steam::cloud::SteamCloudFileListResult> g_mock_list_sequence;
+std::vector<cauth::steam::cloud::SteamCloudDownloadResult> g_mock_download_sequence;
 std::vector<cauth::steam::cloud::SteamCloudUploadFile> g_captured_upload_files;
 std::vector<std::string> g_captured_delete_files;
 cauth::steam::cloud::SteamCloudRequest g_last_list_request;
+int g_list_call_count = 0;
 int g_download_call_count = 0;
 int g_upload_call_count = 0;
+
+void reset_mock_sequences() {
+    g_mock_list_sequence.clear();
+    g_mock_download_sequence.clear();
+    g_list_call_count = 0;
+    g_download_call_count = 0;
+}
 
 cauth::steam::cloud::SteamCloudFileListResult mock_list_remote_files(
     const cauth::steam::cloud::SteamCloudRequest& request,
     std::uint32_t,
     std::uint32_t,
     bool) {
+    ++g_list_call_count;
     g_last_list_request = request;
+    if (!g_mock_list_sequence.empty()) {
+        const auto sequence_index =
+            static_cast<std::size_t>(std::min<int>(g_list_call_count - 1,
+                                                   static_cast<int>(g_mock_list_sequence.size() - 1)));
+        return g_mock_list_sequence[sequence_index];
+    }
     return g_mock_list_result;
 }
 
@@ -38,6 +60,12 @@ cauth::steam::cloud::SteamCloudDownloadResult mock_download_file(
     const cauth::steam::cloud::SteamCloudRequest&,
     const cauth::steam::cloud::SteamCloudFileEntry&) {
     ++g_download_call_count;
+    if (!g_mock_download_sequence.empty()) {
+        const auto sequence_index =
+            static_cast<std::size_t>(std::min<int>(g_download_call_count - 1,
+                                                   static_cast<int>(g_mock_download_sequence.size() - 1)));
+        return g_mock_download_sequence[sequence_index];
+    }
     return g_mock_download_response;
 }
 
@@ -81,6 +109,7 @@ int main() {
     cauth::steam::cloud::SteamCloudRequest request;
     request.app_id = 440;
     request.access_token = "token";
+    request.session_type = std::string{cauth::steam::auth::kSteamSessionTypeSteamClient};
     request.local_root = "D:/saves";
     request.remote_root = "remote";
     request.dry_run = true;
@@ -109,6 +138,16 @@ int main() {
         return 1;
     }
 
+    cauth::steam::cloud::SteamCloudRequest token_preferred_request = cookie_request;
+    token_preferred_request.access_token = "store-web-token";
+    const auto token_preferred_url =
+        cauth::steam::cloud::build_enumerate_user_files_url(token_preferred_request, 10, 5, true);
+    if (token_preferred_url.find("https://api.steampowered.com/ICloudService/EnumerateUserFiles/v1/") != 0 ||
+        token_preferred_url.find("access_token=store-web-token") == std::string::npos) {
+        std::cerr << "steam cloud enumerate URL should prefer API token mode when both token and cookies exist\n";
+        return 1;
+    }
+
     const auto parsed = cauth::steam::cloud::parse_enumerate_user_files_response(
         440,
         R"({"response":{"total_files":2,"files":[{"appid":440,"ugcid":"123","filename":"save1.sav","timestamp":"111","file_size":64,"url":"https://cdn.example/save1","steamid_creator":"7656119","flags":0,"platforms_to_sync":"windows,android","file_sha":"abc"},{"appid":440,"ugcid":"456","filename":"save2.sav","timestamp":"222","file_size":128,"url":"https://cdn.example/save2","steamid_creator":"7656120","flags":4,"platforms_to_sync":"android","file_sha":"def"}]}})",
@@ -126,10 +165,26 @@ int main() {
     cauth::steam::cloud::SteamCloudRequest invalid_pull_request;
     invalid_pull_request.app_id = 440;
     invalid_pull_request.access_token = "token";
+    invalid_pull_request.session_type =
+        std::string{cauth::steam::auth::kSteamSessionTypeSteamClient};
     const auto invalid_pull = cauth::steam::cloud::pull_cloud_save(invalid_pull_request);
     if (invalid_pull.ok || invalid_pull.message.find("local_root is required") == std::string::npos) {
         std::cerr << "steam cloud pull should validate local_root before download\n";
         return 1;
+    }
+
+    {
+        cauth::steam::cloud::SteamCloudRequest diagnostic_request;
+        diagnostic_request.app_id = 440;
+        const auto diagnostic_result =
+            cauth::steam::cloud::fetch_remote_file_list_via_web_page_diagnostic(
+                diagnostic_request);
+        if (diagnostic_result.ok ||
+            diagnostic_result.message.find("web cookie auth materialization failed") ==
+                std::string::npos) {
+            std::cerr << "steam cloud web-page diagnostic list should fail cleanly without web auth material\n";
+            return 1;
+        }
     }
 
     const auto batch_form = cauth::steam::cloud::build_begin_app_upload_batch_form_body(
@@ -144,7 +199,7 @@ int main() {
     }
 
     const auto cookie_batch_form = cauth::steam::cloud::build_begin_app_upload_batch_form_body(
-        cauth::steam::cloud::SteamCloudWebAuthContext{{}, "steamLoginSecure=cookie"},
+        cauth::steam::cloud::SteamCloudWebAuthContext{{}, "steamLoginSecure=cookie", {}, {}},
         440,
         "CAuth",
         {"remote/save1.sav"},
@@ -263,6 +318,24 @@ int main() {
     }
 
     {
+        const auto temp_dir = make_temp_dir("cauth-cloud-pull-web-unsupported");
+        cauth::steam::cloud::SteamCloudRequest pull_request;
+        pull_request.app_id = 440;
+        pull_request.access_token = "token";
+        pull_request.session_type = std::string{cauth::steam::auth::kSteamSessionTypeWebBrowser};
+        pull_request.backend = cauth::steam::cloud::SteamCloudBackend::WebApi;
+        pull_request.local_root = temp_dir.string();
+        pull_request.conflict_policy = cauth::steam::cloud::SteamCloudConflictPolicy::NewerWins;
+        const auto result = cauth::steam::cloud::pull_cloud_save(pull_request);
+        if (result.ok ||
+            result.message.find("Steam Cloud web backend is currently unsupported") ==
+                std::string::npos) {
+            std::cerr << "web pull should fail fast with an unsupported-backend message\n";
+            return 1;
+        }
+    }
+
+    {
         ScopedCloudHooksReset hooks_reset;
         cauth::core::runtime::MemorySessionRepository store;
         cauth::core::session::AuthSession saved;
@@ -337,15 +410,19 @@ int main() {
             return 1;
         }
 
+        cauth::steam::cloud::testing::clear_cloud_test_hooks();
+        out.str({});
+        out.clear();
+        err.str({});
+        err.clear();
         list_request.backend = cauth::steam::cloud::SteamCloudBackend::WebApi;
-        if (cauth::steam::cloud::print_remote_files(store, list_request, 10, 0, true, out, err) != 0) {
-            std::cerr << "cloud web backend should succeed when client and web sessions coexist\n";
+        if (cauth::steam::cloud::print_remote_files(store, list_request, 10, 0, true, out, err) == 0) {
+            std::cerr << "cloud web backend should fail fast when client and web sessions coexist\n";
             return 1;
         }
-        if (g_last_list_request.refresh_token != "web-refresh" ||
-            !g_last_list_request.access_token.empty() ||
-            g_last_list_request.session_type != cauth::steam::auth::kSteamSessionTypeWebBrowser) {
-            std::cerr << "cloud web backend should prefer web session and avoid saved access token copy\n";
+        if (err.str().find("Steam Cloud web backend is currently unsupported") ==
+            std::string::npos) {
+            std::cerr << "cloud web backend should explain the unsupported state\n";
             return 1;
         }
     }
@@ -514,7 +591,7 @@ int main() {
             cauth::steam::cloud::SteamCloudFileEntry{
                 440, 2, "stale.sav", 1, 5, {}, 0, 0, "all", "stale-sha"},
         };
-        g_mock_upload_result = {true, "ok"};
+        g_mock_upload_result = {true, "ok", true, true, 64};
         g_captured_upload_files.clear();
         g_captured_delete_files.clear();
         cauth::steam::cloud::testing::set_list_remote_files_hook(&mock_list_remote_files);
@@ -531,6 +608,10 @@ int main() {
             result.conflict_count != 1 || g_captured_upload_files.size() != 1 ||
             g_captured_delete_files.size() != 1 || g_captured_delete_files[0] != "stale.sav") {
             std::cerr << "push should upload changed files and delete remote orphans\n";
+            return 1;
+        }
+        if (!result.resumable || !result.resumed || result.resume_from_bytes != 64) {
+            std::cerr << "push should preserve resumable upload metadata\n";
             return 1;
         }
     }

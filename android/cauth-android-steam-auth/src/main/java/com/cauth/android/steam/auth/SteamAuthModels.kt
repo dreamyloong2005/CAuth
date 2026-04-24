@@ -1,5 +1,8 @@
 package com.cauth.android.steam.auth
 
+import com.cauth.android.CAuthRouteProbeSnapshot
+import com.cauth.android.CAuthRouteSelection
+
 enum class LoginStatus {
     Succeeded,
     SteamGuardRequired,
@@ -29,6 +32,7 @@ data class LoginRequest(
     val deviceName: String? = "ComposeDemo",
     val rememberSession: Boolean = true,
     val platform: LoginPlatform = LoginPlatform.SteamClient,
+    val routeSelection: CAuthRouteSelection? = null,
 )
 
 data class LoginResultSnapshot(
@@ -84,3 +88,5 @@ data class AuthTaskSnapshot(
     val moduleStatus: String,
     val message: String,
 )
+
+typealias CmRouteProbeSnapshot = CAuthRouteProbeSnapshot

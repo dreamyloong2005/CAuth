@@ -74,7 +74,7 @@ path like:
 .\build\windows-msvc-debug\cauth.exe steam auth status
 ```
 
-`--version` should print the current native version, for example `CAuth 0.5.1`. If `doctor` and
+`--version` should print the current native version, for example `CAuth 0.6.0`. If `doctor` and
 `--version` work, the desktop toolchain is in decent shape.
 
 ## Steam auth quick test
@@ -120,6 +120,10 @@ adb logcat -s CAuthNative CAuthCompose
 ```
 
 The example app is a real diagnostic console for auth, depot, and cloud, not just a thin demo.
+
+The Cloud pane also exposes a diagnostic-only `Web Page List` action. It helps inspect what a
+web-authenticated store page can see, but it does not mean Steam Cloud web pull or push is
+supported.
 
 Its controller state now follows a clearer task lifecycle:
 

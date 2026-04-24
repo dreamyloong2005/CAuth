@@ -23,12 +23,33 @@ constexpr const char* kCmProbeSnapshotClassName =
     "com/cauth/android/steam/auth/CmProbeSnapshot";
 constexpr const char* kCmLogonSnapshotClassName =
     "com/cauth/android/steam/auth/CmLogonSnapshot";
+constexpr const char* kRouteProbeEntrySnapshotClassName =
+    "com/cauth/android/CAuthRouteProbeEntrySnapshot";
+constexpr const char* kRouteProbeSnapshotClassName =
+    "com/cauth/android/CAuthRouteProbeSnapshot";
 
 jclass g_login_result_snapshot_class = nullptr;
 jclass g_saved_session_snapshot_class = nullptr;
 jclass g_saved_account_snapshot_class = nullptr;
 jclass g_cm_probe_snapshot_class = nullptr;
 jclass g_cm_logon_snapshot_class = nullptr;
+jclass g_route_probe_entry_snapshot_class = nullptr;
+jclass g_route_probe_snapshot_class = nullptr;
+
+struct RouteSelectionStorage {
+    std::string endpoint;
+    std::string protocol;
+    std::string role;
+    cauth_route_selection_t selection{};
+
+    const cauth_route_selection_t* pointer_or_null() const {
+        return empty() ? nullptr : &selection;
+    }
+
+    bool empty() const {
+        return endpoint.empty() && protocol.empty() && role.empty();
+    }
+};
 
 cauth_client_t* client_from_handle(jlong handle) {
     return reinterpret_cast<cauth_client_t*>(static_cast<std::intptr_t>(handle));
@@ -43,6 +64,19 @@ void throw_result_exception(JNIEnv* env, const char* prefix, cauth_result_t resu
     }
     __android_log_print(ANDROID_LOG_ERROR, kLogTag, "%s", message.c_str());
     env->ThrowNew(env->FindClass(kIllegalStateException), message.c_str());
+}
+
+std::string copy_jstring(JNIEnv* env, jstring value) {
+    if (value == nullptr) {
+        return {};
+    }
+    const char* chars = env->GetStringUTFChars(value, nullptr);
+    if (chars == nullptr) {
+        return {};
+    }
+    std::string result{chars};
+    env->ReleaseStringUTFChars(value, chars);
+    return result;
 }
 
 jclass require_global_class(JNIEnv* env, jclass& slot, const char* name) {
@@ -76,6 +110,15 @@ jclass ensure_cm_probe_snapshot_class(JNIEnv* env) {
 
 jclass ensure_cm_logon_snapshot_class(JNIEnv* env) {
     return require_global_class(env, g_cm_logon_snapshot_class, kCmLogonSnapshotClassName);
+}
+
+jclass ensure_route_probe_entry_snapshot_class(JNIEnv* env) {
+    return require_global_class(
+        env, g_route_probe_entry_snapshot_class, kRouteProbeEntrySnapshotClassName);
+}
+
+jclass ensure_route_probe_snapshot_class(JNIEnv* env) {
+    return require_global_class(env, g_route_probe_snapshot_class, kRouteProbeSnapshotClassName);
 }
 
 jobject make_login_result(JNIEnv* env, const cauth_login_result_t& result) {
@@ -226,6 +269,101 @@ jobject make_cm_logon(JNIEnv* env, const cauth_cm_logon_result_t& result) {
     return instance;
 }
 
+RouteSelectionStorage make_route_selection(JNIEnv* env,
+                                           jstring route_endpoint,
+                                           jstring route_protocol,
+                                           jstring route_role) {
+    RouteSelectionStorage storage;
+    storage.endpoint = copy_jstring(env, route_endpoint);
+    storage.protocol = copy_jstring(env, route_protocol);
+    storage.role = copy_jstring(env, route_role);
+    storage.selection.endpoint = storage.endpoint.empty() ? nullptr : storage.endpoint.c_str();
+    storage.selection.protocol = storage.protocol.empty() ? nullptr : storage.protocol.c_str();
+    storage.selection.role = storage.role.empty() ? nullptr : storage.role.c_str();
+    return storage;
+}
+
+jobject make_route_probe_entry(JNIEnv* env, const cauth_route_probe_entry_t& entry) {
+    jclass cls = ensure_route_probe_entry_snapshot_class(env);
+    if (cls == nullptr) {
+        return nullptr;
+    }
+    jmethodID ctor = env->GetMethodID(
+        cls,
+        "<init>",
+        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JZZII)V");
+    if (ctor == nullptr) {
+        return nullptr;
+    }
+    jstring endpoint = env->NewStringUTF(entry.endpoint == nullptr ? "" : entry.endpoint);
+    jstring protocol = env->NewStringUTF(entry.protocol == nullptr ? "" : entry.protocol);
+    jstring role = env->NewStringUTF(entry.role == nullptr ? "" : entry.role);
+    jstring note = env->NewStringUTF(entry.note == nullptr ? "" : entry.note);
+    jobject instance = env->NewObject(
+        cls,
+        ctor,
+        endpoint,
+        protocol,
+        role,
+        note,
+        static_cast<jlong>(entry.latency_ms),
+        static_cast<jboolean>(entry.latency_known != 0),
+        static_cast<jboolean>(entry.recent_success != 0),
+        static_cast<jboolean>(entry.recent_failure != 0),
+        static_cast<jint>(entry.success_count),
+        static_cast<jint>(entry.failure_count));
+    env->DeleteLocalRef(endpoint);
+    env->DeleteLocalRef(protocol);
+    env->DeleteLocalRef(role);
+    env->DeleteLocalRef(note);
+    return instance;
+}
+
+jobject make_route_probe_snapshot(JNIEnv* env, const cauth_route_probe_result_t& result) {
+    jclass entry_cls = ensure_route_probe_entry_snapshot_class(env);
+    jclass cls = ensure_route_probe_snapshot_class(env);
+    if (entry_cls == nullptr || cls == nullptr) {
+        return nullptr;
+    }
+    jmethodID ctor = env->GetMethodID(
+        cls,
+        "<init>",
+        "(ZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;[Lcom/cauth/android/CAuthRouteProbeEntrySnapshot;)V");
+    if (ctor == nullptr) {
+        return nullptr;
+    }
+    jobjectArray entries =
+        env->NewObjectArray(static_cast<jsize>(result.route_count), entry_cls, nullptr);
+    if (entries == nullptr) {
+        return nullptr;
+    }
+    for (jsize index = 0; index < static_cast<jsize>(result.route_count); ++index) {
+        jobject item = make_route_probe_entry(env, result.routes[index]);
+        if (item == nullptr) {
+            return nullptr;
+        }
+        env->SetObjectArrayElement(entries, index, item);
+        env->DeleteLocalRef(item);
+    }
+    jstring module_status =
+        env->NewStringUTF(result.module_status == nullptr ? "idle" : result.module_status);
+    jstring backend = env->NewStringUTF(result.backend == nullptr ? "" : result.backend);
+    jstring message = env->NewStringUTF(result.message == nullptr ? "" : result.message);
+    jobject instance = env->NewObject(
+        cls,
+        ctor,
+        static_cast<jboolean>(result.ok != 0),
+        module_status,
+        backend,
+        message,
+        entries);
+    env->DeleteLocalRef(module_status);
+    env->DeleteLocalRef(backend);
+    env->DeleteLocalRef(message);
+    env->DeleteLocalRef(entries);
+    return instance;
+}
+
 } // namespace
 
 extern "C" JNIEXPORT jobject JNICALL
@@ -238,7 +376,10 @@ Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeLoginPassword(
     jstring steam_guard_code,
     jstring device_name,
     jboolean remember_session,
-    jint platform_type) {
+    jint platform_type,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role) {
     const char* account_name_chars =
         account_name == nullptr ? nullptr : env->GetStringUTFChars(account_name, nullptr);
     const char* password_chars =
@@ -256,6 +397,8 @@ Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeLoginPassword(
     request.device_name = device_name_chars;
     request.remember_session = remember_session ? 1 : 0;
     request.platform_type = static_cast<int>(platform_type);
+    const auto route_selection = make_route_selection(env, route_endpoint, route_protocol, route_role);
+    request.route_selection = route_selection.selection;
 
     cauth_login_result_t result{};
     const cauth_result_t native_result =
@@ -399,9 +542,17 @@ Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeClearAllSavedAccoun
 }
 
 extern "C" JNIEXPORT jobject JNICALL
-Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeCmProbe(JNIEnv* env, jclass) {
+Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeCmProbe(
+    JNIEnv* env,
+    jclass,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role) {
+    const auto route_selection = make_route_selection(env, route_endpoint, route_protocol, route_role);
     cauth_cm_probe_result_t result{};
-    const cauth_result_t native_result = cauth_cm_probe(&result);
+    const cauth_result_t native_result = route_selection.empty()
+                                             ? cauth_cm_probe(&result)
+                                             : cauth_cm_probe_on_route(route_selection.pointer_or_null(), &result);
     if (native_result != CAUTH_OK) {
         throw_result_exception(env, "CM probe failed", native_result);
         return nullptr;
@@ -414,15 +565,41 @@ Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeCmLogon(
     JNIEnv* env,
     jclass,
     jlong handle,
-    jlong steam_id) {
+    jlong steam_id,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role) {
+    const auto route_selection = make_route_selection(env, route_endpoint, route_protocol, route_role);
     cauth_cm_logon_result_t result{};
-    const cauth_result_t native_result = cauth_cm_logon(
-        client_from_handle(handle),
-        static_cast<unsigned long long>(steam_id),
-        &result);
+    const cauth_result_t native_result =
+        route_selection.empty()
+            ? cauth_cm_logon(
+                  client_from_handle(handle),
+                  static_cast<unsigned long long>(steam_id),
+                  &result)
+            : cauth_cm_logon_on_route(
+                  client_from_handle(handle),
+                  static_cast<unsigned long long>(steam_id),
+                  route_selection.pointer_or_null(),
+                  &result);
     if (native_result != CAUTH_OK) {
         throw_result_exception(env, "CM logon failed", native_result);
         return nullptr;
     }
     return make_cm_logon(env, result);
+}
+
+extern "C" JNIEXPORT jobject JNICALL
+Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeProbeCmRoutes(
+    JNIEnv* env,
+    jclass,
+    jint max_count) {
+    cauth_route_probe_result_t result{};
+    const cauth_result_t native_result =
+        cauth_auth_probe_cm_routes(static_cast<unsigned int>(max_count), &result);
+    if (native_result != CAUTH_OK) {
+        throw_result_exception(env, "CM routes failed", native_result);
+        return nullptr;
+    }
+    return make_route_probe_snapshot(env, result);
 }

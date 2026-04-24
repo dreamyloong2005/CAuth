@@ -92,6 +92,8 @@ downloaded_file.bin
 chunk.bin
 files.bin
 *.cauthdownload
+*.cauthdownload*
+*.cauthupload.resume
 depot-out/
 cloud-test/
 tmp-cloud-upload-web/

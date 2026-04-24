@@ -2,6 +2,7 @@
 #define CAUTH_STEAM_DEPOT_DEPOT_CM_CLIENT_HPP
 
 #include "steam/auth/steam_auth_provider.hpp"
+#include "core/platform/route_selection.hpp"
 #include "steam/depot/app_info.hpp"
 #include "steam/depot/depot_key.hpp"
 #include "steam/depot/manifest_request_code.hpp"
@@ -18,6 +19,7 @@ class DepotCmClient {
   public:
     DepotCmClient(cauth::steam::auth::SteamAuthProvider& auth_provider,
                   std::string_view subject_id,
+                  const cauth::core::platform::RouteSelection* route_selection = nullptr,
                   std::ostream* out = nullptr,
                   std::ostream* err = nullptr);
 
@@ -32,6 +34,7 @@ class DepotCmClient {
   private:
     cauth::steam::auth::SteamAuthProvider* auth_provider_;
     std::string subject_id_;
+    cauth::core::platform::RouteSelection route_selection_;
     std::ostream* out_;
     std::ostream* err_;
 };

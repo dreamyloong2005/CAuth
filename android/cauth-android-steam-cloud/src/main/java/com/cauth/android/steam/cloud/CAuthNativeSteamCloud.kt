@@ -1,5 +1,7 @@
 package com.cauth.android.steam.cloud
 
+import com.cauth.android.CAuthRouteProbeSnapshot
+
 internal object CAuthNativeSteamCloud {
     init {
         System.loadLibrary("cauth_steam_cloud_ffi")
@@ -17,12 +19,58 @@ internal object CAuthNativeSteamCloud {
         dryRun: Boolean,
         deleteRemoteOrphans: Boolean,
         conflictPolicy: Int,
+        backend: Int,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
         localWriteMode: Int,
         atomicWrite: Boolean,
         count: Int,
         startIndex: Int,
         extendedDetails: Boolean,
     ): SteamCloudFileListSnapshot
+
+    @JvmStatic
+    external fun nativeListRemoteFilesViaWebPage(
+        handle: Long,
+        appId: Int,
+        steamId: Long,
+        accessToken: String?,
+        localRoot: String?,
+        remoteRoot: String?,
+        dryRun: Boolean,
+        deleteRemoteOrphans: Boolean,
+        conflictPolicy: Int,
+        backend: Int,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
+        localWriteMode: Int,
+        atomicWrite: Boolean,
+        count: Int,
+        startIndex: Int,
+    ): SteamCloudFileListSnapshot
+
+    @JvmStatic
+    external fun nativeProbeRoutes(
+        handle: Long,
+        appId: Int,
+        steamId: Long,
+        accessToken: String?,
+        localRoot: String?,
+        remoteRoot: String?,
+        dryRun: Boolean,
+        deleteRemoteOrphans: Boolean,
+        conflictPolicy: Int,
+        backend: Int,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
+        localWriteMode: Int,
+        atomicWrite: Boolean,
+        task: Int,
+        maxCount: Int,
+    ): CAuthRouteProbeSnapshot
 
     @JvmStatic
     external fun nativePull(
@@ -35,6 +83,10 @@ internal object CAuthNativeSteamCloud {
         dryRun: Boolean,
         deleteRemoteOrphans: Boolean,
         conflictPolicy: Int,
+        backend: Int,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
         localWriteMode: Int,
         atomicWrite: Boolean,
     ): SteamCloudResultSnapshot
@@ -50,6 +102,10 @@ internal object CAuthNativeSteamCloud {
         dryRun: Boolean,
         deleteRemoteOrphans: Boolean,
         conflictPolicy: Int,
+        backend: Int,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
         localWriteMode: Int,
         atomicWrite: Boolean,
     ): SteamCloudResultSnapshot
@@ -65,6 +121,10 @@ internal object CAuthNativeSteamCloud {
         dryRun: Boolean,
         deleteRemoteOrphans: Boolean,
         conflictPolicy: Int,
+        backend: Int,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
         localWriteMode: Int,
         atomicWrite: Boolean,
         includeExtraLocal: Boolean,
@@ -81,6 +141,10 @@ internal object CAuthNativeSteamCloud {
         dryRun: Boolean,
         deleteRemoteOrphans: Boolean,
         conflictPolicy: Int,
+        backend: Int,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
         localWriteMode: Int,
         atomicWrite: Boolean,
     ): Long
@@ -96,6 +160,10 @@ internal object CAuthNativeSteamCloud {
         dryRun: Boolean,
         deleteRemoteOrphans: Boolean,
         conflictPolicy: Int,
+        backend: Int,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
         localWriteMode: Int,
         atomicWrite: Boolean,
     ): Long
@@ -111,6 +179,10 @@ internal object CAuthNativeSteamCloud {
         dryRun: Boolean,
         deleteRemoteOrphans: Boolean,
         conflictPolicy: Int,
+        backend: Int,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
         localWriteMode: Int,
         atomicWrite: Boolean,
         includeExtraLocal: Boolean,
@@ -118,6 +190,9 @@ internal object CAuthNativeSteamCloud {
 
     @JvmStatic
     external fun nativePollTransferTask(taskHandle: Long): SteamCloudTransferTaskSnapshot
+
+    @JvmStatic
+    external fun nativePauseTransferTask(taskHandle: Long)
 
     @JvmStatic
     external fun nativeCancelTransferTask(taskHandle: Long)

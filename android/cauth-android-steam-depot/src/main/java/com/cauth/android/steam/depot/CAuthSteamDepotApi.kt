@@ -2,6 +2,8 @@ package com.cauth.android.steam.depot
 
 import com.cauth.android.CAuthFileWriteOptions
 import com.cauth.android.CAuthClient
+import com.cauth.android.CAuthRouteProbeSnapshot
+import com.cauth.android.CAuthRouteSelection
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -12,12 +14,16 @@ class CAuthSteamDepotApi(
         steamId: Long,
         appId: Int,
         maxCount: Int = 20,
+        routeSelection: CAuthRouteSelection? = null,
     ): AppBranchListSnapshot = withContext(Dispatchers.IO) {
         CAuthNativeSteamDepot.nativeFetchDepotBranches(
             handle = client.requireNativeHandle(),
             steamId = steamId,
             appId = appId,
             maxCount = maxCount,
+            routeEndpoint = routeSelection?.endpoint,
+            routeProtocol = routeSelection?.protocol,
+            routeRole = routeSelection?.role,
         )
     }
 
@@ -26,6 +32,7 @@ class CAuthSteamDepotApi(
         appId: Int,
         branch: String = "public",
         maxCount: Int = 20,
+        routeSelection: CAuthRouteSelection? = null,
     ): DepotManifestListSnapshot = withContext(Dispatchers.IO) {
         CAuthNativeSteamDepot.nativeFetchDepotManifests(
             handle = client.requireNativeHandle(),
@@ -33,6 +40,9 @@ class CAuthSteamDepotApi(
             appId = appId,
             branch = branch,
             maxCount = maxCount,
+            routeEndpoint = routeSelection?.endpoint,
+            routeProtocol = routeSelection?.protocol,
+            routeRole = routeSelection?.role,
         )
     }
 
@@ -41,6 +51,7 @@ class CAuthSteamDepotApi(
         appId: Int,
         branch: String = "public",
         maxCount: Int = 20,
+        routeSelection: CAuthRouteSelection? = null,
     ): DepotPreflightSnapshot = withContext(Dispatchers.IO) {
         CAuthNativeSteamDepot.nativeFetchDepotPreflight(
             handle = client.requireNativeHandle(),
@@ -48,6 +59,9 @@ class CAuthSteamDepotApi(
             appId = appId,
             branch = branch,
             maxCount = maxCount,
+            routeEndpoint = routeSelection?.endpoint,
+            routeProtocol = routeSelection?.protocol,
+            routeRole = routeSelection?.role,
         )
     }
 
@@ -56,6 +70,7 @@ class CAuthSteamDepotApi(
         appId: Int,
         depotId: Int,
         maxCount: Int = 20,
+        routeSelection: CAuthRouteSelection? = null,
     ): DepotKeySnapshot = withContext(Dispatchers.IO) {
         CAuthNativeSteamDepot.nativeFetchDepotKey(
             handle = client.requireNativeHandle(),
@@ -63,6 +78,9 @@ class CAuthSteamDepotApi(
             appId = appId,
             depotId = depotId,
             maxCount = maxCount,
+            routeEndpoint = routeSelection?.endpoint,
+            routeProtocol = routeSelection?.protocol,
+            routeRole = routeSelection?.role,
         )
     }
 
@@ -74,6 +92,7 @@ class CAuthSteamDepotApi(
         branch: String = "public",
         branchPasswordHash: String? = null,
         maxCount: Int = 20,
+        routeSelection: CAuthRouteSelection? = null,
     ): ManifestRequestCodeSnapshot = withContext(Dispatchers.IO) {
         CAuthNativeSteamDepot.nativeFetchManifestRequestCode(
             handle = client.requireNativeHandle(),
@@ -84,7 +103,14 @@ class CAuthSteamDepotApi(
             branch = branch,
             branchPasswordHash = branchPasswordHash,
             maxCount = maxCount,
+            routeEndpoint = routeSelection?.endpoint,
+            routeProtocol = routeSelection?.protocol,
+            routeRole = routeSelection?.role,
         )
+    }
+
+    suspend fun probeDownloadRoutes(maxCount: Int = 20): CAuthRouteProbeSnapshot = withContext(Dispatchers.IO) {
+        CAuthNativeSteamDepot.nativeProbeDepotDownloadRoutes(maxCount = maxCount)
     }
 
     suspend fun downloadManifest(
@@ -94,6 +120,7 @@ class CAuthSteamDepotApi(
         outputPath: String,
         maxCount: Int = 20,
         writeOptions: CAuthFileWriteOptions = CAuthFileWriteOptions(),
+        routeSelection: CAuthRouteSelection? = null,
     ) = withContext(Dispatchers.IO) {
         CAuthNativeSteamDepot.nativeDownloadDepotManifest(
             depotId = depotId,
@@ -101,6 +128,9 @@ class CAuthSteamDepotApi(
             requestCode = requestCode,
             maxCount = maxCount,
             outputPath = outputPath,
+            routeEndpoint = routeSelection?.endpoint,
+            routeProtocol = routeSelection?.protocol,
+            routeRole = routeSelection?.role,
             writeMode = writeOptions.mode.nativeValue,
             atomicWrite = writeOptions.atomicWrite,
         )
@@ -168,6 +198,7 @@ class CAuthSteamDepotApi(
         processChunk: Boolean = true,
         maxCount: Int = 20,
         writeOptions: CAuthFileWriteOptions = CAuthFileWriteOptions(),
+        routeSelection: CAuthRouteSelection? = null,
     ) = withContext(Dispatchers.IO) {
         CAuthNativeSteamDepot.nativeDownloadDepotChunk(
             inputPath = inputPath,
@@ -179,6 +210,9 @@ class CAuthSteamDepotApi(
             processChunk = processChunk,
             maxCount = maxCount,
             outputPath = outputPath,
+            routeEndpoint = routeSelection?.endpoint,
+            routeProtocol = routeSelection?.protocol,
+            routeRole = routeSelection?.role,
             writeMode = writeOptions.mode.nativeValue,
             atomicWrite = writeOptions.atomicWrite,
         )
@@ -192,6 +226,7 @@ class CAuthSteamDepotApi(
         fileIndex: Long? = null,
         maxCount: Int = 20,
         writeOptions: CAuthFileWriteOptions = CAuthFileWriteOptions(),
+        routeSelection: CAuthRouteSelection? = null,
     ) = withContext(Dispatchers.IO) {
         CAuthNativeSteamDepot.nativeDownloadDepotFile(
             inputPath = inputPath,
@@ -201,6 +236,9 @@ class CAuthSteamDepotApi(
             hasFileIndex = fileIndex != null,
             maxCount = maxCount,
             outputPath = outputPath,
+            routeEndpoint = routeSelection?.endpoint,
+            routeProtocol = routeSelection?.protocol,
+            routeRole = routeSelection?.role,
             writeMode = writeOptions.mode.nativeValue,
             atomicWrite = writeOptions.atomicWrite,
         )
@@ -213,6 +251,7 @@ class CAuthSteamDepotApi(
         outputPath: String,
         maxCount: Int = 20,
         writeOptions: CAuthFileWriteOptions = CAuthFileWriteOptions(),
+        routeSelection: CAuthRouteSelection? = null,
     ): Long = withContext(Dispatchers.IO) {
         CAuthNativeSteamDepot.nativeStartDepotManifestDownload(
             depotId = depotId,
@@ -220,6 +259,9 @@ class CAuthSteamDepotApi(
             requestCode = requestCode,
             maxCount = maxCount,
             outputPath = outputPath,
+            routeEndpoint = routeSelection?.endpoint,
+            routeProtocol = routeSelection?.protocol,
+            routeRole = routeSelection?.role,
             writeMode = writeOptions.mode.nativeValue,
             atomicWrite = writeOptions.atomicWrite,
         )
@@ -235,6 +277,7 @@ class CAuthSteamDepotApi(
         processChunk: Boolean = true,
         maxCount: Int = 20,
         writeOptions: CAuthFileWriteOptions = CAuthFileWriteOptions(),
+        routeSelection: CAuthRouteSelection? = null,
     ): Long = withContext(Dispatchers.IO) {
         CAuthNativeSteamDepot.nativeStartDepotChunkDownload(
             inputPath = inputPath,
@@ -246,6 +289,9 @@ class CAuthSteamDepotApi(
             processChunk = processChunk,
             maxCount = maxCount,
             outputPath = outputPath,
+            routeEndpoint = routeSelection?.endpoint,
+            routeProtocol = routeSelection?.protocol,
+            routeRole = routeSelection?.role,
             writeMode = writeOptions.mode.nativeValue,
             atomicWrite = writeOptions.atomicWrite,
         )
@@ -259,6 +305,7 @@ class CAuthSteamDepotApi(
         fileIndex: Long? = null,
         maxCount: Int = 20,
         writeOptions: CAuthFileWriteOptions = CAuthFileWriteOptions(),
+        routeSelection: CAuthRouteSelection? = null,
     ): Long = withContext(Dispatchers.IO) {
         CAuthNativeSteamDepot.nativeStartDepotFileDownload(
             inputPath = inputPath,
@@ -268,6 +315,9 @@ class CAuthSteamDepotApi(
             hasFileIndex = fileIndex != null,
             maxCount = maxCount,
             outputPath = outputPath,
+            routeEndpoint = routeSelection?.endpoint,
+            routeProtocol = routeSelection?.protocol,
+            routeRole = routeSelection?.role,
             writeMode = writeOptions.mode.nativeValue,
             atomicWrite = writeOptions.atomicWrite,
         )
@@ -279,12 +329,16 @@ class CAuthSteamDepotApi(
         depotKeyHex: String,
         maxCount: Int = 20,
         writeOptions: CAuthFileWriteOptions = CAuthFileWriteOptions(),
+        routeSelection: CAuthRouteSelection? = null,
     ) = withContext(Dispatchers.IO) {
         CAuthNativeSteamDepot.nativeDownloadDepotAllFiles(
             inputPath = inputPath,
             depotKeyHex = depotKeyHex,
             maxCount = maxCount,
             outputRoot = outputRoot,
+            routeEndpoint = routeSelection?.endpoint,
+            routeProtocol = routeSelection?.protocol,
+            routeRole = routeSelection?.role,
             writeMode = writeOptions.mode.nativeValue,
             atomicWrite = writeOptions.atomicWrite,
         )
@@ -296,12 +350,16 @@ class CAuthSteamDepotApi(
         depotKeyHex: String,
         maxCount: Int = 20,
         writeOptions: CAuthFileWriteOptions = CAuthFileWriteOptions(),
+        routeSelection: CAuthRouteSelection? = null,
     ): Long = withContext(Dispatchers.IO) {
         CAuthNativeSteamDepot.nativeStartDepotAllFilesDownload(
             inputPath = inputPath,
             depotKeyHex = depotKeyHex,
             maxCount = maxCount,
             outputRoot = outputRoot,
+            routeEndpoint = routeSelection?.endpoint,
+            routeProtocol = routeSelection?.protocol,
+            routeRole = routeSelection?.role,
             writeMode = writeOptions.mode.nativeValue,
             atomicWrite = writeOptions.atomicWrite,
         )
@@ -309,6 +367,10 @@ class CAuthSteamDepotApi(
 
     suspend fun pollDownloadTask(handle: Long): DepotDownloadTaskSnapshot = withContext(Dispatchers.IO) {
         CAuthNativeSteamDepot.nativePollDepotDownloadTask(handle)
+    }
+
+    suspend fun pauseDownloadTask(handle: Long) = withContext(Dispatchers.IO) {
+        CAuthNativeSteamDepot.nativePauseDepotDownloadTask(handle)
     }
 
     suspend fun cancelDownloadTask(handle: Long) = withContext(Dispatchers.IO) {

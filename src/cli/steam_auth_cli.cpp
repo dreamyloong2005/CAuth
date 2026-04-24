@@ -2,6 +2,7 @@
 #include "cli/cli_support.hpp"
 
 #include "core/platform/session_repository_factory.hpp"
+#include "core/platform/route_selection.hpp"
 #include "steam/auth/steam_auth_application.hpp"
 #include "steam/auth/steam_auth_cm_application.hpp"
 #include "steam/auth/steam_login_service.hpp"
@@ -33,6 +34,7 @@ enum class AuthCommandKind {
 enum class AuthCmCommandKind {
     FrameTest,
     Servers,
+    Routes,
     Probe,
     Logon,
     AppInfo,
@@ -46,6 +48,7 @@ struct ParsedAuthLoginCommand {
 struct ParsedAuthCmCommand {
     AuthCmCommandKind kind = AuthCmCommandKind::Servers;
     cauth::core::cm::CmServerQuery query;
+    cauth::core::platform::RouteSelection route_selection;
     std::uint32_t app_id = 0;
     std::string steam_id;
     bool debug_app_info = false;
@@ -114,6 +117,8 @@ ParsedAuthResult parse_auth_cm_command(int argc, char** argv) {
         request.kind = AuthCmCommandKind::FrameTest;
     } else if (subcommand == "servers") {
         request.kind = AuthCmCommandKind::Servers;
+    } else if (subcommand == "routes") {
+        request.kind = AuthCmCommandKind::Routes;
     } else if (subcommand == "probe") {
         request.kind = AuthCmCommandKind::Probe;
     } else if (subcommand == "logon") {
@@ -157,6 +162,14 @@ ParsedAuthResult parse_auth_cm_command(int argc, char** argv) {
         }
         if (arg == "--max-count" && index + 1 < argc) {
             request.query.max_count = static_cast<std::uint32_t>(std::max(1, std::atoi(argv[++index])));
+            continue;
+        }
+        if (arg == "--route-endpoint" && index + 1 < argc) {
+            request.route_selection.endpoint = argv[++index];
+            continue;
+        }
+        if (arg == "--route-protocol" && index + 1 < argc) {
+            request.route_selection.protocol = argv[++index];
             continue;
         }
         if ((request.kind == AuthCmCommandKind::Logon ||
@@ -321,6 +334,22 @@ ParsedAuthResult parse_auth_command(int argc, char** argv) {
             request.options.cm_max_count = static_cast<std::uint32_t>(std::max(1, std::atoi(argv[++index])));
             continue;
         }
+        if (arg == "--route-endpoint" && index + 1 < argc) {
+            if (use_web_auth || use_mobile_auth) {
+                std::cerr << "--route-endpoint is only valid for CM auth login\n";
+                return result;
+            }
+            request.request.route_selection.endpoint = argv[++index];
+            continue;
+        }
+        if (arg == "--route-protocol" && index + 1 < argc) {
+            if (use_web_auth || use_mobile_auth) {
+                std::cerr << "--route-protocol is only valid for CM auth login\n";
+                return result;
+            }
+            request.request.route_selection.protocol = argv[++index];
+            continue;
+        }
         if (arg == "--password-stdin") {
             std::getline(std::cin, request.request.password);
             continue;
@@ -353,12 +382,23 @@ int run_auth_cm_command(const ParsedAuthCmCommand& request) {
         return cauth::steam::auth::run_cm_frame_test(std::cout, std::cerr);
     case AuthCmCommandKind::Servers:
         return cauth::steam::auth::run_cm_servers(request.query, std::cout, std::cerr);
+    case AuthCmCommandKind::Routes:
+        return cauth::steam::auth::run_cm_routes(
+            request.query,
+            request.route_selection.empty() ? nullptr : &request.route_selection,
+            std::cout,
+            std::cerr);
     case AuthCmCommandKind::Probe:
-        return cauth::steam::auth::run_cm_probe(request.query, std::cout, std::cerr);
+        return cauth::steam::auth::run_cm_probe(
+            request.query,
+            request.route_selection.empty() ? nullptr : &request.route_selection,
+            std::cout,
+            std::cerr);
     case AuthCmCommandKind::Logon:
         return cauth::steam::auth::run_cm_logon(
             request.query,
             parse_steam_id_value(request.steam_id),
+            request.route_selection.empty() ? nullptr : &request.route_selection,
             std::cout,
             std::cerr);
     case AuthCmCommandKind::AppInfo:
@@ -367,6 +407,7 @@ int run_auth_cm_command(const ParsedAuthCmCommand& request) {
             parse_steam_id_value(request.steam_id),
             request.app_id,
             request.debug_app_info,
+            request.route_selection.empty() ? nullptr : &request.route_selection,
             std::cout,
             std::cerr);
     }

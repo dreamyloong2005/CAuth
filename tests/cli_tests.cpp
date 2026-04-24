@@ -49,7 +49,7 @@ int main() {
         auto argv = make_argv(args);
         const auto exit_code = cauth::cli::run_cli(static_cast<int>(argv.size()), argv.data(), out, err);
         if (expect_true(exit_code == 0, "version command should succeed") != 0) return 1;
-        if (expect_true(contains(out.str(), "CAuth 0.5.1"), "version output should include semantic version") != 0) return 1;
+        if (expect_true(contains(out.str(), "CAuth 0.6.0"), "version output should include semantic version") != 0) return 1;
         if (expect_true(err.str().empty(), "version command should not write stderr") != 0) return 1;
     }
 
@@ -60,7 +60,7 @@ int main() {
         auto argv = make_argv(args);
         const auto exit_code = cauth::cli::run_cli(static_cast<int>(argv.size()), argv.data(), out, err);
         if (expect_true(exit_code == 0, "version command with memory session store should succeed") != 0) return 1;
-        if (expect_true(contains(out.str(), "CAuth 0.5.1"), "memory session store should still dispatch version") != 0) return 1;
+        if (expect_true(contains(out.str(), "CAuth 0.6.0"), "memory session store should still dispatch version") != 0) return 1;
     }
 
     {
@@ -125,11 +125,43 @@ int main() {
         std::ostringstream captured_err;
         ScopedStreamRedirect redirect_out(std::cout, captured_out.rdbuf());
         ScopedStreamRedirect redirect_err(std::cerr, captured_err.rdbuf());
+        std::vector<std::string> args = {
+            "cauth", "steam", "auth", "login-web", "--route-endpoint", "cmp1-hkg1.steamserver.net:27022"};
+        auto argv = make_argv(args);
+        const auto exit_code = cauth::cli::run_steam_auth(static_cast<int>(argv.size()) - 1, argv.data() + 1);
+        if (expect_true(exit_code == 2, "login-web with route-endpoint should be rejected") != 0) return 1;
+        if (expect_true(contains(captured_err.str(), "--route-endpoint is only valid for CM auth login"),
+                        "login-web should reject route-endpoint") != 0) return 1;
+    }
+
+    {
+        std::ostringstream captured_out;
+        std::ostringstream captured_err;
+        ScopedStreamRedirect redirect_out(std::cout, captured_out.rdbuf());
+        ScopedStreamRedirect redirect_err(std::cerr, captured_err.rdbuf());
         std::vector<std::string> args = {"cauth", "steam", "auth", "cm", "app-info"};
         auto argv = make_argv(args);
         const auto exit_code = cauth::cli::run_steam_auth(static_cast<int>(argv.size()) - 1, argv.data() + 1);
         if (expect_true(exit_code == 2, "cm app-info without app-id should be rejected") != 0) return 1;
         if (expect_true(contains(captured_err.str(), "steam auth cm app-info requires --app-id <id>"), "cm app-info should require app-id") != 0) return 1;
+    }
+
+    {
+        std::ostringstream captured_out;
+        std::ostringstream captured_err;
+        ScopedStreamRedirect redirect_out(std::cout, captured_out.rdbuf());
+        ScopedStreamRedirect redirect_err(std::cerr, captured_err.rdbuf());
+        std::vector<std::string> args = {
+            "cauth", "steam", "auth", "cm", "routes", "--protocol", "tcp"};
+        auto argv = make_argv(args);
+        const auto exit_code =
+            cauth::cli::run_steam_auth(static_cast<int>(argv.size()) - 1, argv.data() + 1);
+        if (expect_true(exit_code == 2, "cm routes should reject tcp protocol") != 0) return 1;
+        if (expect_true(
+                contains(captured_err.str(), "steam auth cm routes only supports websocket endpoints right now"),
+                "cm routes should explain websocket-only support") != 0) {
+            return 1;
+        }
     }
 
     {
@@ -267,6 +299,116 @@ int main() {
         const auto exit_code = cauth::cli::run_steam_cloud(static_cast<int>(argv.size()) - 1, argv.data() + 1);
         if (expect_true(exit_code == 2, "steam cloud push with invalid conflict policy should be rejected") != 0) return 1;
         if (expect_true(contains(captured_err.str(), "unknown steam cloud conflict policy"), "steam cloud should validate conflict policy") != 0) return 1;
+    }
+
+    {
+        std::ostringstream captured_out;
+        std::ostringstream captured_err;
+        ScopedStreamRedirect redirect_out(std::cout, captured_out.rdbuf());
+        ScopedStreamRedirect redirect_err(std::cerr, captured_err.rdbuf());
+        std::vector<std::string> args = {
+            "cauth", "steam", "cloud", "pull",
+            "--steam-id", "76561198000000000",
+            "--app-id", "440",
+            "--local-root", "D:/saves",
+            "--backend", "bogus"};
+        auto argv = make_argv(args);
+        const auto exit_code = cauth::cli::run_steam_cloud(static_cast<int>(argv.size()) - 1, argv.data() + 1);
+        if (expect_true(exit_code == 2, "steam cloud should reject invalid backend values") != 0) return 1;
+        if (expect_true(contains(captured_err.str(), "unknown steam cloud backend"),
+                        "steam cloud should validate backend values") != 0) return 1;
+    }
+
+    {
+        std::ostringstream captured_out;
+        std::ostringstream captured_err;
+        ScopedStreamRedirect redirect_out(std::cout, captured_out.rdbuf());
+        ScopedStreamRedirect redirect_err(std::cerr, captured_err.rdbuf());
+        std::vector<std::string> args = {
+            "cauth", "steam", "cloud", "list",
+            "--steam-id", "76561198000000000",
+            "--app-id", "440",
+            "--backend", "web",
+            "--access-token", "token"};
+        auto argv = make_argv(args);
+        const auto exit_code =
+            cauth::cli::run_steam_cloud(static_cast<int>(argv.size()) - 1, argv.data() + 1);
+        if (expect_true(exit_code == 1, "steam cloud web backend should fail fast") != 0) {
+            return 1;
+        }
+        if (expect_true(
+                contains(captured_err.str(), "Steam Cloud web backend is currently unsupported"),
+                "steam cloud web backend should explain the unsupported state") != 0) {
+            return 1;
+        }
+    }
+
+    {
+        std::ostringstream captured_out;
+        std::ostringstream captured_err;
+        ScopedStreamRedirect redirect_out(std::cout, captured_out.rdbuf());
+        ScopedStreamRedirect redirect_err(std::cerr, captured_err.rdbuf());
+        std::vector<std::string> args = {
+            "cauth", "steam", "cloud", "routes",
+            "--steam-id", "76561198000000000",
+            "--app-id", "440",
+            "--backend", "web"};
+        auto argv = make_argv(args);
+        const auto exit_code =
+            cauth::cli::run_steam_cloud(static_cast<int>(argv.size()) - 1, argv.data() + 1);
+        if (expect_true(exit_code == 1, "steam cloud web routes should fail fast") != 0) {
+            return 1;
+        }
+        if (expect_true(
+                contains(captured_err.str(), "Steam Cloud web backend is currently unsupported"),
+                "steam cloud web routes should explain the unsupported state") != 0) {
+            return 1;
+        }
+    }
+
+    {
+        std::ostringstream captured_out;
+        std::ostringstream captured_err;
+        ScopedStreamRedirect redirect_out(std::cout, captured_out.rdbuf());
+        ScopedStreamRedirect redirect_err(std::cerr, captured_err.rdbuf());
+        std::vector<std::string> args = {
+            "cauth", "--memory-session-store", "steam", "cloud", "web-page-list",
+            "--steam-id", "76561198000000000",
+            "--app-id", "440"};
+        auto argv = make_argv(args);
+        const auto exit_code =
+            cauth::cli::run_cli(static_cast<int>(argv.size()), argv.data(), std::cout, std::cerr);
+        if (expect_true(exit_code == 1,
+                        "steam cloud web-page-list should return structured failure without web material") != 0) {
+            return 1;
+        }
+        if (expect_true(
+                contains(captured_err.str(), "web cookie auth materialization failed"),
+                "steam cloud web-page-list should surface diagnostic store-page auth failure") != 0) {
+            return 1;
+        }
+    }
+
+    {
+        std::ostringstream captured_out;
+        std::ostringstream captured_err;
+        ScopedStreamRedirect redirect_out(std::cout, captured_out.rdbuf());
+        ScopedStreamRedirect redirect_err(std::cerr, captured_err.rdbuf());
+        std::vector<std::string> args = {
+            "cauth", "steam", "cloud", "routes",
+            "--steam-id", "76561198000000000",
+            "--app-id", "440",
+            "--task", "bogus"};
+        auto argv = make_argv(args);
+        const auto exit_code =
+            cauth::cli::run_steam_cloud(static_cast<int>(argv.size()) - 1, argv.data() + 1);
+        if (expect_true(exit_code == 2, "steam cloud routes should reject unknown route tasks") != 0) {
+            return 1;
+        }
+        if (expect_true(contains(captured_err.str(), "unknown steam cloud route task"),
+                        "steam cloud routes should validate route task values") != 0) {
+            return 1;
+        }
     }
 
     {

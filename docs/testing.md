@@ -26,7 +26,7 @@ $cauth = ".\\build\\windows-msvc-debug\\cauth.exe"
 Expected version output for the current development line:
 
 ```text
-CAuth 0.5.1
+CAuth 0.6.0
 ```
 
 ## 2. Steam auth
@@ -76,7 +76,9 @@ Remove-Variable plain
 Remove-Variable password
 ```
 
-`login-web` is useful to validate the standalone web-cookie / finalize-login flow.
+`login-web` is useful to validate the standalone web-cookie / finalize-login flow. It is not the
+recommended starting point for Steam Cloud tests; use `steam auth login` so Cloud can stay on the
+CM-backed path.
 
 ## 3. CM diagnostics
 
@@ -147,9 +149,20 @@ the WinHTTP-backed path.
 
 ## 5. Cloud workflow
 
-Cloud can run against saved CM-backed auth material or against the standalone web-login flow.
-Use `--backend auto` first. If you are diagnosing auth material directly, try `--backend cm` or
-`--backend web`.
+Cloud should currently be tested as a CM-backed flow. Use `--backend auto` first; when a
+`steam-client` session is available, CAuth will prefer it automatically. `--backend web` is
+currently expected to fail with an unsupported-backend message, even if `login-web` and
+`steam auth web-cookies` succeed.
+
+If you want to inspect the store-page view of Steam Cloud for diagnostics, use the separate
+read-only command:
+
+```powershell
+& $cauth steam cloud web-page-list --steam-id 7656119... --app-id 2868840 --remote-root savegames
+```
+
+Treat that output as best-effort diagnostics only. It does not mean the unsupported web Cloud
+backend can pull or push files.
 
 ### List and verify
 

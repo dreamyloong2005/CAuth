@@ -1,5 +1,6 @@
 #pragma once
 
+#include "steam/cloud/steam_cloud_service.hpp"
 #include "steam/cloud/steam_cloud_upload_service.hpp"
 #include "steam/cloud/steam_cloud_types.hpp"
 
@@ -11,6 +12,7 @@ SteamCloudFileListResult fetch_remote_file_list_via_cm(const SteamCloudRequest& 
                                                        bool extended_details);
 SteamCloudDownloadResult download_remote_file_via_cm(const SteamCloudRequest& request,
                                                      const SteamCloudFileEntry& file,
+                                                     const SteamCloudDownloadOptions& download_options = {},
                                                      const cauth::core::platform::HttpRequestCallbacks& callbacks =
                                                          {});
 SteamCloudUploadResult upload_cloud_files_via_cm(const SteamCloudRequest& request,

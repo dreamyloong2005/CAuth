@@ -21,6 +21,7 @@ using SessionOperation = std::function<cm::SteamCmAttemptResult(cm::CmSession&)>
 bool with_authed_cm_session(const cauth::steam::auth::SteamAuthProvider& auth_provider,
                             std::string_view subject_id,
                             std::uint32_t max_count,
+                            const cauth::core::platform::RouteSelection* route_selection,
                             std::ostream* out,
                             std::ostream* err,
                             const SessionOperation& operation) {
@@ -32,7 +33,7 @@ bool with_authed_cm_session(const cauth::steam::auth::SteamAuthProvider& auth_pr
     }
     cm::SteamCmConnector connector{out, err};
     const auto result =
-        connector.with_logged_on_session(*loaded.session, max_count,
+        connector.with_logged_on_session(*loaded.session, max_count, route_selection,
                                          [&](const cm::CmServerEndpoint&, cm::CmSession& cm_session) {
                                              return operation(cm_session);
                                          });
@@ -46,15 +47,27 @@ bool with_authed_cm_session(const cauth::steam::auth::SteamAuthProvider& auth_pr
 
 DepotCmClient::DepotCmClient(cauth::steam::auth::SteamAuthProvider& auth_provider,
                              std::string_view subject_id,
+                             const cauth::core::platform::RouteSelection* route_selection,
                              std::ostream* out,
                              std::ostream* err)
-    : auth_provider_(&auth_provider), subject_id_(subject_id), out_(out), err_(err) {}
+    : auth_provider_(&auth_provider),
+      subject_id_(subject_id),
+      route_selection_(route_selection == nullptr
+                           ? cauth::core::platform::RouteSelection{}
+                           : *route_selection),
+      out_(out),
+      err_(err) {}
 
 std::optional<AppInfo> DepotCmClient::fetch_app_info(std::uint32_t app_id,
                                                      std::uint32_t max_count) const {
     std::optional<AppInfo> app_info;
     const auto ok = with_authed_cm_session(
-        *auth_provider_, subject_id_, max_count, out_, err_,
+        *auth_provider_,
+        subject_id_,
+        max_count,
+        route_selection_.empty() ? nullptr : &route_selection_,
+        out_,
+        err_,
         [&](cm::CmSession& cm_session) {
             const auto send_result = cm_session.send_message(make_pics_product_info_request(
                 PicsProductInfoRequest{{PicsProductInfoAppRequest{app_id, 0, true}}, false, true}));
@@ -116,7 +129,12 @@ std::optional<DepotDecryptionKeyResponse> DepotCmClient::fetch_depot_key(std::ui
                                                                          std::uint32_t max_count) const {
     std::optional<DepotDecryptionKeyResponse> response;
     const auto ok = with_authed_cm_session(
-        *auth_provider_, subject_id_, max_count, out_, err_,
+        *auth_provider_,
+        subject_id_,
+        max_count,
+        route_selection_.empty() ? nullptr : &route_selection_,
+        out_,
+        err_,
         [&](cm::CmSession& cm_session) {
             const auto send_result = cm_session.send_message(
                 make_depot_decryption_key_request(DepotDecryptionKeyRequest{depot_id, app_id}));
@@ -165,7 +183,12 @@ std::optional<ManifestRequestCodeResponse> DepotCmClient::fetch_manifest_request
     std::uint32_t max_count) const {
     std::optional<ManifestRequestCodeResponse> response;
     const auto ok = with_authed_cm_session(
-        *auth_provider_, subject_id_, max_count, out_, err_,
+        *auth_provider_,
+        subject_id_,
+        max_count,
+        route_selection_.empty() ? nullptr : &route_selection_,
+        out_,
+        err_,
         [&](cm::CmSession& cm_session) {
             const auto call = cm_session.call_service_method(
                 kGetManifestRequestCodeMethod, encode_manifest_request_code_request_body(request),

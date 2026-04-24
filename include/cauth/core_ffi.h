@@ -27,6 +27,34 @@ typedef struct cauth_client_options {
     const char* session_storage_key;
 } cauth_client_options_t;
 
+typedef struct cauth_route_selection {
+    const char* endpoint;
+    const char* protocol;
+    const char* role;
+} cauth_route_selection_t;
+
+typedef struct cauth_route_probe_entry {
+    const char* endpoint;
+    const char* protocol;
+    const char* role;
+    const char* note;
+    unsigned long long latency_ms;
+    int latency_known;
+    int recent_success;
+    int recent_failure;
+    unsigned int success_count;
+    unsigned int failure_count;
+} cauth_route_probe_entry_t;
+
+typedef struct cauth_route_probe_result {
+    int ok;
+    const char* module_status;
+    const char* backend;
+    const char* message;
+    unsigned long long route_count;
+    const cauth_route_probe_entry_t* routes;
+} cauth_route_probe_result_t;
+
 CAUTH_API cauth_version_t cauth_get_version(void);
 CAUTH_API cauth_result_t cauth_client_create(cauth_client_t** out_client);
 CAUTH_API cauth_result_t cauth_client_create_with_options(

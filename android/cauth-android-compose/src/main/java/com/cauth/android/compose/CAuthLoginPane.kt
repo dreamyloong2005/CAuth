@@ -39,6 +39,10 @@ fun CAuthLoginPane(
                 selectedPlatform = state.loginPlatform,
                 onPlatformSelected = controller::setLoginPlatform,
             )
+            CAuthSteamAuthRouteSection(
+                state = state,
+                controller = controller,
+            )
             CAuthSteamAuthActionButtons(controller = controller)
             CAuthSteamAuthStatus(
                 statusText = state.statusText,

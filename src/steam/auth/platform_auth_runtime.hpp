@@ -5,6 +5,7 @@
 #include "steam/auth/steam_network_authenticator.hpp"
 #include "steam/auth/steam_auth_transport.hpp"
 #include "steam/auth/steam_password_encryptor.hpp"
+#include "core/platform/route_selection.hpp"
 #include "core/session/auth_session_storage.hpp"
 
 #include <memory>
@@ -20,6 +21,7 @@ struct PlatformAuthRuntime {
 struct SteamPlatformLoginOptions {
     SteamNetworkAuthenticatorOptions authenticator_options;
     std::uint32_t cm_max_count = 5;
+    cauth::core::platform::RouteSelection cm_route_selection;
 };
 
 PlatformAuthRuntime make_steam_platform_auth_runtime();

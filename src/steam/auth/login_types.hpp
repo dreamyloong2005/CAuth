@@ -2,6 +2,7 @@
 #define CAUTH_STEAM_AUTH_LOGIN_TYPES_HPP
 
 #include "core/auth/auth_result.hpp"
+#include "core/platform/route_selection.hpp"
 #include "core/session/auth_session.hpp"
 #include "steam/auth/steam_session_identity.hpp"
 
@@ -23,6 +24,7 @@ struct SteamLoginRequest {
     std::string device_name = "CAuth";
     bool remember_session = true;
     SteamLoginPlatformType platform_type = SteamLoginPlatformType::SteamClient;
+    cauth::core::platform::RouteSelection route_selection;
 };
 
 enum class SteamLoginStatus {

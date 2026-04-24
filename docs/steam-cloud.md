@@ -1,7 +1,8 @@
 # Steam Cloud
 
-`cauth_steam_cloud` sits beside `cauth_steam_auth` and uses a valid Steam web session to read or
-write Steam Cloud files for a game.
+`cauth_steam_cloud` sits beside `cauth_steam_auth` and currently supports Steam Cloud as a
+CM-backed workflow. CAuth still keeps the standalone web-cookie tooling around for diagnostics, but
+the Cloud `web` backend itself is intentionally treated as unsupported.
 
 ## CLI shape
 
@@ -17,12 +18,13 @@ Common flags:
 - `--remote-root <path>` narrows the cloud scope to one subtree in Steam Cloud.
 - `--conflict-policy <default|local-wins|remote-wins|newer-wins|fail>` controls pull and push
   conflict handling. `fail-on-conflict` is also accepted as an alias.
-- `--backend <auto|web|cm>` chooses whether cloud calls use web-backed or CM-backed auth material.
-  In `auto` mode, CAuth prefers a saved `steam-client` session when the same Steam account also has
-  web/mobile sessions saved.
+- `--backend <auto|web|cm>` chooses the Cloud backend. In `auto` mode, CAuth prefers a saved
+  `steam-client` session when the same Steam account also has web/mobile sessions saved.
+  `--backend web` is currently expected to fail fast with an unsupported-backend message.
 - `--steam-id <id>` selects which saved Steam account to use. It is required even when an
   `--access-token` override is supplied.
-- `--access-token <token>` overrides the saved login session token for web-backed calls.
+- `--access-token <token>` overrides the saved login session token for direct token experiments.
+  It does not make the unsupported `--backend web` path usable.
 - `--refresh-token <token>` can be supplied with `--steam-id <id>` for stateless cloud calls.
 - `--delete-remote-orphans` allows `push` to remove remote files that do not exist locally.
 - `--include-extra-local` makes `verify` report local-only files explicitly.
@@ -35,17 +37,21 @@ exactly which remote/local files matched, diverged, or were missing.
 
 ## Auth material
 
-Steam Cloud supports two practical session sources:
+Steam Cloud has one practical session source today:
 
 1. normal `steam auth login`
-   - usually gives CAuth enough saved auth material for `--backend auto`
+   - gives CAuth the saved `steam-client` auth material used by `--backend auto`
    - selected per command with `--steam-id <id>`
-2. `steam auth login-web`
-   - drives the web-cookie / finalize-login path directly
-   - useful when you intentionally want a web-flavored session
+
+`steam auth login-web`
+
+- still drives the web-cookie / finalize-login path directly
+- is useful for auth diagnostics such as `steam auth web-cookies`
+- should not be treated as a working Steam Cloud backend right now
 
 `steam auth web-cookies` is a good diagnostic command when you want to confirm that the saved web
-session is healthy before testing cloud operations.
+session is healthy before testing auth-related web flows. It does not imply that Steam Cloud web
+enumeration/download is usable.
 
 When several Steam accounts are saved, inspect the repository and pass the desired SteamID:
 
@@ -54,8 +60,19 @@ When several Steam accounts are saved, inspect the repository and pass the desir
 ```
 
 Use `--backend auto` unless you are debugging a specific path. `--backend cm` forces CM Cloud
-service calls. `--backend web` forces web-backed auth material and prefers a saved web-capable
-session when one exists.
+service calls. `--backend web` is currently unsupported because Steam does not expose a stable
+usable web enumerate/download path for Steam Cloud with the auth material available to
+`login-web`.
+
+If you want to inspect the store-page view anyway, use the separate diagnostic command:
+
+```powershell
+.\build\windows-msvc-debug\cauth.exe steam cloud web-page-list --steam-id 7656119... --app-id 2868840 --remote-root savegames
+```
+
+`steam cloud web-page-list` is read-only and best-effort. It is useful for debugging what a
+web-authenticated store page can see, but it does not imply that web-backed Cloud list, pull, or
+push are supported.
 
 ## Acceptance Script
 

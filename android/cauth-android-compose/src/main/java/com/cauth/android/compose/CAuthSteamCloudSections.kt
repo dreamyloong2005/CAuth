@@ -20,7 +20,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.cauth.android.steam.cloud.CAuthSteamCloudController
 import com.cauth.android.steam.cloud.CAuthSteamCloudState
+import com.cauth.android.steam.cloud.SteamCloudBackend
 import com.cauth.android.steam.cloud.SteamCloudConflictPolicy
+import com.cauth.android.steam.cloud.SteamCloudRouteTask
 
 @Composable
 fun CAuthSteamCloudRequestSection(
@@ -84,6 +86,54 @@ fun CAuthSteamCloudRequestSection(
             value = state.startIndexText,
             onValueChange = controller::setStartIndexText,
             label = { Text("Start index") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !state.busy,
+            singleLine = true,
+        )
+        Column(
+            modifier = Modifier.selectableGroup(),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text("Backend", style = MaterialTheme.typography.labelLarge)
+            SteamCloudBackend.entries.forEach { backend ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .selectable(
+                            selected = state.backend == backend,
+                            onClick = { if (!state.busy) controller.setBackend(backend) },
+                        ),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    RadioButton(
+                        selected = state.backend == backend,
+                        onClick = { if (!state.busy) controller.setBackend(backend) },
+                        enabled = !state.busy,
+                    )
+                    Text(backend.name)
+                }
+            }
+        }
+        OutlinedTextField(
+            value = state.routeEndpoint,
+            onValueChange = controller::setRouteEndpoint,
+            label = { Text("Route endpoint (optional)") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !state.busy,
+            singleLine = true,
+        )
+        OutlinedTextField(
+            value = state.routeProtocol,
+            onValueChange = controller::setRouteProtocol,
+            label = { Text("Route protocol (optional)") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !state.busy,
+            singleLine = true,
+        )
+        OutlinedTextField(
+            value = state.routeRole,
+            onValueChange = controller::setRouteRole,
+            label = { Text("Route role (optional)") },
             modifier = Modifier.fillMaxWidth(),
             enabled = !state.busy,
             singleLine = true,
@@ -164,35 +214,89 @@ fun CAuthSteamCloudActionSection(
     controller: CAuthSteamCloudController,
     modifier: Modifier = Modifier,
 ) {
-    FlowRow(
+    Column(
         modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Button(enabled = !state.busy, onClick = controller::listRemoteFiles) { Text("List") }
-        Button(enabled = !state.busy, onClick = controller::verifyLocalFiles) { Text("Verify") }
-        Button(enabled = !state.busy, onClick = controller::pull) { Text("Pull") }
-        Button(enabled = !state.busy, onClick = controller::push) { Text("Push") }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(enabled = !state.busy, onClick = { controller.probeRoutes(SteamCloudRouteTask.List) }) {
+                Text("Probe List Routes")
+            }
+            Button(enabled = !state.busy, onClick = { controller.probeRoutes(SteamCloudRouteTask.Verify) }) {
+                Text("Probe Verify Routes")
+            }
+            Button(enabled = !state.busy, onClick = { controller.probeRoutes(SteamCloudRouteTask.Pull) }) {
+                Text("Probe Pull Routes")
+            }
+            Button(enabled = !state.busy, onClick = { controller.probeRoutes(SteamCloudRouteTask.Push) }) {
+                Text("Probe Push Routes")
+            }
+            Button(enabled = !state.busy, onClick = controller::listRemoteFiles) { Text("List") }
+            Button(enabled = !state.busy, onClick = controller::listRemoteFilesViaWebPage) {
+                Text("Web Page List (Diagnostic)")
+            }
+            Button(enabled = !state.busy, onClick = controller::verifyLocalFiles) { Text("Verify") }
+            Button(enabled = !state.busy, onClick = controller::pull) { Text("Pull") }
+            Button(enabled = !state.busy, onClick = controller::push) { Text("Push") }
+        }
+        Text(
+            text = "Web Page List only scrapes the store page for diagnostics. It can help inspect what the web session can see, but it does not mean Steam Cloud web pull or push is supported.",
+            style = MaterialTheme.typography.bodySmall,
+        )
     }
 }
 
 @Composable
 fun CAuthSteamCloudResultsSection(
     state: CAuthSteamCloudState,
+    controller: CAuthSteamCloudController,
     modifier: Modifier = Modifier,
 ) {
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        state.routeProbe?.let { snapshot ->
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    "Routes (${snapshot.routes.size}) backend=${snapshot.backend.ifBlank { "(none)" }}",
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                if (snapshot.message.isNotBlank()) {
+                    SelectableCloudResultText(snapshot.message)
+                }
+                snapshot.routes.take(8).forEach { route ->
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        SelectableCloudResultText(
+                            "${route.endpoint} protocol=${route.protocol.ifBlank { "(none)" }} role=${route.role.ifBlank { "(none)" }} latency=${route.latencyLabel}",
+                        )
+                        Button(enabled = !state.busy, onClick = { controller.useRoute(route) }) { Text("Use") }
+                    }
+                }
+            }
+        }
         state.fileList?.let { snapshot ->
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
                     "Files (${snapshot.files.size}/${snapshot.totalFiles}) eresult=${snapshot.eresult}",
                     style = MaterialTheme.typography.labelLarge,
                 )
+                if (snapshot.message.isNotBlank()) {
+                    SelectableCloudResultText(snapshot.message)
+                }
                 snapshot.files.take(8).forEach { entry ->
-                    SelectableCloudResultText("${entry.filename} size=${entry.fileSize} ts=${entry.timestamp}")
+                    SelectableCloudResultText(
+                        buildString {
+                            append(entry.filename)
+                            append(" size=${entry.fileSize} ts=${entry.timestamp}")
+                            if (entry.url.isNotBlank()) {
+                                append(" url=${entry.url}")
+                            }
+                        },
+                    )
                 }
             }
         }
@@ -206,6 +310,12 @@ fun CAuthSteamCloudResultsSection(
                 SelectableCloudResultText(
                     "conflicts=${result.conflictCount} deleted=${result.deletedCount} bytes=${result.transferredBytes}",
                 )
+                if (result.direction == com.cauth.android.steam.cloud.SteamCloudDirection.Push ||
+                    result.resumable ||
+                    result.resumed
+                ) {
+                    SelectableCloudResultText(result.resumeSummary)
+                }
                 SelectableCloudResultText(result.message)
             }
         }

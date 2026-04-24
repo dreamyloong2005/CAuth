@@ -5,6 +5,7 @@
 
 #include <charconv>
 #include <cctype>
+#include <initializer_list>
 #include <sstream>
 #include <string_view>
 
@@ -94,27 +95,76 @@ std::string build_service_form_body(const SteamCloudWebAuthContext& auth,
     return body;
 }
 
+bool route_selection_applies_to_any_role(
+    const cauth::core::platform::RouteSelection& selection,
+    std::initializer_list<std::string_view> roles) {
+    if (selection.empty() || selection.role.empty()) {
+        return true;
+    }
+    for (const auto role : roles) {
+        if (selection.role == role) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string rewrite_url_for_route_selection(
+    std::string_view url,
+    const cauth::core::platform::RouteSelection& selection,
+    std::initializer_list<std::string_view> roles) {
+    if (selection.empty() || !route_selection_applies_to_any_role(selection, roles)) {
+        return std::string{url};
+    }
+
+    const auto scheme_end = url.find("://");
+    if (scheme_end == std::string_view::npos) {
+        return std::string{url};
+    }
+    const auto authority_begin = scheme_end + 3;
+    auto authority_end = url.find('/', authority_begin);
+    if (authority_end == std::string_view::npos) {
+        authority_end = url.size();
+    }
+    if (authority_end <= authority_begin) {
+        return std::string{url};
+    }
+
+    const auto protocol = selection.protocol.empty()
+                              ? std::string{url.substr(0, scheme_end)}
+                              : selection.protocol;
+    const auto endpoint =
+        selection.endpoint.empty()
+            ? std::string{url.substr(authority_begin, authority_end - authority_begin)}
+            : selection.endpoint;
+    return protocol + "://" + endpoint + std::string{url.substr(authority_end)};
+}
+
 ServiceCallResult post_service_method(std::string_view method_path,
                                       const SteamCloudWebAuthContext& auth,
                                       std::string_view input_json) {
+    const auto use_access_token = !auth.access_token.empty();
     const auto has_cookie_session =
-        !auth.web_cookie_header.empty() || !auth.store_cookie_header.empty();
-    const auto use_store_cookie = auth.web_cookie_header.empty() && !auth.store_cookie_header.empty();
+        !use_access_token &&
+        (!auth.web_cookie_header.empty() || !auth.store_cookie_header.empty());
+    const auto use_store_cookie =
+        !use_access_token && auth.web_cookie_header.empty() && !auth.store_cookie_header.empty();
 
     cauth::core::platform::HttpRequest request;
     request.method = cauth::core::platform::HttpMethod::Post;
-    request.url =
-        std::string{has_cookie_session ? (use_store_cookie ? kSteamStoreBaseUrl
-                                                           : kSteamCommunityBaseUrl)
-                                       : kSteamApiBaseUrl} +
-        std::string{method_path};
+    const auto base_url = rewrite_url_for_route_selection(
+        use_access_token ? std::string{kSteamApiBaseUrl}
+                         : (has_cookie_session ? std::string{use_store_cookie ? kSteamStoreBaseUrl
+                                                                               : kSteamCommunityBaseUrl}
+                                               : std::string{kSteamApiBaseUrl}),
+        auth.route_selection,
+        {"control", "upload-control"});
+    request.url = base_url + std::string{method_path};
     request.content_type = "application/x-www-form-urlencoded";
     const auto body = build_service_form_body(auth, input_json);
     request.body.assign(body.begin(), body.end());
     if (has_cookie_session) {
         const auto& cookie_header = use_store_cookie ? auth.store_cookie_header : auth.web_cookie_header;
-        const auto base_url = use_store_cookie ? std::string{kSteamStoreBaseUrl}
-                                               : std::string{kSteamCommunityBaseUrl};
         request.headers.push_back({"Cookie", cookie_header});
         request.headers.push_back({"Origin", base_url});
         request.headers.push_back({"Referer", base_url + "/"});
@@ -398,16 +448,22 @@ ServiceCallResult complete_app_upload_batch(const SteamCloudWebAuthContext& auth
 
 ServiceCallResult upload_file_bytes(std::string_view url,
                                     const std::vector<cauth::core::platform::HttpHeader>& headers,
+                                    const cauth::core::platform::RouteSelection* route_selection,
                                     std::string_view filename,
                                     const std::vector<std::uint8_t>& bytes,
                                     const SteamCloudUploadCallbacks& callbacks) {
     HttpUploadProgressContext progress_context{filename, &callbacks};
     cauth::core::platform::HttpRequest request;
     request.method = cauth::core::platform::HttpMethod::Put;
-    request.url = std::string{url};
+    request.url = route_selection == nullptr
+                      ? std::string{url}
+                      : rewrite_url_for_route_selection(
+                            url,
+                            *route_selection,
+                            {"upload", "content"});
     request.content_type = "application/octet-stream";
     request.headers = headers;
-    request.body = bytes;
+    request.body_view = &bytes;
     request.callbacks.progress_hook =
         [](const cauth::core::platform::HttpTransferProgress& progress, void* user_data) {
             const auto* context = static_cast<const HttpUploadProgressContext*>(user_data);
@@ -426,8 +482,10 @@ ServiceCallResult upload_file_bytes(std::string_view url,
         [](void* user_data) -> bool {
             const auto* context = static_cast<const HttpUploadProgressContext*>(user_data);
             return context != nullptr && context->callbacks != nullptr &&
-                   context->callbacks->cancel_hook != nullptr &&
-                   context->callbacks->cancel_hook(context->callbacks->user_data);
+                   ((context->callbacks->pause_hook != nullptr &&
+                     context->callbacks->pause_hook(context->callbacks->user_data)) ||
+                    (context->callbacks->cancel_hook != nullptr &&
+                     context->callbacks->cancel_hook(context->callbacks->user_data)));
         };
     request.callbacks.user_data = &progress_context;
     const auto response = cauth::core::platform::perform_platform_http_request(request);
@@ -446,7 +504,7 @@ std::string build_begin_app_upload_batch_form_body(
     const std::vector<std::string>& files_to_upload,
     const std::vector<std::string>& files_to_delete) {
     return build_begin_app_upload_batch_form_body(
-        SteamCloudWebAuthContext{std::string{access_token}, {}, {}},
+        SteamCloudWebAuthContext{std::string{access_token}, {}, {}, {}},
         app_id,
         machine_name,
         files_to_upload,
@@ -473,7 +531,7 @@ SteamCloudUploadResult upload_cloud_files(std::string_view access_token,
                                           const std::vector<std::string>& files_to_delete,
                                           const SteamCloudUploadCallbacks& callbacks) {
     return upload_cloud_files(
-        SteamCloudWebAuthContext{std::string{access_token}, {}, {}},
+        SteamCloudWebAuthContext{std::string{access_token}, {}, {}, {}},
         app_id,
         machine_name,
         files,
@@ -490,6 +548,10 @@ SteamCloudUploadResult upload_cloud_files(const SteamCloudWebAuthContext& auth,
     if (auth.access_token.empty() && auth.web_cookie_header.empty() &&
         auth.store_cookie_header.empty()) {
         return {false, "access token with write_cloud scope or web cookie session is required"};
+    }
+
+    if (callbacks.state_hook != nullptr) {
+        callbacks.state_hook(false, false, 0, callbacks.user_data);
     }
 
     std::vector<std::string> filenames;
@@ -516,8 +578,13 @@ SteamCloudUploadResult upload_cloud_files(const SteamCloudWebAuthContext& auth,
             break;
         }
 
-        const auto put_result =
-            upload_file_bytes(upload.url, upload.headers, file.filename, file.bytes, callbacks);
+        const auto put_result = upload_file_bytes(
+            upload.url,
+            upload.headers,
+            &auth.route_selection,
+            file.filename,
+            file.bytes,
+            callbacks);
         const auto commit_result =
             commit_http_upload(auth, app_id, file.filename, file.file_sha, put_result.ok);
         if (!put_result.ok) {

@@ -1,6 +1,8 @@
 package com.cauth.android.steam.cloud
 
 import com.cauth.android.CAuthClient
+import com.cauth.android.CAuthRouteProbeEntrySnapshot
+import com.cauth.android.CAuthRouteSelection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -21,10 +23,15 @@ data class CAuthSteamCloudState(
     val deleteRemoteOrphans: Boolean = false,
     val verifyIncludeExtraLocal: Boolean = false,
     val conflictPolicy: SteamCloudConflictPolicy = SteamCloudConflictPolicy.Default,
+    val backend: SteamCloudBackend = SteamCloudBackend.Auto,
+    val routeEndpoint: String = "",
+    val routeProtocol: String = "",
+    val routeRole: String = "",
     val moduleStatus: String = "idle",
     val statusText: String = "Ready",
     val busy: Boolean = false,
     val fileList: SteamCloudFileListSnapshot? = null,
+    val routeProbe: SteamCloudRouteProbeSnapshot? = null,
     val verifyResult: SteamCloudVerifySnapshot? = null,
     val operationResult: SteamCloudResultSnapshot? = null,
     val moduleTask: SteamCloudModuleTaskSnapshot? = null,
@@ -53,6 +60,10 @@ class CAuthSteamCloudController(
     fun setDeleteRemoteOrphans(value: Boolean) = _state.update { it.copy(deleteRemoteOrphans = value) }
     fun setVerifyIncludeExtraLocal(value: Boolean) = _state.update { it.copy(verifyIncludeExtraLocal = value) }
     fun setConflictPolicy(value: SteamCloudConflictPolicy) = _state.update { it.copy(conflictPolicy = value) }
+    fun setBackend(value: SteamCloudBackend) = _state.update { it.copy(backend = value) }
+    fun setRouteEndpoint(value: String) = _state.update { it.copy(routeEndpoint = sanitizeTrimmed(value)) }
+    fun setRouteProtocol(value: String) = _state.update { it.copy(routeProtocol = sanitizeTrimmed(value)) }
+    fun setRouteRole(value: String) = _state.update { it.copy(routeRole = sanitizeTrimmed(value)) }
 
     fun cancelActiveTransfer() {
         val handle = _state.value.transferTask?.handle ?: return
@@ -79,6 +90,31 @@ class CAuthSteamCloudController(
         }
     }
 
+    fun pauseActiveTransfer() {
+        val handle = _state.value.transferTask?.handle ?: return
+        scope.launch {
+            runCatching { api.pauseTransferTask(handle) }
+            cancelIdleReset()
+            _state.update { current ->
+                val currentTask = current.transferTask
+                current.copy(
+                    statusText = "Pause requested...",
+                    moduleStatus = "pausing",
+                    busy = true,
+                    moduleTask = SteamCloudModuleTaskSnapshot(
+                        label = current.moduleTask?.label ?: currentTask?.kindLabel ?: "Cloud Task",
+                        active = true,
+                        moduleStatus = "pausing",
+                        message = "Pause requested...",
+                        transferTask = currentTask?.copy(moduleStatus = "pausing"),
+                    ),
+                    transferTask = currentTask?.copy(moduleStatus = "pausing"),
+                )
+            }
+            appendTrace("Cloud transfer pause requested handle=$handle")
+        }
+    }
+
     fun listRemoteFiles() {
         runAction("Cloud List") { request, count, startIndex ->
             val result = api.listRemoteFiles(
@@ -95,6 +131,27 @@ class CAuthSteamCloudController(
                 it.copy(fileList = result)
             }
             appendTrace("Cloud List returned ok=${result.ok} files=${result.files.size} total=${result.totalFiles} eresult=${result.eresult}")
+        }
+    }
+
+    fun listRemoteFilesViaWebPage() {
+        runAction("Cloud Web Page List") { request, count, startIndex ->
+            val diagnosticRequest = request.copy(backend = SteamCloudBackend.Web)
+            val result = api.listRemoteFilesViaWebPage(
+                request = diagnosticRequest,
+                count = count,
+                startIndex = startIndex,
+            )
+            finishModuleTask(
+                label = "Cloud Web Page List",
+                moduleStatus = result.moduleStatus.ifBlank { if (result.ok) "succeeded" else "failed" },
+                message = result.message.ifBlank { "Listed ${result.files.size} file(s) from store page" },
+            ) {
+                it.copy(fileList = result)
+            }
+            appendTrace(
+                "Cloud Web Page List returned ok=${result.ok} files=${result.files.size} total=${result.totalFiles} eresult=${result.eresult}",
+            )
         }
     }
 
@@ -116,6 +173,66 @@ class CAuthSteamCloudController(
         }
     }
 
+    fun probeRoutes(task: SteamCloudRouteTask) {
+        val snapshot = _state.value
+        val request = buildRequest(snapshot) ?: return
+        val maxCount = snapshot.countText.toIntOrNull()?.coerceIn(1, 100) ?: 20
+        appendTrace(
+            "Cloud Routes clicked task=${task.name} backend=${request.backend.name} route=${describeRouteSelection(request.routeSelection)}",
+        )
+        beginModuleTask(
+            label = "Cloud Routes",
+            moduleStatus = "probing",
+            message = "Fetching cloud routes...",
+        ) {
+            it.copy(transferTask = null)
+        }
+        scope.launch {
+            runCatching { api.probeRoutes(request = request, task = task, maxCount = maxCount) }
+                .onSuccess { result ->
+                    finishModuleTask(
+                        label = "Cloud Routes",
+                        moduleStatus = result.moduleStatus.ifBlank { if (result.ok) "succeeded" else "failed" },
+                        message = result.message.ifBlank {
+                            if (result.ok) "Fetched ${result.routes.size} route(s)" else "Cloud route probe failed"
+                        },
+                    ) {
+                        it.copy(routeProbe = result)
+                    }
+                    appendTrace(
+                        "Cloud Routes returned ok=${result.ok} backend=${result.backend.ifBlank { "(none)" }} routes=${result.routes.size}",
+                    )
+                }
+                .onFailure { failure ->
+                    finishModuleTask(
+                        label = "Cloud Routes",
+                        moduleStatus = "failed",
+                        message = failure.message ?: "Cloud route probe failed",
+                    )
+                    appendTrace("Cloud Routes failed: ${failure::class.simpleName}: ${failure.message ?: "(no message)"}")
+                }
+        }
+    }
+
+    fun useRoute(route: CAuthRouteProbeEntrySnapshot) {
+        cancelIdleReset()
+        _state.update {
+            it.copy(
+                routeEndpoint = route.endpoint,
+                routeProtocol = route.protocol,
+                routeRole = route.role,
+                moduleStatus = "idle",
+                statusText = "Route selected: ${route.endpoint}",
+                busy = false,
+                moduleTask = null,
+                transferTask = null,
+            )
+        }
+        appendTrace(
+            "Cloud route selected endpoint=${route.endpoint} protocol=${route.protocol.ifBlank { "(none)" }} role=${route.role.ifBlank { "(none)" }}",
+        )
+    }
+
     private fun runAction(
         label: String,
         action: suspend (request: SteamCloudRequest, count: Int, startIndex: Int) -> Unit,
@@ -134,16 +251,7 @@ class CAuthSteamCloudController(
             return
         }
 
-        val request = SteamCloudRequest(
-            appId = appId,
-            steamId = steamId,
-            accessToken = snapshot.accessToken.ifBlank { null },
-            localRoot = snapshot.localRoot.ifBlank { null },
-            remoteRoot = snapshot.remoteRoot.ifBlank { null },
-            dryRun = snapshot.dryRun,
-            deleteRemoteOrphans = snapshot.deleteRemoteOrphans,
-            conflictPolicy = snapshot.conflictPolicy,
-        )
+        val request = buildRequest(snapshot) ?: return
         val count = snapshot.countText.toIntOrNull()?.coerceIn(1, 200) ?: 20
         val startIndex = snapshot.startIndexText.toIntOrNull()?.coerceAtLeast(0) ?: 0
 
@@ -190,16 +298,7 @@ class CAuthSteamCloudController(
             return
         }
 
-        val request = SteamCloudRequest(
-            appId = appId,
-            steamId = steamId,
-            accessToken = snapshot.accessToken.ifBlank { null },
-            localRoot = snapshot.localRoot.ifBlank { null },
-            remoteRoot = snapshot.remoteRoot.ifBlank { null },
-            dryRun = snapshot.dryRun,
-            deleteRemoteOrphans = snapshot.deleteRemoteOrphans,
-            conflictPolicy = snapshot.conflictPolicy,
-        )
+        val request = buildRequest(snapshot) ?: return
 
         appendTrace(
             "$label clicked steamId=$steamId appId=$appId localRoot=${request.localRoot ?: "(none)"} " +
@@ -267,7 +366,7 @@ class CAuthSteamCloudController(
                         val verifyResult = snapshot.verifyResult
                         if (result != null) {
                             appendTrace(
-                                "$label returned ok=${result.ok} transferred=${result.transferredCount} conflicts=${result.conflictCount}",
+                                "$label returned ok=${result.ok} transferred=${result.transferredCount} conflicts=${result.conflictCount} resumable=${result.resumable} resumed=${result.resumed} resumeBytes=${result.resumeFromBytes}",
                             )
                         } else if (verifyResult != null) {
                             appendTrace(
@@ -282,12 +381,14 @@ class CAuthSteamCloudController(
                             label = label,
                             moduleStatus = snapshot.moduleStatus.ifBlank {
                                 when {
+                                    snapshot.paused -> "paused"
                                     snapshot.canceled -> "canceled"
                                     snapshot.succeeded -> "succeeded"
                                     else -> "failed"
                                 }
                             },
                             message = when {
+                                snapshot.paused -> snapshot.message.ifBlank { "${snapshot.kindLabel} paused" }
                                 snapshot.canceled -> "${snapshot.kindLabel} canceled"
                                 snapshot.message.isNotBlank() -> snapshot.message
                                 snapshot.succeeded -> "$label complete"
@@ -413,6 +514,55 @@ class CAuthSteamCloudController(
     private fun sanitizeCompact(value: String): String = value.filterNot { it.isWhitespace() }
 
     private fun sanitizeTrimmed(value: String): String = value.trim()
+
+    private fun buildRequest(snapshot: CAuthSteamCloudState): SteamCloudRequest? {
+        val appId = snapshot.appIdText.toIntOrNull()
+        if (appId == null || appId <= 0) {
+            _state.update { it.copy(statusText = "App ID is required") }
+            appendTrace("Cloud request blocked: invalid app id='${snapshot.appIdText}'")
+            return null
+        }
+        val steamId = snapshot.steamIdText.toLongOrNull()
+        if (steamId == null || steamId <= 0L) {
+            _state.update { it.copy(statusText = "SteamID is required") }
+            appendTrace("Cloud request blocked: invalid steam id='${snapshot.steamIdText}'")
+            return null
+        }
+        return SteamCloudRequest(
+            appId = appId,
+            steamId = steamId,
+            accessToken = snapshot.accessToken.ifBlank { null },
+            localRoot = snapshot.localRoot.ifBlank { null },
+            remoteRoot = snapshot.remoteRoot.ifBlank { null },
+            dryRun = snapshot.dryRun,
+            deleteRemoteOrphans = snapshot.deleteRemoteOrphans,
+            conflictPolicy = snapshot.conflictPolicy,
+            backend = snapshot.backend,
+            routeSelection = snapshot.routeSelection(),
+        )
+    }
+
+    private fun CAuthSteamCloudState.routeSelection(): CAuthRouteSelection? {
+        val selection = CAuthRouteSelection(
+            endpoint = routeEndpoint.ifBlank { null },
+            protocol = routeProtocol.ifBlank { null },
+            role = routeRole.ifBlank { null },
+        )
+        return selection.takeUnless { it.isEmpty() }
+    }
+
+    private fun describeRouteSelection(routeSelection: CAuthRouteSelection?): String = when {
+        routeSelection == null -> "auto"
+        else -> buildString {
+            append(routeSelection.endpoint ?: "*")
+            if (!routeSelection.protocol.isNullOrBlank()) {
+                append(" protocol=${routeSelection.protocol}")
+            }
+            if (!routeSelection.role.isNullOrBlank()) {
+                append(" role=${routeSelection.role}")
+            }
+        }
+    }
 
     private companion object {
         const val IDLE_RESET_DELAY_MS = 2500L

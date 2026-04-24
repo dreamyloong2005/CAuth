@@ -49,6 +49,14 @@ thread_local std::string g_depot_task_module_status;
 thread_local std::string g_depot_task_phase;
 thread_local std::string g_depot_task_target;
 thread_local std::string g_depot_task_message;
+thread_local std::string g_depot_route_module_status;
+thread_local std::string g_depot_route_backend;
+thread_local std::string g_depot_route_message;
+thread_local std::vector<std::string> g_depot_route_endpoints;
+thread_local std::vector<std::string> g_depot_route_protocols;
+thread_local std::vector<std::string> g_depot_route_roles;
+thread_local std::vector<std::string> g_depot_route_notes;
+thread_local std::vector<cauth_route_probe_entry_t> g_depot_route_entries;
 
 struct DepotVerifyStorage {
     std::vector<std::string> manifest_filenames;
@@ -66,10 +74,12 @@ struct DepotTask {
 
     std::mutex mutex;
     std::atomic_bool cancel_requested{false};
+    std::atomic_bool pause_requested{false};
     std::atomic_bool finished{false};
     cauth_depot_task_kind_t kind = CAUTH_DEPOT_TASK_MANIFEST_DOWNLOAD;
     bool succeeded = false;
     bool canceled = false;
+    bool paused = false;
     std::string module_status = "idle";
     std::string phase = "Queued";
     std::string target;
@@ -114,6 +124,18 @@ cauth::core::platform::FileWriteOptions make_write_options(cauth_file_write_mode
     };
 }
 
+cauth::core::platform::RouteSelection make_route_selection(
+    const cauth_route_selection_t* route_selection) {
+    cauth::core::platform::RouteSelection selection;
+    if (route_selection == nullptr) {
+        return selection;
+    }
+    selection.endpoint = nullable_string(route_selection->endpoint);
+    selection.protocol = nullable_string(route_selection->protocol);
+    selection.role = nullable_string(route_selection->role);
+    return selection;
+}
+
 void clear_last_error_detail() {
     g_last_error_detail.clear();
 }
@@ -126,9 +148,18 @@ bool message_indicates_cancel(std::string_view message) {
     return message.find("operation canceled") != std::string_view::npos;
 }
 
+bool message_indicates_pause(std::string_view message) {
+    return message.find("operation paused") != std::string_view::npos;
+}
+
 bool depot_task_cancel_requested(void* user_data) {
     const auto* task = static_cast<const DepotTask*>(user_data);
     return task != nullptr && task->cancel_requested.load();
+}
+
+bool depot_task_pause_requested(void* user_data) {
+    const auto* task = static_cast<const DepotTask*>(user_data);
+    return task != nullptr && task->pause_requested.load();
 }
 
 void on_depot_task_progress(const cauth::steam::depot::DepotDownloadProgress& progress,
@@ -244,6 +275,7 @@ cauth_result_t start_depot_task(cauth_depot_task_kind_t kind,
         cauth::steam::depot::set_current_thread_depot_download_hooks(
             &on_depot_task_progress,
             &depot_task_cancel_requested,
+            &depot_task_pause_requested,
             task.get());
         try {
             runner(*task);
@@ -251,12 +283,14 @@ cauth_result_t start_depot_task(cauth_depot_task_kind_t kind,
             std::lock_guard lock{task->mutex};
             task->succeeded = false;
             task->canceled = false;
+            task->paused = false;
             task->module_status = "failed";
             task->message = exception.what();
         } catch (...) {
             std::lock_guard lock{task->mutex};
             task->succeeded = false;
             task->canceled = false;
+            task->paused = false;
             task->module_status = "failed";
             task->message = "unexpected exception";
         }
@@ -299,9 +333,13 @@ std::optional<std::vector<std::uint8_t>> hex_to_bytes(std::string_view hex) {
 std::optional<cauth::core::depot::AppInfo> fetch_app_info(cauth_client_t* client,
                                                           unsigned long long steam_id,
                                                           unsigned int app_id,
-                                                          unsigned int max_count) {
+                                                          unsigned int max_count,
+                                                          const cauth::core::platform::RouteSelection* route_selection) {
     cauth::steam::auth::StoredSteamAuthProvider auth_provider{*client->session_repository};
-    cauth::core::depot::DepotCmClient depot_client{auth_provider, std::to_string(steam_id)};
+    cauth::core::depot::DepotCmClient depot_client{
+        auth_provider,
+        std::to_string(steam_id),
+        route_selection};
     return depot_client.fetch_app_info(app_id, max_count);
 }
 
@@ -354,11 +392,12 @@ cauth_result_t load_manifest_for_file_operation(const char* input_path,
 
 } // namespace
 
-cauth_result_t cauth_depot_fetch_branches(cauth_client_t* client,
-                                          unsigned long long steam_id,
-                                          unsigned int app_id,
-                                          unsigned int max_count,
-                                          cauth_app_branch_list_t* out_response) {
+cauth_result_t cauth_depot_fetch_branches_on_route(cauth_client_t* client,
+                                                   unsigned long long steam_id,
+                                                   unsigned int app_id,
+                                                   unsigned int max_count,
+                                                   const cauth_route_selection_t* route_selection,
+                                                   cauth_app_branch_list_t* out_response) {
     if (client == nullptr || out_response == nullptr || steam_id == 0 ||
         app_id == 0 || max_count == 0) {
         return CAUTH_ERROR_INVALID_ARGUMENT;
@@ -374,7 +413,13 @@ cauth_result_t cauth_depot_fetch_branches(cauth_client_t* client,
     g_branch_entries.clear();
 
     try {
-        const auto app_info = fetch_app_info(client, steam_id, app_id, max_count);
+        const auto native_route_selection = make_route_selection(route_selection);
+        const auto app_info = fetch_app_info(
+            client,
+            steam_id,
+            app_id,
+            max_count,
+            native_route_selection.empty() ? nullptr : &native_route_selection);
         if (!app_info.has_value()) {
             return CAUTH_OK;
         }
@@ -410,12 +455,22 @@ cauth_result_t cauth_depot_fetch_branches(cauth_client_t* client,
     }
 }
 
-cauth_result_t cauth_depot_fetch_manifests(cauth_client_t* client,
-                                           unsigned long long steam_id,
-                                           unsigned int app_id,
-                                           const char* branch,
-                                           unsigned int max_count,
-                                           cauth_depot_manifest_list_t* out_response) {
+cauth_result_t cauth_depot_fetch_branches(cauth_client_t* client,
+                                          unsigned long long steam_id,
+                                          unsigned int app_id,
+                                          unsigned int max_count,
+                                          cauth_app_branch_list_t* out_response) {
+    return cauth_depot_fetch_branches_on_route(
+        client, steam_id, app_id, max_count, nullptr, out_response);
+}
+
+cauth_result_t cauth_depot_fetch_manifests_on_route(cauth_client_t* client,
+                                                    unsigned long long steam_id,
+                                                    unsigned int app_id,
+                                                    const char* branch,
+                                                    unsigned int max_count,
+                                                    const cauth_route_selection_t* route_selection,
+                                                    cauth_depot_manifest_list_t* out_response) {
     if (client == nullptr || out_response == nullptr || steam_id == 0 ||
         app_id == 0 || max_count == 0) {
         return CAUTH_ERROR_INVALID_ARGUMENT;
@@ -434,7 +489,13 @@ cauth_result_t cauth_depot_fetch_manifests(cauth_client_t* client,
     g_last_manifest_branch = branch == nullptr || *branch == '\0' ? "public" : branch;
 
     try {
-        const auto app_info = fetch_app_info(client, steam_id, app_id, max_count);
+        const auto native_route_selection = make_route_selection(route_selection);
+        const auto app_info = fetch_app_info(
+            client,
+            steam_id,
+            app_id,
+            max_count,
+            native_route_selection.empty() ? nullptr : &native_route_selection);
         if (!app_info.has_value()) {
             return CAUTH_OK;
         }
@@ -484,12 +545,23 @@ cauth_result_t cauth_depot_fetch_manifests(cauth_client_t* client,
     }
 }
 
-cauth_result_t cauth_depot_fetch_preflight(cauth_client_t* client,
+cauth_result_t cauth_depot_fetch_manifests(cauth_client_t* client,
                                            unsigned long long steam_id,
                                            unsigned int app_id,
                                            const char* branch,
                                            unsigned int max_count,
-                                           cauth_depot_preflight_report_t* out_response) {
+                                           cauth_depot_manifest_list_t* out_response) {
+    return cauth_depot_fetch_manifests_on_route(
+        client, steam_id, app_id, branch, max_count, nullptr, out_response);
+}
+
+cauth_result_t cauth_depot_fetch_preflight_on_route(cauth_client_t* client,
+                                                    unsigned long long steam_id,
+                                                    unsigned int app_id,
+                                                    const char* branch,
+                                                    unsigned int max_count,
+                                                    const cauth_route_selection_t* route_selection,
+                                                    cauth_depot_preflight_report_t* out_response) {
     if (client == nullptr || out_response == nullptr || steam_id == 0 ||
         app_id == 0 || max_count == 0) {
         return CAUTH_ERROR_INVALID_ARGUMENT;
@@ -511,7 +583,13 @@ cauth_result_t cauth_depot_fetch_preflight(cauth_client_t* client,
     g_last_preflight_branch = branch == nullptr || *branch == '\0' ? "public" : branch;
 
     try {
-        const auto app_info = fetch_app_info(client, steam_id, app_id, max_count);
+        const auto native_route_selection = make_route_selection(route_selection);
+        const auto app_info = fetch_app_info(
+            client,
+            steam_id,
+            app_id,
+            max_count,
+            native_route_selection.empty() ? nullptr : &native_route_selection);
         if (!app_info.has_value()) {
             return CAUTH_OK;
         }
@@ -523,7 +601,10 @@ cauth_result_t cauth_depot_fetch_preflight(cauth_client_t* client,
         }
 
         cauth::steam::auth::StoredSteamAuthProvider auth_provider{*client->session_repository};
-        cauth::core::depot::DepotCmClient depot_client{auth_provider, std::to_string(steam_id)};
+        cauth::core::depot::DepotCmClient depot_client{
+            auth_provider,
+            std::to_string(steam_id),
+            native_route_selection.empty() ? nullptr : &native_route_selection};
 
         std::vector<cauth::core::depot::DepotDecryptionKeyResponse> key_responses;
         key_responses.reserve(selection->manifests.size());
@@ -589,13 +670,98 @@ cauth_result_t cauth_depot_fetch_preflight(cauth_client_t* client,
     }
 }
 
-cauth_result_t cauth_depot_download_manifest(unsigned int depot_id,
-                                             unsigned long long manifest_gid,
-                                             unsigned long long request_code,
-                                             unsigned int max_count,
-                                             const char* output_path,
-                                             cauth_file_write_mode_t write_mode,
-                                             int atomic_write) {
+cauth_result_t cauth_depot_fetch_preflight(cauth_client_t* client,
+                                           unsigned long long steam_id,
+                                           unsigned int app_id,
+                                           const char* branch,
+                                           unsigned int max_count,
+                                           cauth_depot_preflight_report_t* out_response) {
+    return cauth_depot_fetch_preflight_on_route(
+        client, steam_id, app_id, branch, max_count, nullptr, out_response);
+}
+
+cauth_result_t cauth_depot_probe_download_routes(unsigned int max_count,
+                                                 cauth_route_probe_result_t* out_result) {
+    if (out_result == nullptr || max_count == 0) {
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+
+    out_result->ok = 0;
+    out_result->module_status = "";
+    out_result->backend = "";
+    out_result->message = "";
+    out_result->route_count = 0;
+    out_result->routes = nullptr;
+
+    try {
+        const auto report = cauth::steam::depot::probe_download_routes(max_count);
+        g_depot_route_module_status = report.module_status;
+        g_depot_route_backend = "cdn";
+        g_depot_route_message = report.message;
+        g_depot_route_endpoints.clear();
+        g_depot_route_protocols.clear();
+        g_depot_route_roles.clear();
+        g_depot_route_notes.clear();
+        g_depot_route_entries.clear();
+        g_depot_route_endpoints.reserve(report.routes.size());
+        g_depot_route_protocols.reserve(report.routes.size());
+        g_depot_route_roles.reserve(report.routes.size());
+        g_depot_route_notes.reserve(report.routes.size());
+        for (const auto& route : report.routes) {
+            g_depot_route_endpoints.push_back(route.endpoint);
+            g_depot_route_protocols.push_back(route.protocol);
+            g_depot_route_roles.push_back("download");
+            std::string note;
+            if (!route.server_type.empty()) {
+                note = "type=" + route.server_type;
+            }
+            if (route.use_as_proxy) {
+                if (!note.empty()) {
+                    note += " ";
+                }
+                note += "proxy=true";
+            }
+            g_depot_route_notes.push_back(std::move(note));
+        }
+        g_depot_route_entries.reserve(report.routes.size());
+        for (std::size_t index = 0; index < report.routes.size(); ++index) {
+            const auto& route = report.routes[index];
+            g_depot_route_entries.push_back(cauth_route_probe_entry_t{
+                g_depot_route_endpoints[index].c_str(),
+                g_depot_route_protocols[index].c_str(),
+                g_depot_route_roles[index].c_str(),
+                g_depot_route_notes[index].c_str(),
+                route.latency_ms,
+                route.latency_known ? 1 : 0,
+                route.recent_success ? 1 : 0,
+                route.recent_failure ? 1 : 0,
+                route.success_count,
+                route.failure_count,
+            });
+        }
+
+        out_result->ok = report.ok ? 1 : 0;
+        out_result->module_status = g_depot_route_module_status.c_str();
+        out_result->backend = g_depot_route_backend.c_str();
+        out_result->message = g_depot_route_message.c_str();
+        out_result->route_count = static_cast<unsigned long long>(g_depot_route_entries.size());
+        out_result->routes = g_depot_route_entries.empty() ? nullptr : g_depot_route_entries.data();
+        return CAUTH_OK;
+    } catch (const std::bad_alloc&) {
+        return CAUTH_ERROR_OUT_OF_MEMORY;
+    } catch (...) {
+        return CAUTH_ERROR_INTERNAL;
+    }
+}
+
+cauth_result_t cauth_depot_download_manifest_on_route(unsigned int depot_id,
+                                                      unsigned long long manifest_gid,
+                                                      unsigned long long request_code,
+                                                      unsigned int max_count,
+                                                      const char* output_path,
+                                                      const cauth_route_selection_t* route_selection,
+                                                      cauth_file_write_mode_t write_mode,
+                                                      int atomic_write) {
     clear_last_error_detail();
     if (depot_id == 0 || manifest_gid == 0 || request_code == 0 || max_count == 0 ||
         output_path == nullptr || *output_path == '\0') {
@@ -604,6 +770,7 @@ cauth_result_t cauth_depot_download_manifest(unsigned int depot_id,
     }
 
     try {
+        const auto native_route_selection = make_route_selection(route_selection);
         std::ostringstream out;
         std::ostringstream err;
         const auto exit_code = cauth::steam::depot::download_manifest_to_path(
@@ -612,6 +779,7 @@ cauth_result_t cauth_depot_download_manifest(unsigned int depot_id,
             request_code,
             max_count,
             output_path,
+            native_route_selection.empty() ? nullptr : &native_route_selection,
             make_write_options(write_mode, atomic_write),
             out,
             err);
@@ -635,12 +803,31 @@ cauth_result_t cauth_depot_download_manifest(unsigned int depot_id,
     }
 }
 
-cauth_result_t cauth_depot_fetch_key(cauth_client_t* client,
-                                     unsigned long long steam_id,
-                                     unsigned int app_id,
-                                     unsigned int depot_id,
-                                     unsigned int max_count,
-                                     cauth_depot_key_response_t* out_response) {
+cauth_result_t cauth_depot_download_manifest(unsigned int depot_id,
+                                             unsigned long long manifest_gid,
+                                             unsigned long long request_code,
+                                             unsigned int max_count,
+                                             const char* output_path,
+                                             cauth_file_write_mode_t write_mode,
+                                             int atomic_write) {
+    return cauth_depot_download_manifest_on_route(
+        depot_id,
+        manifest_gid,
+        request_code,
+        max_count,
+        output_path,
+        nullptr,
+        write_mode,
+        atomic_write);
+}
+
+cauth_result_t cauth_depot_fetch_key_on_route(cauth_client_t* client,
+                                              unsigned long long steam_id,
+                                              unsigned int app_id,
+                                              unsigned int depot_id,
+                                              unsigned int max_count,
+                                              const cauth_route_selection_t* route_selection,
+                                              cauth_depot_key_response_t* out_response) {
     if (client == nullptr || out_response == nullptr || steam_id == 0 ||
         app_id == 0 || depot_id == 0 || max_count == 0) {
         return CAUTH_ERROR_INVALID_ARGUMENT;
@@ -652,8 +839,12 @@ cauth_result_t cauth_depot_fetch_key(cauth_client_t* client,
     out_response->key_hex = "";
 
     try {
+        const auto native_route_selection = make_route_selection(route_selection);
         cauth::steam::auth::StoredSteamAuthProvider auth_provider{*client->session_repository};
-        cauth::core::depot::DepotCmClient depot_client{auth_provider, std::to_string(steam_id)};
+        cauth::core::depot::DepotCmClient depot_client{
+            auth_provider,
+            std::to_string(steam_id),
+            native_route_selection.empty() ? nullptr : &native_route_selection};
         const auto response = depot_client.fetch_depot_key(app_id, depot_id, max_count);
         if (!response.has_value()) {
             return CAUTH_OK;
@@ -668,6 +859,16 @@ cauth_result_t cauth_depot_fetch_key(cauth_client_t* client,
     } catch (...) {
         return CAUTH_ERROR_INTERNAL;
     }
+}
+
+cauth_result_t cauth_depot_fetch_key(cauth_client_t* client,
+                                     unsigned long long steam_id,
+                                     unsigned int app_id,
+                                     unsigned int depot_id,
+                                     unsigned int max_count,
+                                     cauth_depot_key_response_t* out_response) {
+    return cauth_depot_fetch_key_on_route(
+        client, steam_id, app_id, depot_id, max_count, nullptr, out_response);
 }
 
 cauth_result_t cauth_depot_load_manifest_info(const char* input_path,
@@ -854,6 +1055,7 @@ cauth_result_t cauth_depot_download_chunk(const char* input_path,
                                           int process_chunk,
                                           unsigned int max_count,
                                           const char* output_path,
+                                          const cauth_route_selection_t* route_selection,
                                           cauth_file_write_mode_t write_mode,
                                           int atomic_write) {
     clear_last_error_detail();
@@ -863,6 +1065,7 @@ cauth_result_t cauth_depot_download_chunk(const char* input_path,
     }
 
     try {
+        const auto native_route_selection = make_route_selection(route_selection);
         cauth::steam::depot::LoadedDepotManifest loaded_manifest;
         const auto load_result =
             load_manifest_for_file_operation(input_path, depot_key_hex, loaded_manifest);
@@ -898,6 +1101,7 @@ cauth_result_t cauth_depot_download_chunk(const char* input_path,
             process_chunk != 0,
             max_count,
             output_path,
+            native_route_selection.empty() ? nullptr : &native_route_selection,
             make_write_options(write_mode, atomic_write),
             out,
             err);
@@ -922,6 +1126,7 @@ cauth_result_t cauth_depot_download_file(const char* input_path,
                                          int has_file_index,
                                          unsigned int max_count,
                                          const char* output_path,
+                                         const cauth_route_selection_t* route_selection,
                                          cauth_file_write_mode_t write_mode,
                                          int atomic_write) {
     clear_last_error_detail();
@@ -932,6 +1137,7 @@ cauth_result_t cauth_depot_download_file(const char* input_path,
     }
 
     try {
+        const auto native_route_selection = make_route_selection(route_selection);
         cauth::steam::depot::LoadedDepotManifest loaded_manifest;
         const auto load_result =
             load_manifest_for_file_operation(input_path, depot_key_hex, loaded_manifest);
@@ -957,6 +1163,7 @@ cauth_result_t cauth_depot_download_file(const char* input_path,
             *selected_file_index,
             max_count,
             output_path,
+            native_route_selection.empty() ? nullptr : &native_route_selection,
             make_write_options(write_mode, atomic_write),
             out,
             err);
@@ -978,6 +1185,7 @@ cauth_result_t cauth_depot_download_all_files(const char* input_path,
                                               const char* depot_key_hex,
                                               unsigned int max_count,
                                               const char* output_root,
+                                              const cauth_route_selection_t* route_selection,
                                               cauth_file_write_mode_t write_mode,
                                               int atomic_write) {
     clear_last_error_detail();
@@ -988,6 +1196,7 @@ cauth_result_t cauth_depot_download_all_files(const char* input_path,
     }
 
     try {
+        const auto native_route_selection = make_route_selection(route_selection);
         cauth::steam::depot::LoadedDepotManifest loaded_manifest;
         const auto load_result =
             load_manifest_for_file_operation(input_path, depot_key_hex, loaded_manifest);
@@ -1001,6 +1210,7 @@ cauth_result_t cauth_depot_download_all_files(const char* input_path,
             loaded_manifest,
             max_count,
             output_root,
+            native_route_selection.empty() ? nullptr : &native_route_selection,
             make_write_options(write_mode, atomic_write),
             out,
             err);
@@ -1102,7 +1312,7 @@ const char* cauth_depot_last_error_detail(void) {
     return g_last_error_detail.empty() ? nullptr : g_last_error_detail.c_str();
 }
 
-cauth_result_t cauth_depot_fetch_manifest_request_code(
+cauth_result_t cauth_depot_fetch_manifest_request_code_on_route(
     cauth_client_t* client,
     unsigned long long steam_id,
     unsigned int app_id,
@@ -1111,6 +1321,7 @@ cauth_result_t cauth_depot_fetch_manifest_request_code(
     const char* branch,
     const char* branch_password_hash,
     unsigned int max_count,
+    const cauth_route_selection_t* route_selection,
     cauth_manifest_request_code_response_t* out_response) {
     if (client == nullptr || out_response == nullptr || steam_id == 0 ||
         app_id == 0 || depot_id == 0 || manifest_gid == 0 || max_count == 0) {
@@ -1121,8 +1332,12 @@ cauth_result_t cauth_depot_fetch_manifest_request_code(
     out_response->manifest_request_code = 0;
 
     try {
+        const auto native_route_selection = make_route_selection(route_selection);
         cauth::steam::auth::StoredSteamAuthProvider auth_provider{*client->session_repository};
-        cauth::core::depot::DepotCmClient depot_client{auth_provider, std::to_string(steam_id)};
+        cauth::core::depot::DepotCmClient depot_client{
+            auth_provider,
+            std::to_string(steam_id),
+            native_route_selection.empty() ? nullptr : &native_route_selection};
         cauth::core::depot::ManifestRequestCodeRequest request;
         request.app_id = app_id;
         request.depot_id = depot_id;
@@ -1145,11 +1360,35 @@ cauth_result_t cauth_depot_fetch_manifest_request_code(
     }
 }
 
+cauth_result_t cauth_depot_fetch_manifest_request_code(
+    cauth_client_t* client,
+    unsigned long long steam_id,
+    unsigned int app_id,
+    unsigned int depot_id,
+    unsigned long long manifest_gid,
+    const char* branch,
+    const char* branch_password_hash,
+    unsigned int max_count,
+    cauth_manifest_request_code_response_t* out_response) {
+    return cauth_depot_fetch_manifest_request_code_on_route(
+        client,
+        steam_id,
+        app_id,
+        depot_id,
+        manifest_gid,
+        branch,
+        branch_password_hash,
+        max_count,
+        nullptr,
+        out_response);
+}
+
 cauth_result_t cauth_depot_start_manifest_download(unsigned int depot_id,
                                                    unsigned long long manifest_gid,
                                                    unsigned long long request_code,
                                                    unsigned int max_count,
                                                    const char* output_path,
+                                                   const cauth_route_selection_t* route_selection,
                                                    cauth_file_write_mode_t write_mode,
                                                    int atomic_write,
                                                    unsigned long long* out_handle) {
@@ -1163,9 +1402,16 @@ cauth_result_t cauth_depot_start_manifest_download(unsigned int depot_id,
 
     const auto output_path_copy = std::string{output_path};
     const auto write_options = make_write_options(write_mode, atomic_write);
+    const auto native_route_selection = make_route_selection(route_selection);
     return start_depot_task(
         CAUTH_DEPOT_TASK_MANIFEST_DOWNLOAD,
-        [depot_id, manifest_gid, request_code, max_count, output_path_copy, write_options](
+        [depot_id,
+         manifest_gid,
+         request_code,
+         max_count,
+         output_path_copy,
+         write_options,
+         native_route_selection]( 
             DepotTask& task) {
             std::ostringstream out;
             std::ostringstream err;
@@ -1175,13 +1421,17 @@ cauth_result_t cauth_depot_start_manifest_download(unsigned int depot_id,
                 request_code,
                 max_count,
                 output_path_copy,
+                native_route_selection.empty() ? nullptr : &native_route_selection,
                 write_options,
                 out,
                 err);
             std::lock_guard lock{task.mutex};
             task.succeeded = exit_code == 0;
-            task.canceled = !task.succeeded && message_indicates_cancel(err.str());
-            task.module_status = task.canceled ? "canceled" : (task.succeeded ? "succeeded" : "failed");
+            task.paused = !task.succeeded && message_indicates_pause(err.str());
+            task.canceled = !task.succeeded && !task.paused && message_indicates_cancel(err.str());
+            task.module_status = task.paused ? "paused"
+                                             : (task.canceled ? "canceled"
+                                                              : (task.succeeded ? "succeeded" : "failed"));
             task.message = err.str().empty() ? out.str() : err.str();
             if (task.message.empty()) {
                 task.message = task.succeeded ? "manifest download complete"
@@ -1200,6 +1450,7 @@ cauth_result_t cauth_depot_start_download_chunk(const char* input_path,
                                                 int process_chunk,
                                                 unsigned int max_count,
                                                 const char* output_path,
+                                                const cauth_route_selection_t* route_selection,
                                                 cauth_file_write_mode_t write_mode,
                                                 int atomic_write,
                                                 unsigned long long* out_handle) {
@@ -1238,6 +1489,7 @@ cauth_result_t cauth_depot_start_download_chunk(const char* input_path,
 
     const auto output_path_copy = std::string{output_path};
     const auto write_options = make_write_options(write_mode, atomic_write);
+    const auto native_route_selection = make_route_selection(route_selection);
     return start_depot_task(
         CAUTH_DEPOT_TASK_CHUNK_DOWNLOAD,
         [loaded_manifest = std::move(loaded_manifest),
@@ -1246,7 +1498,8 @@ cauth_result_t cauth_depot_start_download_chunk(const char* input_path,
          process_chunk = process_chunk != 0,
          max_count,
          output_path_copy,
-         write_options](DepotTask& task) {
+         write_options,
+         native_route_selection](DepotTask& task) {
             std::ostringstream out;
             std::ostringstream err;
             const auto exit_code = cauth::steam::depot::download_chunk_from_manifest(
@@ -1256,13 +1509,17 @@ cauth_result_t cauth_depot_start_download_chunk(const char* input_path,
                 process_chunk,
                 max_count,
                 output_path_copy,
+                native_route_selection.empty() ? nullptr : &native_route_selection,
                 write_options,
                 out,
                 err);
             std::lock_guard lock{task.mutex};
             task.succeeded = exit_code == 0;
-            task.canceled = !task.succeeded && message_indicates_cancel(err.str());
-            task.module_status = task.canceled ? "canceled" : (task.succeeded ? "succeeded" : "failed");
+            task.paused = !task.succeeded && message_indicates_pause(err.str());
+            task.canceled = !task.succeeded && !task.paused && message_indicates_cancel(err.str());
+            task.module_status = task.paused ? "paused"
+                                             : (task.canceled ? "canceled"
+                                                              : (task.succeeded ? "succeeded" : "failed"));
             task.message = err.str().empty() ? out.str() : err.str();
             if (task.message.empty()) {
                 task.message = task.succeeded ? "chunk download complete" : "chunk download failed";
@@ -1278,6 +1535,7 @@ cauth_result_t cauth_depot_start_download_file(const char* input_path,
                                                int has_file_index,
                                                unsigned int max_count,
                                                const char* output_path,
+                                               const cauth_route_selection_t* route_selection,
                                                cauth_file_write_mode_t write_mode,
                                                int atomic_write,
                                                unsigned long long* out_handle) {
@@ -1309,13 +1567,15 @@ cauth_result_t cauth_depot_start_download_file(const char* input_path,
 
     const auto output_path_copy = std::string{output_path};
     const auto write_options = make_write_options(write_mode, atomic_write);
+    const auto native_route_selection = make_route_selection(route_selection);
     return start_depot_task(
         CAUTH_DEPOT_TASK_FILE_DOWNLOAD,
         [loaded_manifest = std::move(loaded_manifest),
          selected_file_index = *selected_file_index,
          max_count,
          output_path_copy,
-         write_options](DepotTask& task) {
+         write_options,
+         native_route_selection](DepotTask& task) {
             std::ostringstream out;
             std::ostringstream err;
             const auto exit_code = cauth::steam::depot::download_file_from_manifest(
@@ -1323,13 +1583,17 @@ cauth_result_t cauth_depot_start_download_file(const char* input_path,
                 selected_file_index,
                 max_count,
                 output_path_copy,
+                native_route_selection.empty() ? nullptr : &native_route_selection,
                 write_options,
                 out,
                 err);
             std::lock_guard lock{task.mutex};
             task.succeeded = exit_code == 0;
-            task.canceled = !task.succeeded && message_indicates_cancel(err.str());
-            task.module_status = task.canceled ? "canceled" : (task.succeeded ? "succeeded" : "failed");
+            task.paused = !task.succeeded && message_indicates_pause(err.str());
+            task.canceled = !task.succeeded && !task.paused && message_indicates_cancel(err.str());
+            task.module_status = task.paused ? "paused"
+                                             : (task.canceled ? "canceled"
+                                                              : (task.succeeded ? "succeeded" : "failed"));
             task.message = err.str().empty() ? out.str() : err.str();
             if (task.message.empty()) {
                 task.message = task.succeeded ? "file download complete" : "file download failed";
@@ -1342,6 +1606,7 @@ cauth_result_t cauth_depot_start_download_all_files(const char* input_path,
                                                     const char* depot_key_hex,
                                                     unsigned int max_count,
                                                     const char* output_root,
+                                                    const cauth_route_selection_t* route_selection,
                                                     cauth_file_write_mode_t write_mode,
                                                     int atomic_write,
                                                     unsigned long long* out_handle) {
@@ -1361,25 +1626,31 @@ cauth_result_t cauth_depot_start_download_all_files(const char* input_path,
 
     const auto output_root_copy = std::string{output_root};
     const auto write_options = make_write_options(write_mode, atomic_write);
+    const auto native_route_selection = make_route_selection(route_selection);
     return start_depot_task(
         CAUTH_DEPOT_TASK_ALL_FILES_DOWNLOAD,
         [loaded_manifest = std::move(loaded_manifest),
          max_count,
          output_root_copy,
-         write_options](DepotTask& task) {
+         write_options,
+         native_route_selection](DepotTask& task) {
             std::ostringstream out;
             std::ostringstream err;
             const auto exit_code = cauth::steam::depot::download_all_files_from_manifest(
                 loaded_manifest,
                 max_count,
                 output_root_copy,
+                native_route_selection.empty() ? nullptr : &native_route_selection,
                 write_options,
                 out,
                 err);
             std::lock_guard lock{task.mutex};
             task.succeeded = exit_code == 0;
-            task.canceled = !task.succeeded && message_indicates_cancel(err.str());
-            task.module_status = task.canceled ? "canceled" : (task.succeeded ? "succeeded" : "failed");
+            task.paused = !task.succeeded && message_indicates_pause(err.str());
+            task.canceled = !task.succeeded && !task.paused && message_indicates_cancel(err.str());
+            task.module_status = task.paused ? "paused"
+                                             : (task.canceled ? "canceled"
+                                                              : (task.succeeded ? "succeeded" : "failed"));
             task.message = err.str().empty() ? out.str() : err.str();
             if (task.message.empty()) {
                 task.message = task.succeeded ? "all-files download complete"
@@ -1435,13 +1706,16 @@ cauth_result_t cauth_depot_start_verify_local_files(const char* input_path,
             task.verify_report.module_status = task.verify_report_module_status.c_str();
             task.succeeded = exit_code == 0;
             const auto detail = err.str().empty() ? out.str() : err.str();
-            task.canceled = !task.succeeded && message_indicates_cancel(detail);
+            task.paused = !task.succeeded && message_indicates_pause(detail);
+            task.canceled = !task.succeeded && !task.paused && message_indicates_cancel(detail);
             task.module_status = verify_report.module_status;
             task.message = detail;
             if (task.message.empty()) {
                 task.message = task.succeeded ? "verify complete" : "verify failed";
             }
-            if (task.canceled) {
+            if (task.paused) {
+                task.module_status = "paused";
+            } else if (task.canceled) {
                 task.module_status = "canceled";
             } else if (!task.succeeded && task.module_status == "idle") {
                 task.module_status = "failed";
@@ -1470,6 +1744,7 @@ cauth_result_t cauth_depot_poll_task(unsigned long long handle,
     out_snapshot->active = task->finished.load() ? 0 : 1;
     out_snapshot->succeeded = task->succeeded ? 1 : 0;
     out_snapshot->canceled = task->canceled ? 1 : 0;
+    out_snapshot->paused = task->paused ? 1 : 0;
     out_snapshot->kind = task->kind;
     out_snapshot->module_status = g_depot_task_module_status.c_str();
     out_snapshot->phase = g_depot_task_phase.c_str();
@@ -1487,12 +1762,28 @@ cauth_result_t cauth_depot_poll_task(unsigned long long handle,
     return CAUTH_OK;
 }
 
+void cauth_depot_pause_task(unsigned long long handle) {
+    const auto task = find_depot_task(handle);
+    if (task == nullptr) {
+        return;
+    }
+    task->cancel_requested.store(false);
+    task->pause_requested.store(true);
+    std::lock_guard lock{task->mutex};
+    task->module_status = "pausing";
+    task->phase = "Pause requested";
+    if (task->message.empty()) {
+        task->message = "Pause requested...";
+    }
+}
+
 void cauth_depot_cancel_task(unsigned long long handle) {
     const auto task = find_depot_task(handle);
     if (task == nullptr) {
         return;
     }
     task->cancel_requested.store(true);
+    task->pause_requested.store(false);
     std::lock_guard lock{task->mutex};
     task->module_status = "canceled";
     task->phase = "Cancel requested";

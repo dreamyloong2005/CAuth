@@ -1,6 +1,8 @@
 package com.cauth.android.steam.cloud
 
 import com.cauth.android.CAuthFileWriteOptions
+import com.cauth.android.CAuthRouteProbeSnapshot
+import com.cauth.android.CAuthRouteSelection
 
 enum class SteamCloudDirection(val nativeValue: Int) {
     Pull(0),
@@ -25,6 +27,25 @@ enum class SteamCloudConflictPolicy(val nativeValue: Int) {
     }
 }
 
+enum class SteamCloudBackend(val nativeValue: Int) {
+    Auto(0),
+    Web(1),
+    Cm(2);
+
+    companion object {
+        fun fromNative(value: Int): SteamCloudBackend = entries.firstOrNull {
+            it.nativeValue == value
+        } ?: Auto
+    }
+}
+
+enum class SteamCloudRouteTask(val nativeValue: Int) {
+    List(1),
+    Verify(2),
+    Pull(3),
+    Push(4);
+}
+
 data class SteamCloudRequest(
     val appId: Int,
     val steamId: Long,
@@ -34,6 +55,8 @@ data class SteamCloudRequest(
     val dryRun: Boolean = false,
     val deleteRemoteOrphans: Boolean = false,
     val conflictPolicy: SteamCloudConflictPolicy = SteamCloudConflictPolicy.Default,
+    val backend: SteamCloudBackend = SteamCloudBackend.Auto,
+    val routeSelection: CAuthRouteSelection? = null,
     val localWriteOptions: CAuthFileWriteOptions = CAuthFileWriteOptions(),
 )
 
@@ -113,6 +136,9 @@ data class SteamCloudResultSnapshot(
     val skippedCount: Long,
     val conflictCount: Long,
     val transferredBytes: Long,
+    val resumable: Boolean,
+    val resumed: Boolean,
+    val resumeFromBytes: Long,
     val message: String,
 ) {
     val direction: SteamCloudDirection
@@ -120,6 +146,14 @@ data class SteamCloudResultSnapshot(
 
     val conflictPolicy: SteamCloudConflictPolicy
         get() = SteamCloudConflictPolicy.fromNative(conflictPolicyCode)
+
+    val resumeSummary: String
+        get() = when {
+            resumed && resumeFromBytes > 0L -> "Resumed from $resumeFromBytes bytes"
+            resumed -> "Resumed previous upload state"
+            resumable -> "Fresh resumable transfer"
+            else -> "Not resumable"
+        }
 }
 
 data class SteamCloudModuleTaskSnapshot(
@@ -136,6 +170,7 @@ data class SteamCloudTransferTaskSnapshot(
     val active: Boolean,
     val finished: Boolean,
     val canceled: Boolean,
+    val paused: Boolean,
     val succeeded: Boolean,
     val moduleStatus: String,
     val phase: String,
@@ -143,6 +178,9 @@ data class SteamCloudTransferTaskSnapshot(
     val totalSteps: Long,
     val completedBytes: Long,
     val totalBytes: Long,
+    val resumable: Boolean,
+    val resumed: Boolean,
+    val resumeFromBytes: Long,
     val target: String,
     val message: String,
     val result: SteamCloudResultSnapshot?,
@@ -169,4 +207,14 @@ data class SteamCloudTransferTaskSnapshot(
             totalSteps > 0L -> "${completedSteps}/${totalSteps} steps"
             else -> moduleStatus.ifBlank { phase }
         }
+
+    val resumeSummary: String
+        get() = when {
+            resumed && resumeFromBytes > 0L -> "Resumed from $resumeFromBytes bytes"
+            resumed -> "Resumed previous transfer state"
+            resumable -> "Fresh resumable transfer"
+            else -> "Not resumable"
+        }
 }
+
+typealias SteamCloudRouteProbeSnapshot = CAuthRouteProbeSnapshot

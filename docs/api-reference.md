@@ -281,6 +281,7 @@ Main request/result types:
 Main operations:
 
 - `cauth_steam_cloud_list_remote_files(...)`
+- `cauth_steam_cloud_list_remote_files_via_web_page(...)`
 - `cauth_steam_cloud_pull(...)`
 - `cauth_steam_cloud_push(...)`
 - `cauth_steam_cloud_verify_local_files(...)`
@@ -290,6 +291,7 @@ Main operations:
 `CAuthSteamCloudApi`:
 
 - `listRemoteFiles(...)`
+- `listRemoteFilesViaWebPage(...)`
 - `pull(...)`
 - `push(...)`
 - `verifyLocalFiles(...)`
@@ -315,9 +317,14 @@ return to `idle`, and `moduleTask` is cleared back to `null`.
 ### CLI equivalents
 
 - `cauth steam cloud list`
+- `cauth steam cloud web-page-list`
 - `cauth steam cloud verify`
 - `cauth steam cloud pull`
 - `cauth steam cloud push`
+
+`steam cloud web-page-list` is diagnostic-only. It scrapes the store-page view that a
+web-authenticated session can see, but it does not mean the unsupported Steam Cloud web backend can
+perform formal list, pull, or push workflows.
 
 ## Common task lookup
 

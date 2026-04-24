@@ -72,6 +72,12 @@ fun CAuthSteamCloudPane(
                         text = task.progressSummary,
                         style = MaterialTheme.typography.bodySmall,
                     )
+                    if (task.resumable || task.resumed || task.kindLabel == "Push") {
+                        Text(
+                            text = task.resumeSummary,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                     if (task.target.isNotBlank()) {
                         Text(
                             text = "Target: ${task.target}",
@@ -85,8 +91,16 @@ fun CAuthSteamCloudPane(
                         )
                     }
                     if (task.active) {
-                        Button(onClick = controller::cancelActiveTransfer) {
-                            Text("Cancel Task")
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Button(onClick = controller::pauseActiveTransfer) {
+                                Text("Pause Task")
+                            }
+                            Button(onClick = controller::cancelActiveTransfer) {
+                                Text("Cancel Task")
+                            }
                         }
                     }
                 }
@@ -104,7 +118,10 @@ fun CAuthSteamCloudPane(
                 state = state,
                 controller = controller,
             )
-            CAuthSteamCloudResultsSection(state = state)
+            CAuthSteamCloudResultsSection(
+                state = state,
+                controller = controller,
+            )
 
             if (state.traceLines.isNotEmpty()) {
                 val traceText = state.traceLines.joinToString(separator = "\n")

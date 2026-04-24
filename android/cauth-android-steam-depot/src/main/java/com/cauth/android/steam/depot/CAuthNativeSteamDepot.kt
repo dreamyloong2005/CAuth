@@ -1,5 +1,7 @@
 package com.cauth.android.steam.depot
 
+import com.cauth.android.CAuthRouteProbeSnapshot
+
 internal object CAuthNativeSteamDepot {
     init {
         System.loadLibrary("cauth_steam_depot_ffi")
@@ -12,6 +14,9 @@ internal object CAuthNativeSteamDepot {
         steamId: Long,
         appId: Int,
         maxCount: Int,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
     ): AppBranchListSnapshot
 
     @JvmStatic
@@ -21,6 +26,9 @@ internal object CAuthNativeSteamDepot {
         appId: Int,
         branch: String?,
         maxCount: Int,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
     ): DepotManifestListSnapshot
 
     @JvmStatic
@@ -30,6 +38,9 @@ internal object CAuthNativeSteamDepot {
         appId: Int,
         branch: String?,
         maxCount: Int,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
     ): DepotPreflightSnapshot
 
     @JvmStatic
@@ -39,6 +50,9 @@ internal object CAuthNativeSteamDepot {
         appId: Int,
         depotId: Int,
         maxCount: Int,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
     ): DepotKeySnapshot
 
     @JvmStatic
@@ -51,7 +65,13 @@ internal object CAuthNativeSteamDepot {
         branch: String?,
         branchPasswordHash: String?,
         maxCount: Int,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
     ): ManifestRequestCodeSnapshot
+
+    @JvmStatic
+    external fun nativeProbeDepotDownloadRoutes(maxCount: Int): CAuthRouteProbeSnapshot
 
     @JvmStatic
     external fun nativeDownloadDepotManifest(
@@ -60,6 +80,9 @@ internal object CAuthNativeSteamDepot {
         requestCode: Long,
         maxCount: Int,
         outputPath: String,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
         writeMode: Int,
         atomicWrite: Boolean,
     )
@@ -97,6 +120,9 @@ internal object CAuthNativeSteamDepot {
         processChunk: Boolean,
         maxCount: Int,
         outputPath: String,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
         writeMode: Int,
         atomicWrite: Boolean,
     )
@@ -110,6 +136,9 @@ internal object CAuthNativeSteamDepot {
         hasFileIndex: Boolean,
         maxCount: Int,
         outputPath: String,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
         writeMode: Int,
         atomicWrite: Boolean,
     )
@@ -120,6 +149,9 @@ internal object CAuthNativeSteamDepot {
         depotKeyHex: String,
         maxCount: Int,
         outputRoot: String,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
         writeMode: Int,
         atomicWrite: Boolean,
     )
@@ -131,6 +163,9 @@ internal object CAuthNativeSteamDepot {
         requestCode: Long,
         maxCount: Int,
         outputPath: String,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
         writeMode: Int,
         atomicWrite: Boolean,
     ): Long
@@ -146,6 +181,9 @@ internal object CAuthNativeSteamDepot {
         processChunk: Boolean,
         maxCount: Int,
         outputPath: String,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
         writeMode: Int,
         atomicWrite: Boolean,
     ): Long
@@ -159,6 +197,9 @@ internal object CAuthNativeSteamDepot {
         hasFileIndex: Boolean,
         maxCount: Int,
         outputPath: String,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
         writeMode: Int,
         atomicWrite: Boolean,
     ): Long
@@ -169,6 +210,9 @@ internal object CAuthNativeSteamDepot {
         depotKeyHex: String,
         maxCount: Int,
         outputRoot: String,
+        routeEndpoint: String?,
+        routeProtocol: String?,
+        routeRole: String?,
         writeMode: Int,
         atomicWrite: Boolean,
     ): Long
@@ -183,6 +227,9 @@ internal object CAuthNativeSteamDepot {
 
     @JvmStatic
     external fun nativePollDepotDownloadTask(handle: Long): DepotDownloadTaskSnapshot
+
+    @JvmStatic
+    external fun nativePauseDepotDownloadTask(handle: Long)
 
     @JvmStatic
     external fun nativeCancelDepotDownloadTask(handle: Long)

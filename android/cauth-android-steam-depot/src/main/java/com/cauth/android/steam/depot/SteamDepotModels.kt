@@ -154,6 +154,7 @@ data class DepotDownloadTaskSnapshot(
     val active: Boolean,
     val finished: Boolean,
     val canceled: Boolean,
+    val paused: Boolean,
     val succeeded: Boolean,
     val moduleStatus: String,
     val phase: String,

@@ -34,6 +34,7 @@ typedef struct cauth_login_request {
     const char* device_name;
     int remember_session;
     int platform_type;
+    cauth_route_selection_t route_selection;
 } cauth_login_request_t;
 
 typedef struct cauth_login_result {
@@ -143,9 +144,17 @@ CAUTH_API cauth_result_t cauth_probe_app_id(unsigned long long app_id,
                                             cauth_app_id_probe_t* out_probe);
 CAUTH_API cauth_result_t cauth_get_capabilities(cauth_capabilities_t* out_capabilities);
 CAUTH_API cauth_result_t cauth_cm_probe(cauth_cm_probe_result_t* out_probe);
+CAUTH_API cauth_result_t cauth_cm_probe_on_route(const cauth_route_selection_t* route_selection,
+                                                 cauth_cm_probe_result_t* out_probe);
 CAUTH_API cauth_result_t cauth_cm_logon(cauth_client_t* client,
                                         unsigned long long steam_id,
                                         cauth_cm_logon_result_t* out_result);
+CAUTH_API cauth_result_t cauth_cm_logon_on_route(cauth_client_t* client,
+                                                 unsigned long long steam_id,
+                                                 const cauth_route_selection_t* route_selection,
+                                                 cauth_cm_logon_result_t* out_result);
+CAUTH_API cauth_result_t cauth_auth_probe_cm_routes(unsigned int max_count,
+                                                    cauth_route_probe_result_t* out_result);
 CAUTH_API cauth_result_t cauth_auth_get_saved_session(cauth_client_t* client,
                                                       unsigned long long steam_id,
                                                       cauth_saved_session_t* out_session);

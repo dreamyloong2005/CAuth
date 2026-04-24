@@ -46,12 +46,12 @@ for development and acceptance testing, but it is not required by library consum
 
 ## Current Version
 
-The current development version is `0.5.1`.
+The current development version is `0.6.0`.
 
 Native versioning is controlled by CMake:
 
 ```cmake
-project(CAuth VERSION 0.5.1)
+project(CAuth VERSION 0.6.0)
 ```
 
 CMake generates the native version header at configure time, and the CLI / C ABI read that same
@@ -186,8 +186,22 @@ Depot and cloud smoke checks:
 `steam cloud pull` / `push` now surface live byte progress in the desktop CLI on the WinHTTP path.
 
 When one Steam account has multiple saved session types, depot flows and Steam Cloud `--backend auto`
-prefer the `steam-client` session automatically. If you explicitly choose `--backend web`, CAuth
-prefers a web-capable saved session instead.
+prefer the `steam-client` session automatically.
+
+Steam Cloud should currently be treated as a CM-backed feature. `steam auth login-web` remains
+useful for validating the standalone web-cookie / finalize-login flow, but `steam cloud --backend web`
+is intentionally reported as unsupported until Steam exposes a stable usable web enumerate/download
+path again.
+
+If you still want to inspect what the Steam store page exposes for a web-authenticated session, use
+the diagnostic-only command:
+
+```powershell
+& $cauth steam cloud web-page-list --steam-id 7656119... --app-id 2868840 --remote-root savegames
+```
+
+`steam cloud web-page-list` is read-only and best-effort. It does not prove that Steam Cloud web
+pull or push is usable.
 
 On Android, the feature controllers now expose a higher-level lifecycle on top of the raw native
 results:

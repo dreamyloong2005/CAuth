@@ -41,6 +41,7 @@ SteamLoginResult login_with_cm_auth(cauth::core::session::AuthSessionWriter& ses
     cauth::core::cm::SteamCmConnector connector;
     const auto result = connector.with_service_client(
         options.cm_max_count,
+        request.route_selection.empty() ? nullptr : &request.route_selection,
         [&](const cauth::core::cm::CmServerEndpoint&, cauth::core::cm::CmServiceMethodClient& service_client) {
         CmAuthenticationTransport auth_transport{service_client};
         PlatformSteamPasswordEncryptor password_encryptor;

@@ -31,7 +31,7 @@ int main() {
     }
 
     if (cauth_depot_start_manifest_download(
-            441, 123, 456, 5, "manifest.bin", CAUTH_FILE_WRITE_OVERWRITE, 1, nullptr) !=
+            441, 123, 456, 5, "manifest.bin", nullptr, CAUTH_FILE_WRITE_OVERWRITE, 1, nullptr) !=
         CAUTH_ERROR_INVALID_ARGUMENT) {
         std::cerr << "manifest start download should reject null handle output\n";
         return 1;

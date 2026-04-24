@@ -85,14 +85,26 @@ fun CAuthSteamDepotPane(
                         )
                     }
                     if (task.active) {
-                        Button(onClick = controller::cancelActiveDownload) {
-                            Text("Cancel Task")
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Button(onClick = controller::pauseActiveDownload) {
+                                Text("Pause Task")
+                            }
+                            Button(onClick = controller::cancelActiveDownload) {
+                                Text("Cancel Task")
+                            }
                         }
                     }
                 }
             }
 
             CAuthSteamDepotQuerySection(
+                state = state,
+                controller = controller,
+            )
+            CAuthSteamDepotRouteSection(
                 state = state,
                 controller = controller,
             )

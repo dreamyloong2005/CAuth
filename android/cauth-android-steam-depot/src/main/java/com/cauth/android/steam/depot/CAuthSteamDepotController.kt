@@ -1,6 +1,9 @@
 package com.cauth.android.steam.depot
 
 import com.cauth.android.CAuthClient
+import com.cauth.android.CAuthRouteProbeEntrySnapshot
+import com.cauth.android.CAuthRouteProbeSnapshot
+import com.cauth.android.CAuthRouteSelection
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -19,6 +22,9 @@ data class CAuthSteamDepotState(
     val manifestGidText: String = "",
     val requestCodeText: String = "",
     val branchPasswordHash: String = "",
+    val routeEndpoint: String = "",
+    val routeProtocol: String = "",
+    val routeRole: String = "",
     val outputPath: String = "",
     val manifestPath: String = "",
     val depotKeyHex: String = "",
@@ -38,6 +44,7 @@ data class CAuthSteamDepotState(
     val manifests: DepotManifestListSnapshot? = null,
     val preflight: DepotPreflightSnapshot? = null,
     val depotKey: DepotKeySnapshot? = null,
+    val routeProbe: CAuthRouteProbeSnapshot? = null,
     val manifestRequestCode: ManifestRequestCodeSnapshot? = null,
     val manifestInfo: ManifestInfoSnapshot? = null,
     val manifestFiles: ManifestFileListSnapshot? = null,
@@ -65,6 +72,9 @@ class CAuthSteamDepotController(
     fun setManifestGidText(value: String) = _state.update { it.copy(manifestGidText = sanitizeCompact(value)) }
     fun setRequestCodeText(value: String) = _state.update { it.copy(requestCodeText = sanitizeCompact(value)) }
     fun setBranchPasswordHash(value: String) = _state.update { it.copy(branchPasswordHash = sanitizeCompact(value)) }
+    fun setRouteEndpoint(value: String) = _state.update { it.copy(routeEndpoint = sanitizeTrimmed(value)) }
+    fun setRouteProtocol(value: String) = _state.update { it.copy(routeProtocol = sanitizeTrimmed(value)) }
+    fun setRouteRole(value: String) = _state.update { it.copy(routeRole = sanitizeTrimmed(value)) }
     fun setOutputPath(value: String) = _state.update { it.copy(outputPath = sanitizeTrimmed(value)) }
     fun setManifestPath(value: String) = _state.update { it.copy(manifestPath = sanitizeTrimmed(value)) }
     fun setDepotKeyHex(value: String) = _state.update { it.copy(depotKeyHex = sanitizeCompact(value)) }
@@ -100,6 +110,31 @@ class CAuthSteamDepotController(
                 )
             }
             appendTrace("Download cancel requested handle=$handle")
+        }
+    }
+
+    fun pauseActiveDownload() {
+        val handle = _state.value.downloadTask?.handle ?: return
+        scope.launch {
+            runCatching { api.pauseDownloadTask(handle) }
+            cancelIdleReset()
+            _state.update { current ->
+                val currentTask = current.downloadTask
+                current.copy(
+                    statusText = "Pause requested...",
+                    moduleStatus = "pausing",
+                    busy = true,
+                    moduleTask = DepotModuleTaskSnapshot(
+                        label = current.moduleTask?.label ?: currentTask?.kindLabel ?: "Depot Task",
+                        active = true,
+                        moduleStatus = "pausing",
+                        message = "Pause requested...",
+                        downloadTask = currentTask?.copy(moduleStatus = "pausing"),
+                    ),
+                    downloadTask = currentTask?.copy(moduleStatus = "pausing"),
+                )
+            }
+            appendTrace("Download pause requested handle=$handle")
         }
     }
 
@@ -144,6 +179,62 @@ class CAuthSteamDepotController(
         appendTrace("Prepared key/code selection depotId=$depotId manifestGid=$manifestGid")
     }
 
+    fun probeDownloadRoutes() {
+        val maxCount = _state.value.maxCountText.toIntOrNull()?.coerceIn(1, 100) ?: 20
+        appendTrace("Depot Routes clicked maxCount=$maxCount")
+        beginModuleTask(
+            label = "Probe Download Routes",
+            moduleStatus = "probing",
+            message = "Fetching depot routes...",
+        ) {
+            it.copy(downloadTask = null)
+        }
+        scope.launch {
+            runCatching { api.probeDownloadRoutes(maxCount = maxCount) }
+                .onSuccess { result ->
+                    finishModuleTask(
+                        label = "Probe Download Routes",
+                        moduleStatus = result.moduleStatus.ifBlank { if (result.ok) "succeeded" else "failed" },
+                        message = result.message.ifBlank {
+                            if (result.ok) "Fetched ${result.routes.size} route(s)" else "Depot route probe failed"
+                        },
+                    ) {
+                        it.copy(routeProbe = result)
+                    }
+                    appendTrace(
+                        "Depot Routes returned ok=${result.ok} backend=${result.backend.ifBlank { "(none)" }} routes=${result.routes.size}",
+                    )
+                }
+                .onFailure { failure ->
+                    finishModuleTask(
+                        label = "Probe Download Routes",
+                        moduleStatus = "failed",
+                        message = failure.message ?: "Depot route probe failed",
+                    )
+                    appendTrace("Depot Routes failed: ${failure::class.simpleName}: ${failure.message ?: "(no message)"}")
+                }
+        }
+    }
+
+    fun useRoute(route: CAuthRouteProbeEntrySnapshot) {
+        cancelIdleReset()
+        _state.update {
+            it.copy(
+                routeEndpoint = route.endpoint,
+                routeProtocol = route.protocol,
+                routeRole = route.role,
+                moduleStatus = "idle",
+                statusText = "Route selected: ${route.endpoint}",
+                busy = false,
+                moduleTask = null,
+                downloadTask = null,
+            )
+        }
+        appendTrace(
+            "Depot route selected endpoint=${route.endpoint} protocol=${route.protocol.ifBlank { "(none)" }} role=${route.role.ifBlank { "(none)" }}",
+        )
+    }
+
     fun useManifestFile(path: String) {
         val suggestedOutputPath = suggestFileOutputPath(
             manifestPath = _state.value.manifestPath,
@@ -169,7 +260,13 @@ class CAuthSteamDepotController(
 
     fun fetchBranches() {
         runAction("Fetch Branches") { steamId, appId, maxCount, _ ->
-            val result = api.fetchBranches(steamId = steamId, appId = appId, maxCount = maxCount)
+            val routeSelection = _state.value.routeSelection()
+            val result = api.fetchBranches(
+                steamId = steamId,
+                appId = appId,
+                maxCount = maxCount,
+                routeSelection = routeSelection,
+            )
             finishModuleTask(
                 label = "Fetch Branches",
                 moduleStatus = if (result.present) "succeeded" else "failed",
@@ -187,11 +284,13 @@ class CAuthSteamDepotController(
 
     fun fetchManifests() {
         runAction("Fetch Manifests") { steamId, appId, maxCount, branch ->
+            val routeSelection = _state.value.routeSelection()
             val result = api.fetchManifests(
                 steamId = steamId,
                 appId = appId,
                 branch = branch,
                 maxCount = maxCount,
+                routeSelection = routeSelection,
             )
             finishModuleTask(
                 label = "Fetch Manifests",
@@ -211,11 +310,13 @@ class CAuthSteamDepotController(
     fun fetchPreflight() {
         _state.update { it.copy(preflight = null) }
         runAction("Fetch Preflight") { steamId, appId, maxCount, branch ->
+            val routeSelection = _state.value.routeSelection()
             val result = api.fetchPreflight(
                 steamId = steamId,
                 appId = appId,
                 branch = branch,
                 maxCount = maxCount,
+                routeSelection = routeSelection,
             )
             finishModuleTask(
                 label = "Fetch Preflight",
@@ -236,11 +337,13 @@ class CAuthSteamDepotController(
         _state.update { it.copy(depotKey = null, depotKeyHex = "") }
         runAction("Fetch Depot Key") { steamId, appId, maxCount, _ ->
             val depotId = requirePositiveInt(_state.value.depotIdText, "Depot ID")
+            val routeSelection = _state.value.routeSelection()
             val result = api.fetchDepotKey(
                 steamId = steamId,
                 appId = appId,
                 depotId = depotId,
                 maxCount = maxCount,
+                routeSelection = routeSelection,
             )
             finishModuleTask(
                 label = "Fetch Depot Key",
@@ -267,6 +370,7 @@ class CAuthSteamDepotController(
         runAction("Fetch Manifest Code") { steamId, appId, maxCount, branch ->
             val depotId = requirePositiveInt(_state.value.depotIdText, "Depot ID")
             val manifestGid = requirePositiveLong(_state.value.manifestGidText, "Manifest GID")
+            val routeSelection = _state.value.routeSelection()
             val result = api.fetchManifestRequestCode(
                 steamId = steamId,
                 appId = appId,
@@ -275,6 +379,7 @@ class CAuthSteamDepotController(
                 branch = branch,
                 branchPasswordHash = _state.value.branchPasswordHash.ifBlank { null },
                 maxCount = maxCount,
+                routeSelection = routeSelection,
             )
             finishModuleTask(
                 label = "Fetch Manifest Code",
@@ -321,6 +426,7 @@ class CAuthSteamDepotController(
                     requestCode = requestCode,
                     outputPath = outputPath,
                     maxCount = maxCount,
+                    routeSelection = _state.value.routeSelection(),
                 )
             },
             onSuccess = { _ -> onManifestDownloadCompleted(outputPath) },
@@ -527,6 +633,7 @@ class CAuthSteamDepotController(
                     depotKeyHex = snapshot.depotKeyHex.ifBlank { null },
                     processChunk = snapshot.processChunk,
                     maxCount = maxCount,
+                    routeSelection = snapshot.routeSelection(),
                 )
             },
             onSuccess = { _ ->
@@ -567,6 +674,7 @@ class CAuthSteamDepotController(
                     depotKeyHex = depotKeyHex,
                     filePath = selectedFilePath,
                     maxCount = maxCount,
+                    routeSelection = snapshot.routeSelection(),
                 )
             },
             onSuccess = { _ -> onFileDownloadCompleted(outputPath, selectedFilePath) },
@@ -599,6 +707,7 @@ class CAuthSteamDepotController(
                     outputRoot = outputRoot,
                     depotKeyHex = depotKeyHex,
                     maxCount = maxCount,
+                    routeSelection = snapshot.routeSelection(),
                 )
             },
             onSuccess = { _ -> onAllFilesDownloadCompleted(outputRoot) },
@@ -723,6 +832,15 @@ class CAuthSteamDepotController(
 
     private fun sanitizeTrimmed(value: String): String = value.trim()
 
+    private fun CAuthSteamDepotState.routeSelection(): CAuthRouteSelection? {
+        val selection = CAuthRouteSelection(
+            endpoint = routeEndpoint.ifBlank { null },
+            protocol = routeProtocol.ifBlank { null },
+            role = routeRole.ifBlank { null },
+        )
+        return selection.takeUnless { it.isEmpty() }
+    }
+
     private fun suggestFileOutputPath(manifestPath: String, selectedFilePath: String): String? {
         if (manifestPath.isBlank() || selectedFilePath.isBlank()) {
             return null
@@ -801,6 +919,15 @@ class CAuthSteamDepotController(
                                     )
                                 }
                             }
+                            snapshot.paused -> {
+                                finishModuleTask(
+                                    label = label,
+                                    moduleStatus = "paused",
+                                    message = snapshot.message.ifBlank { "${snapshot.kindLabel} paused" },
+                                    downloadTask = snapshot,
+                                )
+                                appendTrace("$label paused")
+                            }
                             snapshot.canceled -> {
                                 finishModuleTask(
                                     label = label,
@@ -836,6 +963,7 @@ class CAuthSteamDepotController(
         if (snapshot.finished) {
             return when {
                 snapshot.succeeded -> "$label complete"
+                snapshot.paused -> "${snapshot.kindLabel} paused"
                 snapshot.canceled -> "${snapshot.kindLabel} canceled"
                 else -> snapshot.message.ifBlank { "$label failed" }
             }

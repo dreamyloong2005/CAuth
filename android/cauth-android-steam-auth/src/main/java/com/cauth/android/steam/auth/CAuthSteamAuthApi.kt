@@ -1,5 +1,7 @@
 package com.cauth.android.steam.auth
 
+import com.cauth.android.CAuthRouteProbeSnapshot
+import com.cauth.android.CAuthRouteSelection
 import com.cauth.android.CAuthClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +23,9 @@ class CAuthSteamAuthApi(
             deviceName = request.deviceName,
             rememberSession = request.rememberSession,
             platformType = request.platform.nativeValue,
+            routeEndpoint = request.routeSelection?.endpoint,
+            routeProtocol = request.routeSelection?.protocol,
+            routeRole = request.routeSelection?.role,
         )
     }
 
@@ -44,12 +49,31 @@ class CAuthSteamAuthApi(
         CAuthNativeSteamAuth.nativeClearAllSavedAccounts(client.requireNativeHandle())
     }
 
-    suspend fun probeCm(): CmProbeSnapshot = withContext(Dispatchers.IO) {
-        CAuthNativeSteamAuth.nativeCmProbe()
+    suspend fun probeCm(
+        routeSelection: CAuthRouteSelection? = null,
+    ): CmProbeSnapshot = withContext(Dispatchers.IO) {
+        CAuthNativeSteamAuth.nativeCmProbe(
+            routeEndpoint = routeSelection?.endpoint,
+            routeProtocol = routeSelection?.protocol,
+            routeRole = routeSelection?.role,
+        )
     }
 
-    suspend fun logonCm(steamId: Long): CmLogonSnapshot = withContext(Dispatchers.IO) {
-        CAuthNativeSteamAuth.nativeCmLogon(client.requireNativeHandle(), steamId)
+    suspend fun logonCm(
+        steamId: Long,
+        routeSelection: CAuthRouteSelection? = null,
+    ): CmLogonSnapshot = withContext(Dispatchers.IO) {
+        CAuthNativeSteamAuth.nativeCmLogon(
+            handle = client.requireNativeHandle(),
+            steamId = steamId,
+            routeEndpoint = routeSelection?.endpoint,
+            routeProtocol = routeSelection?.protocol,
+            routeRole = routeSelection?.role,
+        )
+    }
+
+    suspend fun probeCmRoutes(maxCount: Int = 20): CAuthRouteProbeSnapshot = withContext(Dispatchers.IO) {
+        CAuthNativeSteamAuth.nativeProbeCmRoutes(maxCount = maxCount)
     }
 }
 

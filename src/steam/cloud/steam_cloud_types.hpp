@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/platform/file_write.hpp"
+#include "core/platform/route_selection.hpp"
 
 #include <cstdint>
 #include <string>
@@ -42,6 +43,7 @@ struct SteamCloudRequest {
     SteamCloudConflictPolicy conflict_policy = SteamCloudConflictPolicy::Default;
     SteamCloudBackend backend = SteamCloudBackend::Auto;
     cauth::core::platform::FileWriteOptions local_write_options{};
+    cauth::core::platform::RouteSelection route_selection;
 };
 
 struct SteamCloudFileEntry {
@@ -89,6 +91,9 @@ struct SteamCloudResult {
     std::uint64_t skipped_count = 0;
     std::uint64_t conflict_count = 0;
     std::uint64_t transferred_bytes = 0;
+    bool resumable = false;
+    bool resumed = false;
+    std::uint64_t resume_from_bytes = 0;
     std::string message;
 };
 

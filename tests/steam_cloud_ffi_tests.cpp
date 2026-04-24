@@ -22,6 +22,12 @@ int main() {
         return 1;
     }
 
+    if (cauth_steam_cloud_list_remote_files_via_web_page(nullptr, nullptr, 0, 0, nullptr) !=
+        CAUTH_ERROR_INVALID_ARGUMENT) {
+        std::cerr << "steam cloud web-page list should reject null arguments\n";
+        return 1;
+    }
+
     if (cauth_steam_cloud_start_pull(nullptr, nullptr, nullptr) != CAUTH_ERROR_INVALID_ARGUMENT) {
         std::cerr << "steam cloud start pull should reject null arguments\n";
         return 1;
@@ -63,6 +69,20 @@ int main() {
     }
     if (list_result.present != 1 || list_result.ok != 0 || list_result.message == nullptr) {
         std::cerr << "steam cloud list should return structured failure metadata\n";
+        cauth_client_destroy(client);
+        return 1;
+    }
+
+    cauth_steam_cloud_file_list_t web_page_list_result{};
+    if (cauth_steam_cloud_list_remote_files_via_web_page(
+            client, &invalid_list_request, 10, 0, &web_page_list_result) != CAUTH_OK) {
+        std::cerr << "steam cloud web-page list should complete at ABI level for missing web material\n";
+        cauth_client_destroy(client);
+        return 1;
+    }
+    if (web_page_list_result.present != 1 || web_page_list_result.ok != 0 ||
+        web_page_list_result.message == nullptr) {
+        std::cerr << "steam cloud web-page list should return structured failure metadata\n";
         cauth_client_destroy(client);
         return 1;
     }
@@ -110,6 +130,11 @@ int main() {
     }
     if (result.conflict_policy != CAUTH_STEAM_CLOUD_CONFLICT_NEWER_WINS) {
         std::cerr << "steam cloud push should preserve conflict policy through FFI\n";
+        cauth_client_destroy(client);
+        return 1;
+    }
+    if (result.resumable != 0 || result.resumed != 0 || result.resume_from_bytes != 0) {
+        std::cerr << "steam cloud push should default resume metadata when no resumable upload is in play\n";
         cauth_client_destroy(client);
         return 1;
     }

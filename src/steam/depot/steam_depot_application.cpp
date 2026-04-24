@@ -1,5 +1,6 @@
 #include "steam/depot/steam_depot_application.hpp"
 
+#include "core/platform/endpoint_route_cache.hpp"
 #include "core/platform/session_repository_factory.hpp"
 #include "steam/cm/cm_message.hpp"
 #include "steam/auth/steam_auth_provider.hpp"
@@ -10,10 +11,12 @@
 #include "steam/depot/manifest_downloader.hpp"
 
 #include <cctype>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <sstream>
 #include <unordered_set>
 
 namespace cauth::steam::depot {
@@ -21,7 +24,14 @@ namespace {
 
 thread_local DepotDownloadProgressHook g_download_progress_hook = nullptr;
 thread_local DepotDownloadCancelHook g_download_cancel_hook = nullptr;
+thread_local DepotDownloadPauseHook g_download_pause_hook = nullptr;
 thread_local void* g_download_hook_user_data = nullptr;
+
+enum class DownloadInterruptAction {
+    None,
+    Pause,
+    Cancel,
+};
 
 std::string lowercase_ascii(std::string_view value) {
     std::string lowered;
@@ -67,6 +77,27 @@ std::uint64_t read_file_size_or_zero(const std::filesystem::path& path) {
     return ec ? 0 : size;
 }
 
+std::optional<std::vector<std::uint8_t>> read_file_bytes(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) {
+        return std::nullopt;
+    }
+    input.seekg(0, std::ios::end);
+    const auto end = input.tellg();
+    if (end < 0) {
+        return std::nullopt;
+    }
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(end));
+    input.seekg(0, std::ios::beg);
+    if (!bytes.empty()) {
+        input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    }
+    if (!input) {
+        return std::nullopt;
+    }
+    return bytes;
+}
+
 LocalVerifyEntry make_local_verify_entry_base(const cauth::core::depot::DepotManifestFile& file,
                                               std::string_view display_name) {
     LocalVerifyEntry entry;
@@ -110,15 +141,27 @@ std::optional<std::filesystem::path> make_safe_manifest_output_path(
     return std::filesystem::path{output_root} / normalized.relative_path;
 }
 
-bool is_download_canceled() {
-    return g_download_cancel_hook != nullptr && g_download_cancel_hook(g_download_hook_user_data);
+DownloadInterruptAction current_download_interrupt_action() {
+    if (g_download_cancel_hook != nullptr && g_download_cancel_hook(g_download_hook_user_data)) {
+        return DownloadInterruptAction::Cancel;
+    }
+    if (g_download_pause_hook != nullptr && g_download_pause_hook(g_download_hook_user_data)) {
+        return DownloadInterruptAction::Pause;
+    }
+    return DownloadInterruptAction::None;
 }
 
-bool fail_if_download_canceled(std::ostream& err) {
-    if (!is_download_canceled()) {
+bool is_download_interrupted() {
+    return current_download_interrupt_action() != DownloadInterruptAction::None;
+}
+
+bool fail_if_download_interrupted(std::ostream& err) {
+    const auto action = current_download_interrupt_action();
+    if (action == DownloadInterruptAction::None) {
         return false;
     }
-    err << "operation canceled\n";
+    err << (action == DownloadInterruptAction::Pause ? "operation paused\n"
+                                                     : "operation canceled\n");
     return true;
 }
 
@@ -130,6 +173,43 @@ void report_download_progress(DepotDownloadProgress progress) {
         progress.module_status = infer_depot_module_status(progress.kind, progress.phase);
     }
     g_download_progress_hook(progress, g_download_hook_user_data);
+}
+
+std::string cdn_server_route_key(const cauth::core::depot::CdnServer& server) {
+    return std::string{server.protocol == cauth::core::depot::CdnServerProtocol::Https ? "https://" : "http://"} +
+           (server.vhost.empty() ? server.host : server.vhost) + ":" + std::to_string(server.port);
+}
+
+std::string build_cdn_probe_url(const cauth::core::depot::CdnServer& server) {
+    std::string url =
+        std::string{server.protocol == cauth::core::depot::CdnServerProtocol::Https ? "https://" : "http://"} +
+        (server.vhost.empty() ? server.host : server.vhost);
+    if ((server.protocol == cauth::core::depot::CdnServerProtocol::Https && server.port != 443) ||
+        (server.protocol == cauth::core::depot::CdnServerProtocol::Http && server.port != 80)) {
+        url += ":" + std::to_string(server.port);
+    }
+    url += "/";
+    return url;
+}
+
+cauth::core::platform::EndpointProbeOutcome probe_cdn_server_latency(
+    const cauth::core::depot::CdnServer& server) {
+    return cauth::core::platform::probe_http_endpoint(build_cdn_probe_url(server), 2000, 2000);
+}
+
+void record_cdn_attempt_result(const cauth::core::depot::CdnServer& server,
+                               bool ok,
+                               std::chrono::steady_clock::duration elapsed) {
+    auto& cache = cauth::core::platform::EndpointRouteCache::instance();
+    const auto route_key = cdn_server_route_key(server);
+    if (ok) {
+        cache.record_success(
+            "steam.depot.cdn",
+            route_key,
+            cauth::core::platform::elapsed_milliseconds(elapsed));
+        return;
+    }
+    cache.record_failure("steam.depot.cdn", route_key);
 }
 
 std::vector<cauth::core::depot::CdnServer> prepare_cdn_servers_for_download(
@@ -154,6 +234,7 @@ std::vector<cauth::core::depot::CdnServer> prepare_cdn_servers_for_download(
 
 std::optional<std::vector<cauth::core::depot::CdnServer>> fetch_cdn_servers_for_download(
     std::uint32_t max_count,
+    const cauth::core::platform::RouteSelection* route_selection,
     std::ostream& err) {
     cauth::core::depot::CdnDirectoryClient cdn_directory;
     const auto requested_server_count = std::max<std::uint32_t>(max_count, 20);
@@ -167,6 +248,30 @@ std::optional<std::vector<cauth::core::depot::CdnServer>> fetch_cdn_servers_for_
     if (prepared.empty()) {
         err << "CDN directory lookup returned no HTTPS-capable servers\n";
         return std::nullopt;
+    }
+    prepared = cauth::core::platform::rank_endpoints_by_route_health(
+        "steam.depot.cdn",
+        std::move(prepared),
+        [](const cauth::core::depot::CdnServer& server) { return cdn_server_route_key(server); },
+        [](const cauth::core::depot::CdnServer& server) { return probe_cdn_server_latency(server); },
+        6);
+    if (route_selection != nullptr && !route_selection->empty()) {
+        std::vector<cauth::core::depot::CdnServer> filtered;
+        filtered.reserve(prepared.size());
+        for (auto& server : prepared) {
+            if (cauth::core::platform::route_selection_matches(
+                    route_selection,
+                    (server.vhost.empty() ? server.host : server.vhost) + ":" + std::to_string(server.port),
+                    server.protocol == cauth::core::depot::CdnServerProtocol::Https ? "https" : "http")) {
+                filtered.push_back(std::move(server));
+            }
+        }
+        if (filtered.empty()) {
+            err << "selected depot download route is not available: "
+                << route_selection->endpoint << '\n';
+            return std::nullopt;
+        }
+        prepared = std::move(filtered);
     }
     return prepared;
 }
@@ -253,7 +358,7 @@ void report_depot_http_progress(const cauth::core::platform::HttpTransferProgres
     });
 }
 
-bool is_depot_http_download_canceled(void*) { return is_download_canceled(); }
+bool is_depot_http_download_interrupted(void*) { return is_download_interrupted(); }
 
 struct DepotFileDownloadOutcome {
     int exit_code = 0;
@@ -261,11 +366,283 @@ struct DepotFileDownloadOutcome {
     std::uint64_t written_bytes = 0;
 };
 
+struct StreamedDepotWriteContext {
+    cauth::core::platform::PreparedFileWrite* prepared_output = nullptr;
+    std::ofstream* output = nullptr;
+    std::string error_message;
+    std::uint64_t committed_bytes = 0;
+};
+
+struct StreamedDepotDownloadOutcome {
+    bool ok = false;
+    bool paused = false;
+    bool canceled = false;
+    std::uint64_t written_bytes = 0;
+    std::string error_message;
+};
+
+struct DepotBatchResumeState {
+    std::string token;
+    std::size_t next_file_index = 0;
+    std::uint64_t completed_bytes = 0;
+};
+
+std::string make_manifest_resume_token(std::uint32_t depot_id,
+                                       std::uint64_t manifest_gid,
+                                       std::uint64_t request_code) {
+    return "depot-manifest-v1:" + std::to_string(depot_id) + ":" +
+           std::to_string(manifest_gid) + ":" + std::to_string(request_code);
+}
+
+std::string make_chunk_resume_token(std::uint32_t depot_id,
+                                    std::string_view chunk_sha_hex,
+                                    bool processed_chunk) {
+    return std::string{"depot-chunk-v1:"} + std::to_string(depot_id) + ":" +
+           std::string{chunk_sha_hex} + ":" + (processed_chunk ? "processed" : "raw");
+}
+
+std::string make_file_resume_token(const LoadedDepotManifest& loaded_manifest,
+                                   const cauth::core::depot::DepotManifestFile& file) {
+    return std::string{"depot-file-v1:"} +
+           std::to_string(loaded_manifest.manifest.depot_id) + ":" +
+           std::to_string(loaded_manifest.manifest.manifest_gid) + ":" +
+           display_manifest_filename(file.filename) + ":" + std::to_string(file.size);
+}
+
+std::string make_all_files_resume_token(const LoadedDepotManifest& loaded_manifest,
+                                        std::string_view output_root) {
+    return std::string{"depot-all-files-v1:"} +
+           std::to_string(loaded_manifest.manifest.depot_id) + ":" +
+           std::to_string(loaded_manifest.manifest.manifest_gid) + ":" +
+           std::string{output_root};
+}
+
+std::filesystem::path make_all_files_resume_state_path(std::string_view output_root) {
+    return std::filesystem::path{std::string{output_root}} / ".cauthdownload.depot.batch.resume";
+}
+
+bool load_all_files_resume_state(const std::filesystem::path& state_path,
+                                 DepotBatchResumeState& state,
+                                 std::string& error_message) {
+    std::ifstream input(state_path, std::ios::binary);
+    if (!input) {
+        error_message = "Failed to open batch resume state: " + state_path.string();
+        return false;
+    }
+
+    std::string version_line;
+    std::string next_file_line;
+    std::string bytes_line;
+    std::string token_line;
+    if (!std::getline(input, version_line) || !std::getline(input, next_file_line) ||
+        !std::getline(input, bytes_line) || !std::getline(input, token_line)) {
+        error_message = "Batch resume state is truncated: " + state_path.string();
+        return false;
+    }
+    if (version_line != "cauth-depot-batch-v1") {
+        error_message = "Batch resume state version is unsupported: " + state_path.string();
+        return false;
+    }
+    if (next_file_line.rfind("next_file=", 0) != 0 || bytes_line.rfind("completed_bytes=", 0) != 0 ||
+        token_line.rfind("token=", 0) != 0) {
+        error_message = "Batch resume state is invalid: " + state_path.string();
+        return false;
+    }
+    try {
+        state.next_file_index = static_cast<std::size_t>(std::stoull(next_file_line.substr(10)));
+        state.completed_bytes = std::stoull(bytes_line.substr(16));
+    } catch (...) {
+        error_message = "Batch resume state counters are invalid: " + state_path.string();
+        return false;
+    }
+    state.token = token_line.substr(6);
+    return true;
+}
+
+bool save_all_files_resume_state(const std::filesystem::path& state_path,
+                                 const DepotBatchResumeState& state,
+                                 std::string& error_message) {
+    std::ofstream output(state_path, std::ios::binary | std::ios::trunc);
+    if (!output) {
+        error_message = "Failed to open batch resume state for writing: " + state_path.string();
+        return false;
+    }
+    output << "cauth-depot-batch-v1\n";
+    output << "next_file=" << state.next_file_index << "\n";
+    output << "completed_bytes=" << state.completed_bytes << "\n";
+    output << "token=" << state.token << "\n";
+    output.close();
+    if (!output) {
+        error_message = "Failed to finalize batch resume state: " + state_path.string();
+        return false;
+    }
+    return true;
+}
+
+bool clear_all_files_resume_state(const std::filesystem::path& state_path, std::string& error_message) {
+    std::error_code ec;
+    const auto exists = std::filesystem::exists(state_path, ec);
+    if (ec) {
+        error_message = "Failed to inspect batch resume state: " + state_path.string();
+        return false;
+    }
+    if (!exists) {
+        return true;
+    }
+    std::filesystem::remove(state_path, ec);
+    if (ec) {
+        error_message = "Failed to remove batch resume state: " + state_path.string();
+        return false;
+    }
+    return true;
+}
+
+std::optional<std::size_t> resolve_resume_chunk_index(
+    const cauth::core::depot::DepotManifestFile& file,
+    std::uint64_t resume_offset) {
+    std::uint64_t offset = 0;
+    for (std::size_t index = 0; index < file.chunks.size(); ++index) {
+        if (offset == resume_offset) {
+            return index;
+        }
+        offset += file.chunks[index].uncompressed_size;
+        if (resume_offset < offset) {
+            return std::nullopt;
+        }
+    }
+    if (offset == resume_offset) {
+        return file.chunks.size();
+    }
+    return std::nullopt;
+}
+
+bool write_streamed_depot_bytes(const std::uint8_t* bytes, std::size_t size, void* user_data) {
+    auto* context = static_cast<StreamedDepotWriteContext*>(user_data);
+    if (context == nullptr || context->prepared_output == nullptr || context->output == nullptr) {
+        return false;
+    }
+    if (size == 0) {
+        return true;
+    }
+    context->output->write(reinterpret_cast<const char*>(bytes),
+                           static_cast<std::streamsize>(size));
+    if (!*context->output) {
+        context->error_message =
+            "Failed to write output path: " + context->prepared_output->write_path().string();
+        return false;
+    }
+    context->committed_bytes += static_cast<std::uint64_t>(size);
+    std::string checkpoint_error;
+    if (!context->prepared_output->save_resume_state(context->committed_bytes, checkpoint_error)) {
+        context->error_message = checkpoint_error;
+        return false;
+    }
+    return true;
+}
+
+StreamedDepotDownloadOutcome stream_http_download_to_prepared_output(
+    cauth::core::platform::HttpRequest request,
+    cauth::core::platform::PreparedFileWrite& prepared_output) {
+    StreamedDepotDownloadOutcome outcome;
+
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        std::ofstream output;
+        std::string open_error;
+        if (!prepared_output.open_binary_output(output, open_error)) {
+            outcome.error_message = open_error;
+            return outcome;
+        }
+
+        StreamedDepotWriteContext write_context;
+        write_context.prepared_output = &prepared_output;
+        write_context.output = &output;
+        write_context.committed_bytes =
+            prepared_output.resume_available() ? prepared_output.resume_offset() : 0;
+
+        const auto use_range =
+            attempt == 0 && prepared_output.resume_available() && prepared_output.resume_offset() > 0;
+        request.use_range = use_range;
+        request.range_start = use_range ? prepared_output.resume_offset() : 0;
+        request.response_write_hook = &write_streamed_depot_bytes;
+        request.response_write_user_data = &write_context;
+
+        const auto response = cauth::core::platform::perform_platform_http_request(request);
+        output.close();
+        if (!output) {
+            prepared_output.preserve_partial();
+            outcome.error_message =
+                "Failed to finalize output path: " + prepared_output.write_path().string();
+            outcome.written_bytes = write_context.committed_bytes;
+            return outcome;
+        }
+
+        if (!response.ok) {
+            const auto action = current_download_interrupt_action();
+            if (action == DownloadInterruptAction::Pause) {
+                prepared_output.preserve_partial();
+                outcome.paused = true;
+                outcome.error_message = "operation paused";
+                outcome.written_bytes = write_context.committed_bytes;
+                return outcome;
+            }
+            if (action == DownloadInterruptAction::Cancel) {
+                std::string discard_error;
+                if (!prepared_output.discard_partial(discard_error) && outcome.error_message.empty()) {
+                    outcome.error_message = discard_error;
+                }
+                outcome.canceled = true;
+                outcome.error_message =
+                    outcome.error_message.empty() ? "operation canceled" : outcome.error_message;
+                outcome.written_bytes = 0;
+                return outcome;
+            }
+            if (use_range && response.error_message == "HTTP range request was not honored") {
+                std::string discard_error;
+                if (!prepared_output.discard_partial(discard_error)) {
+                    outcome.error_message = discard_error;
+                    return outcome;
+                }
+                auto restarted = cauth::core::platform::prepare_file_write(
+                    prepared_output.final_path(), prepared_output.options());
+                if (!restarted.ok()) {
+                    outcome.error_message = restarted.error_message();
+                    return outcome;
+                }
+                prepared_output = std::move(restarted);
+                continue;
+            }
+
+            if (write_context.committed_bytes > 0) {
+                prepared_output.preserve_partial();
+            }
+            outcome.error_message = write_context.error_message.empty() ? response.error_message
+                                                                        : write_context.error_message;
+            outcome.written_bytes = write_context.committed_bytes;
+            return outcome;
+        }
+
+        std::string commit_error;
+        if (!prepared_output.commit(commit_error)) {
+            outcome.error_message = commit_error;
+            outcome.written_bytes = write_context.committed_bytes;
+            return outcome;
+        }
+
+        outcome.ok = true;
+        outcome.written_bytes = write_context.committed_bytes;
+        return outcome;
+    }
+
+    outcome.error_message = "streamed download failed";
+    return outcome;
+}
+
 DepotFileDownloadOutcome download_file_from_manifest_impl(
     const LoadedDepotManifest& loaded_manifest,
     std::size_t file_index,
     std::uint32_t max_count,
     const std::string& output_path,
+    const cauth::core::platform::RouteSelection* route_selection,
     const cauth::core::platform::FileWriteOptions& write_options,
     DepotDownloadKind progress_kind,
     std::uint64_t completed_steps_base,
@@ -282,8 +659,11 @@ DepotFileDownloadOutcome download_file_from_manifest_impl(
 
     const auto& file = loaded_manifest.manifest.files[file_index];
     const auto display_name = display_manifest_filename(file.filename);
-    auto prepared_output =
-        cauth::core::platform::prepare_file_write(std::filesystem::path{output_path}, write_options);
+    auto resumable_write_options = write_options;
+    resumable_write_options.allow_resume = true;
+    resumable_write_options.resume_token = make_file_resume_token(loaded_manifest, file);
+    auto prepared_output = cauth::core::platform::prepare_file_write(
+        std::filesystem::path{output_path}, resumable_write_options);
     if (!prepared_output.ok()) {
         err << prepared_output.error_message() << '\n';
         return {1, false, 0};
@@ -302,7 +682,7 @@ DepotFileDownloadOutcome download_file_from_manifest_impl(
         return {0, true, 0};
     }
 
-    const auto cdn_servers = fetch_cdn_servers_for_download(max_count, err);
+    const auto cdn_servers = fetch_cdn_servers_for_download(max_count, route_selection, err);
     if (!cdn_servers.has_value()) {
         return {1, false, 0};
     }
@@ -315,25 +695,67 @@ DepotFileDownloadOutcome download_file_from_manifest_impl(
     }
 
     cauth::core::depot::ManifestDownloader downloader;
-    std::uint64_t completed_file_bytes = 0;
+    std::uint64_t completed_file_bytes =
+        prepared_output.resume_available() ? prepared_output.resume_offset() : 0;
+    const auto resume_chunk_index =
+        resolve_resume_chunk_index(file, completed_file_bytes);
+    if (!resume_chunk_index.has_value()) {
+        output.close();
+        std::string discard_error;
+        if (!prepared_output.discard_partial(discard_error)) {
+            err << discard_error << '\n';
+            return {1, false, 0};
+        }
+        prepared_output = cauth::core::platform::prepare_file_write(
+            std::filesystem::path{output_path}, resumable_write_options);
+        if (!prepared_output.ok()) {
+            err << prepared_output.error_message() << '\n';
+            return {1, false, 0};
+        }
+        if (!prepared_output.open_binary_output(output, write_error)) {
+            err << write_error << '\n';
+            return {1, false, 0};
+        }
+        completed_file_bytes = 0;
+    }
     report_download_progress(DepotDownloadProgress{
         progress_kind,
         std::string{phase_prefix}.append(" (preparing)"),
         display_name,
         completed_steps_base,
         total_steps,
-        completed_bytes_base,
+        completed_bytes_base + completed_file_bytes,
         total_bytes,
     });
-    for (std::size_t current_chunk_index = 0; current_chunk_index < file.chunks.size();
+    for (std::size_t current_chunk_index =
+             resume_chunk_index.value_or(0);
+         current_chunk_index < file.chunks.size();
          ++current_chunk_index) {
-        if (fail_if_download_canceled(err)) {
+        if (fail_if_download_interrupted(err)) {
+            const auto action = current_download_interrupt_action();
+            if (action == DownloadInterruptAction::Pause) {
+                prepared_output.preserve_partial();
+            } else if (action == DownloadInterruptAction::Cancel) {
+                std::string discard_error;
+                if (!prepared_output.discard_partial(discard_error) && !discard_error.empty()) {
+                    err << discard_error << '\n';
+                }
+            }
             return {1, false, 0};
         }
 
         bool chunk_written = false;
         for (const auto& server : *cdn_servers) {
-            if (fail_if_download_canceled(err)) {
+            if (fail_if_download_interrupted(err)) {
+                const auto action = current_download_interrupt_action();
+                if (action == DownloadInterruptAction::Pause) {
+                    prepared_output.preserve_partial();
+                } else if (action == DownloadInterruptAction::Cancel) {
+                    std::string discard_error;
+                    if (!prepared_output.discard_partial(discard_error) && !discard_error.empty()) {
+                        err << discard_error << '\n';
+                    }
+                }
                 return {1, false, 0};
             }
 
@@ -358,6 +780,7 @@ DepotFileDownloadOutcome download_file_from_manifest_impl(
             });
             out << "Downloading file chunk " << (current_chunk_index + 1) << '/'
                 << file.chunks.size() << " from " << server.vhost << "...\n";
+            const auto download_started = std::chrono::steady_clock::now();
             const auto response = downloader.download_raw_chunk(
                 server,
                 cauth::core::depot::ChunkDownloadRequest{
@@ -366,15 +789,26 @@ DepotFileDownloadOutcome download_file_from_manifest_impl(
                 },
                 cauth::core::platform::HttpRequestCallbacks{
                     &report_depot_http_progress,
-                    &is_depot_http_download_canceled,
+                    &is_depot_http_download_interrupted,
                     &progress_context,
                 });
+            record_cdn_attempt_result(
+                server, response.ok, std::chrono::steady_clock::now() - download_started);
             if (!response.ok) {
                 err << "Chunk download failed from " << response.url << ": "
                     << response.error_message << '\n';
                 continue;
             }
-            if (fail_if_download_canceled(err)) {
+            if (fail_if_download_interrupted(err)) {
+                const auto action = current_download_interrupt_action();
+                if (action == DownloadInterruptAction::Pause) {
+                    prepared_output.preserve_partial();
+                } else if (action == DownloadInterruptAction::Cancel) {
+                    std::string discard_error;
+                    if (!prepared_output.discard_partial(discard_error) && !discard_error.empty()) {
+                        err << discard_error << '\n';
+                    }
+                }
                 return {1, false, 0};
             }
 
@@ -384,7 +818,7 @@ DepotFileDownloadOutcome download_file_from_manifest_impl(
                 err << "Chunk process failed: " << processed.error_message << '\n';
                 continue;
             }
-            if (fail_if_download_canceled(err)) {
+            if (fail_if_download_interrupted(err)) {
                 return {1, false, 0};
             }
 
@@ -397,6 +831,10 @@ DepotFileDownloadOutcome download_file_from_manifest_impl(
             }
 
             completed_file_bytes += static_cast<std::uint64_t>(processed.bytes.size());
+            if (!prepared_output.save_resume_state(completed_file_bytes, write_error)) {
+                err << write_error << '\n';
+                return {1, false, 0};
+            }
             report_download_progress(DepotDownloadProgress{
                 progress_kind,
                 std::string{phase_prefix}.append(" chunk ").append(
@@ -413,6 +851,7 @@ DepotFileDownloadOutcome download_file_from_manifest_impl(
         }
 
         if (!chunk_written) {
+            prepared_output.preserve_partial();
             err << "File download failed at chunk " << current_chunk_index << '\n';
             return {1, false, 0};
         }
@@ -444,26 +883,102 @@ DepotFileDownloadOutcome download_file_from_manifest_impl(
 
 void set_current_thread_depot_download_hooks(DepotDownloadProgressHook progress_hook,
                                              DepotDownloadCancelHook cancel_hook,
+                                             DepotDownloadPauseHook pause_hook,
                                              void* user_data) {
     g_download_progress_hook = progress_hook;
     g_download_cancel_hook = cancel_hook;
+    g_download_pause_hook = pause_hook;
     g_download_hook_user_data = user_data;
 }
 
 void clear_current_thread_depot_download_hooks() {
     g_download_progress_hook = nullptr;
     g_download_cancel_hook = nullptr;
+    g_download_pause_hook = nullptr;
     g_download_hook_user_data = nullptr;
+}
+
+DepotDownloadRouteReport probe_download_routes(
+    std::uint32_t max_count,
+    const cauth::core::platform::RouteSelection* route_selection) {
+    DepotDownloadRouteReport report;
+    std::ostringstream err;
+    const auto cdn_servers = fetch_cdn_servers_for_download(max_count, route_selection, err);
+    if (!cdn_servers.has_value()) {
+        report.ok = false;
+        report.module_status = "failed";
+        report.message = trim_trailing_line_breaks(err.str());
+        return report;
+    }
+
+    auto& cache = cauth::core::platform::EndpointRouteCache::instance();
+    report.ok = true;
+    report.module_status = "succeeded";
+    report.message = "ok";
+    report.routes.reserve(cdn_servers->size());
+    for (const auto& server : *cdn_servers) {
+        const auto snapshot = cache.snapshot("steam.depot.cdn", cdn_server_route_key(server));
+        report.routes.push_back(DepotDownloadRouteEntry{
+            server.vhost.empty() ? server.host : server.vhost,
+            server.protocol == cauth::core::depot::CdnServerProtocol::Https ? "https" : "http",
+            server.type,
+            server.use_as_proxy,
+            snapshot.has_fresh_latency,
+            snapshot.latency_ms,
+            snapshot.has_recent_success,
+            snapshot.has_recent_failure,
+            snapshot.success_count,
+            snapshot.failure_count,
+        });
+    }
+    return report;
+}
+
+int print_download_routes(std::uint32_t max_count,
+                          const cauth::core::platform::RouteSelection* route_selection,
+                          std::ostream& out,
+                          std::ostream& err) {
+    const auto report = probe_download_routes(max_count, route_selection);
+    if (!report.ok) {
+        err << report.message << '\n';
+        return 1;
+    }
+
+    out << "Depot CDN routes: " << report.routes.size() << '\n';
+    for (std::size_t index = 0; index < report.routes.size(); ++index) {
+        const auto& route = report.routes[index];
+        out << "  [" << (index + 1) << "] " << route.protocol << " " << route.endpoint
+            << " latency="
+            << (route.latency_known ? std::to_string(route.latency_ms) + "ms" : "unknown")
+            << " recent_success=" << (route.recent_success ? "true" : "false")
+            << " recent_failure=" << (route.recent_failure ? "true" : "false")
+            << " success_count=" << route.success_count
+            << " failure_count=" << route.failure_count;
+        if (!route.server_type.empty()) {
+            out << " type=" << route.server_type;
+        }
+        if (route.use_as_proxy) {
+            out << " proxy=true";
+        }
+        out << '\n';
+    }
+    return 0;
 }
 
 std::optional<cauth::core::depot::AppInfo> fetch_app_info_from_cm(std::uint64_t steam_id,
                                                                   std::uint32_t app_id,
                                                                   std::uint32_t max_count,
+                                                                  const cauth::core::platform::RouteSelection* route_selection,
                                                                   std::ostream& out,
                                                                   std::ostream& err) {
     const auto store = cauth::core::platform::make_platform_session_repository();
     cauth::steam::auth::StoredSteamAuthProvider auth_provider{*store};
-    cauth::core::depot::DepotCmClient depot_client{auth_provider, std::to_string(steam_id), &out, &err};
+    cauth::core::depot::DepotCmClient depot_client{
+        auth_provider,
+        std::to_string(steam_id),
+        route_selection,
+        &out,
+        &err};
     return depot_client.fetch_app_info(app_id, max_count);
 }
 
@@ -472,11 +987,17 @@ std::optional<cauth::core::depot::DepotDecryptionKeyResponse> fetch_depot_key_fr
     std::uint32_t app_id,
     std::uint32_t depot_id,
     std::uint32_t max_count,
+    const cauth::core::platform::RouteSelection* route_selection,
     std::ostream& out,
     std::ostream& err) {
     const auto store = cauth::core::platform::make_platform_session_repository();
     cauth::steam::auth::StoredSteamAuthProvider auth_provider{*store};
-    cauth::core::depot::DepotCmClient depot_client{auth_provider, std::to_string(steam_id), &out, &err};
+    cauth::core::depot::DepotCmClient depot_client{
+        auth_provider,
+        std::to_string(steam_id),
+        route_selection,
+        &out,
+        &err};
     return depot_client.fetch_depot_key(app_id, depot_id, max_count);
 }
 
@@ -485,20 +1006,28 @@ fetch_manifest_request_code_from_cm(
     std::uint64_t steam_id,
     const cauth::core::depot::ManifestRequestCodeRequest& request,
     std::uint32_t max_count,
+    const cauth::core::platform::RouteSelection* route_selection,
     std::ostream& out,
     std::ostream& err) {
     const auto store = cauth::core::platform::make_platform_session_repository();
     cauth::steam::auth::StoredSteamAuthProvider auth_provider{*store};
-    cauth::core::depot::DepotCmClient depot_client{auth_provider, std::to_string(steam_id), &out, &err};
+    cauth::core::depot::DepotCmClient depot_client{
+        auth_provider,
+        std::to_string(steam_id),
+        route_selection,
+        &out,
+        &err};
     return depot_client.fetch_manifest_request_code(request, max_count);
 }
 
 int print_branches(std::uint64_t steam_id,
                    std::uint32_t app_id,
                    std::uint32_t max_count,
+                   const cauth::core::platform::RouteSelection* route_selection,
                    std::ostream& out,
                    std::ostream& err) {
-    const auto app_info = fetch_app_info_from_cm(steam_id, app_id, max_count, out, err);
+    const auto app_info = fetch_app_info_from_cm(
+        steam_id, app_id, max_count, route_selection, out, err);
     if (!app_info.has_value()) return 1;
     out << "Branches for app " << app_id << ": " << app_info->branches.size() << '\n';
     for (const auto& branch_info : app_info->branches) {
@@ -514,9 +1043,11 @@ int print_manifests(std::uint64_t steam_id,
                     std::uint32_t app_id,
                     std::string_view branch,
                     std::uint32_t max_count,
+                    const cauth::core::platform::RouteSelection* route_selection,
                     std::ostream& out,
                     std::ostream& err) {
-    const auto app_info = fetch_app_info_from_cm(steam_id, app_id, max_count, out, err);
+    const auto app_info = fetch_app_info_from_cm(
+        steam_id, app_id, max_count, route_selection, out, err);
     if (!app_info.has_value()) return 1;
     out << "Depot manifests for app " << app_id << " branch " << branch << '\n';
     for (const auto& depot : app_info->depots) {
@@ -535,9 +1066,11 @@ int print_preflight(std::uint64_t steam_id,
                     std::uint32_t app_id,
                     std::string_view branch,
                     std::uint32_t max_count,
+                    const cauth::core::platform::RouteSelection* route_selection,
                     std::ostream& out,
                     std::ostream& err) {
-    const auto app_info = fetch_app_info_from_cm(steam_id, app_id, max_count, out, err);
+    const auto app_info = fetch_app_info_from_cm(
+        steam_id, app_id, max_count, route_selection, out, err);
     if (!app_info.has_value()) return 1;
     out << "Preflight for app " << app_id << " branch " << branch << '\n';
     for (const auto& depot : app_info->depots) {
@@ -556,9 +1089,11 @@ int print_depot_key(std::uint64_t steam_id,
                     std::uint32_t app_id,
                     std::uint32_t depot_id,
                     std::uint32_t max_count,
+                    const cauth::core::platform::RouteSelection* route_selection,
                     std::ostream& out,
                     std::ostream& err) {
-    const auto response = fetch_depot_key_from_cm(steam_id, app_id, depot_id, max_count, out, err);
+    const auto response = fetch_depot_key_from_cm(
+        steam_id, app_id, depot_id, max_count, route_selection, out, err);
     if (!response.has_value()) return 1;
     out << "Depot key for app " << app_id << " depot " << depot_id << ": eresult=" << response->eresult;
     if (response->depot_id != 0) out << " response_depot=" << response->depot_id;
@@ -573,6 +1108,7 @@ int print_manifest_request_code(std::uint64_t steam_id,
                                 std::uint64_t manifest_gid,
                                 std::string_view branch,
                                 std::uint32_t max_count,
+                                const cauth::core::platform::RouteSelection* route_selection,
                                 std::ostream& out,
                                 std::ostream& err) {
     const auto response = fetch_manifest_request_code_from_cm(
@@ -585,6 +1121,7 @@ int print_manifest_request_code(std::uint64_t steam_id,
             {},
         },
         max_count,
+        route_selection,
         out,
         err);
     if (!response.has_value()) return 1;
@@ -788,7 +1325,7 @@ int verify_local_files_against_manifest(const LoadedDepotManifest& loaded_manife
         if (cauth::core::depot::depot_file_is_directory(file)) {
             continue;
         }
-        if (fail_if_download_canceled(err)) {
+        if (fail_if_download_interrupted(err)) {
             if (report != nullptr) {
                 report->fatal_error = true;
                 report->module_status = "failed";
@@ -991,11 +1528,16 @@ int download_manifest_to_path(std::uint32_t depot_id,
                               std::uint64_t request_code,
                               std::uint32_t max_count,
                               const std::string& output_path,
+                              const cauth::core::platform::RouteSelection* route_selection,
                               const cauth::core::platform::FileWriteOptions& write_options,
                               std::ostream& out,
                               std::ostream& err) {
-    auto prepared_output =
-        cauth::core::platform::prepare_file_write(std::filesystem::path{output_path}, write_options);
+    auto resumable_write_options = write_options;
+    resumable_write_options.allow_resume = true;
+    resumable_write_options.resume_token =
+        make_manifest_resume_token(depot_id, manifest_gid, request_code);
+    auto prepared_output = cauth::core::platform::prepare_file_write(
+        std::filesystem::path{output_path}, resumable_write_options);
     if (!prepared_output.ok()) {
         err << prepared_output.error_message() << '\n';
         return 1;
@@ -1014,12 +1556,11 @@ int download_manifest_to_path(std::uint32_t depot_id,
         return 0;
     }
 
-    const auto cdn_servers = fetch_cdn_servers_for_download(max_count, err);
+    const auto cdn_servers = fetch_cdn_servers_for_download(max_count, route_selection, err);
     if (!cdn_servers.has_value()) {
         return 1;
     }
 
-    cauth::core::depot::ManifestDownloader downloader;
     const cauth::core::depot::ManifestDownloadRequest download_request{
         depot_id,
         manifest_gid,
@@ -1027,7 +1568,7 @@ int download_manifest_to_path(std::uint32_t depot_id,
     };
     const auto total_servers = static_cast<std::uint64_t>(cdn_servers->size());
     for (std::size_t server_index = 0; server_index < cdn_servers->size(); ++server_index) {
-        if (fail_if_download_canceled(err)) {
+        if (fail_if_download_interrupted(err)) {
             return 1;
         }
         const auto& server = (*cdn_servers)[server_index];
@@ -1051,25 +1592,30 @@ int download_manifest_to_path(std::uint32_t depot_id,
             0,
         });
         out << "Downloading manifest from " << server.vhost << "...\n";
-        const auto result = downloader.download_raw_manifest(
-            server,
-            download_request,
-            cauth::core::platform::HttpRequestCallbacks{
-                &report_depot_http_progress,
-                &is_depot_http_download_canceled,
-                &progress_context,
-            });
+        const auto download_started = std::chrono::steady_clock::now();
+        cauth::core::platform::HttpRequest request;
+        request.url = cauth::core::depot::build_manifest_url(server, download_request);
+        request.connect_timeout_ms = 15000;
+        request.read_timeout_ms = 0;
+        request.callbacks = cauth::core::platform::HttpRequestCallbacks{
+            &report_depot_http_progress,
+            &is_depot_http_download_interrupted,
+            &progress_context,
+        };
+        const auto result = stream_http_download_to_prepared_output(request, prepared_output);
+        record_cdn_attempt_result(
+            server, result.ok, std::chrono::steady_clock::now() - download_started);
+        if (result.paused) {
+            err << "operation paused\n";
+            return 1;
+        }
+        if (result.canceled) {
+            err << "operation canceled\n";
+            return 1;
+        }
         if (!result.ok) {
-            err << "Manifest download failed from " << result.url << ": " << result.error_message << '\n';
+            err << "Manifest download failed from " << request.url << ": " << result.error_message << '\n';
             continue;
-        }
-        if (fail_if_download_canceled(err)) {
-            return 1;
-        }
-        std::string write_error;
-        if (!prepared_output.write_all(result.bytes, write_error)) {
-            err << write_error << '\n';
-            return 1;
         }
         report_download_progress(DepotDownloadProgress{
             DepotDownloadKind::Manifest,
@@ -1077,10 +1623,11 @@ int download_manifest_to_path(std::uint32_t depot_id,
             output_path,
             total_servers,
             total_servers,
-            static_cast<std::uint64_t>(result.bytes.size()),
-            static_cast<std::uint64_t>(result.bytes.size()),
+            result.written_bytes,
+            result.written_bytes,
         });
-        out << "Manifest downloaded: " << result.bytes.size() << " bytes -> " << output_path << '\n';
+        out << "Manifest downloaded: " << result.written_bytes << " bytes -> " << output_path
+            << '\n';
         return 0;
     }
 
@@ -1094,13 +1641,34 @@ int download_chunk_from_manifest(const LoadedDepotManifest& loaded_manifest,
                                  bool process_chunk,
                                  std::uint32_t max_count,
                                  const std::string& output_path,
+                                 const cauth::core::platform::RouteSelection* route_selection,
                                  const cauth::core::platform::FileWriteOptions& write_options,
                                  std::ostream& out,
                                  std::ostream& err) {
     const auto& file = loaded_manifest.manifest.files[file_index];
     const auto display_name = display_manifest_filename(file.filename);
-    auto prepared_output =
-        cauth::core::platform::prepare_file_write(std::filesystem::path{output_path}, write_options);
+    const auto cdn_servers = fetch_cdn_servers_for_download(max_count, route_selection, err);
+    if (!cdn_servers.has_value()) return 1;
+
+    const auto& selected_chunk = file.chunks[chunk_index];
+    const auto chunk_sha_hex = cauth::core::cm::bytes_to_hex(selected_chunk.sha);
+    const auto total_servers = static_cast<std::uint64_t>(cdn_servers->size());
+    report_download_progress(DepotDownloadProgress{
+        DepotDownloadKind::Chunk,
+        "Preparing chunk download",
+        display_name,
+        0,
+        1,
+        0,
+        process_chunk ? selected_chunk.uncompressed_size : selected_chunk.compressed_size,
+    });
+
+    auto effective_write_options = write_options;
+    effective_write_options.allow_resume = !process_chunk;
+    effective_write_options.resume_token = make_chunk_resume_token(
+        loaded_manifest.manifest.depot_id, chunk_sha_hex, false);
+    auto prepared_output = cauth::core::platform::prepare_file_write(
+        std::filesystem::path{output_path}, effective_write_options);
     if (!prepared_output.ok()) {
         err << prepared_output.error_message() << '\n';
         return 1;
@@ -1113,31 +1681,31 @@ int download_chunk_from_manifest(const LoadedDepotManifest& loaded_manifest,
             1,
             1,
             0,
-            process_chunk ? file.chunks[chunk_index].uncompressed_size
-                          : file.chunks[chunk_index].compressed_size,
+            process_chunk ? selected_chunk.uncompressed_size
+                          : selected_chunk.compressed_size,
         });
         out << "Skipping existing output for chunk " << (chunk_index + 1) << "/"
             << file.chunks.size() << ": " << output_path << '\n';
         return 0;
     }
 
-    const auto cdn_servers = fetch_cdn_servers_for_download(max_count, err);
-    if (!cdn_servers.has_value()) return 1;
+    const auto raw_chunk_path =
+        std::filesystem::path{output_path}.string() + ".cauthdownload.raw";
+    cauth::core::platform::FileWriteOptions raw_write_options;
+    raw_write_options.mode = cauth::core::platform::FileWriteMode::Overwrite;
+    raw_write_options.atomic_write = false;
+    raw_write_options.allow_resume = true;
+    raw_write_options.resume_token = make_chunk_resume_token(
+        loaded_manifest.manifest.depot_id, chunk_sha_hex, process_chunk);
+    auto prepared_raw_chunk = cauth::core::platform::prepare_file_write(
+        std::filesystem::path{raw_chunk_path}, raw_write_options);
+    if (process_chunk && !prepared_raw_chunk.ok()) {
+        err << prepared_raw_chunk.error_message() << '\n';
+        return 1;
+    }
 
-    cauth::core::depot::ManifestDownloader downloader;
-    const auto& selected_chunk = file.chunks[chunk_index];
-    const auto total_servers = static_cast<std::uint64_t>(cdn_servers->size());
-    report_download_progress(DepotDownloadProgress{
-        DepotDownloadKind::Chunk,
-        "Preparing chunk download",
-        display_name,
-        0,
-        1,
-        0,
-        process_chunk ? selected_chunk.uncompressed_size : selected_chunk.compressed_size,
-    });
     for (std::size_t server_index = 0; server_index < cdn_servers->size(); ++server_index) {
-        if (fail_if_download_canceled(err)) {
+        if (fail_if_download_interrupted(err)) {
             return 1;
         }
         const auto& server = (*cdn_servers)[server_index];
@@ -1162,44 +1730,70 @@ int download_chunk_from_manifest(const LoadedDepotManifest& loaded_manifest,
         });
         out << "Downloading file chunk " << (chunk_index + 1) << '/' << file.chunks.size()
             << " from " << server.vhost << "...\n";
-        const auto response = downloader.download_raw_chunk(
+        const auto download_started = std::chrono::steady_clock::now();
+        cauth::core::platform::HttpRequest request;
+        request.url = cauth::core::depot::build_chunk_url(
             server,
-            cauth::core::depot::ChunkDownloadRequest{loaded_manifest.manifest.depot_id, selected_chunk.sha},
-            cauth::core::platform::HttpRequestCallbacks{
-                &report_depot_http_progress,
-                &is_depot_http_download_canceled,
-                &progress_context,
+            cauth::core::depot::ChunkDownloadRequest{
+                loaded_manifest.manifest.depot_id,
+                selected_chunk.sha,
             });
+        request.connect_timeout_ms = 15000;
+        request.read_timeout_ms = 0;
+        request.callbacks = cauth::core::platform::HttpRequestCallbacks{
+            &report_depot_http_progress,
+            &is_depot_http_download_interrupted,
+            &progress_context,
+        };
+        auto& target_output = process_chunk ? prepared_raw_chunk : prepared_output;
+        const auto response = stream_http_download_to_prepared_output(request, target_output);
+        record_cdn_attempt_result(
+            server, response.ok, std::chrono::steady_clock::now() - download_started);
+        if (response.paused) {
+            err << "operation paused\n";
+            return 1;
+        }
+        if (response.canceled) {
+            err << "operation canceled\n";
+            return 1;
+        }
         if (!response.ok) {
-            err << "Chunk download failed from " << response.url << ": "
+            err << "Chunk download failed from " << request.url << ": "
                 << response.error_message << '\n';
             continue;
         }
-        if (fail_if_download_canceled(err)) {
-            return 1;
-        }
 
-        std::vector<std::uint8_t> output_bytes = response.bytes;
+        std::uint64_t output_size = response.written_bytes;
         if (process_chunk) {
             if (!loaded_manifest.depot_key.has_value()) {
                 err << "Chunk process failed: depot key is required\n";
                 return 1;
             }
+            const auto raw_bytes = read_file_bytes(prepared_raw_chunk.final_path());
+            if (!raw_bytes.has_value()) {
+                err << "Chunk process failed: failed to read " << prepared_raw_chunk.final_path().string()
+                    << '\n';
+                return 1;
+            }
             const auto processed = cauth::core::depot::process_depot_chunk(
                 selected_chunk,
-                response.bytes,
+                *raw_bytes,
                 *loaded_manifest.depot_key);
-            if (!processed.ok) { err << "Chunk process failed: " << processed.error_message << '\n'; continue; }
-            output_bytes = std::move(processed.bytes);
-        }
-        if (fail_if_download_canceled(err)) {
-            return 1;
-        }
-
-        std::string write_error;
-        if (!prepared_output.write_all(output_bytes, write_error)) {
-            err << write_error << '\n';
-            return 1;
+            if (!processed.ok) {
+                err << "Chunk process failed: " << processed.error_message << '\n';
+                return 1;
+            }
+            std::string write_error;
+            if (!prepared_output.write_all(processed.bytes, write_error)) {
+                err << write_error << '\n';
+                return 1;
+            }
+            std::string discard_error;
+            if (!prepared_raw_chunk.discard_partial(discard_error) && !discard_error.empty()) {
+                err << discard_error << '\n';
+                return 1;
+            }
+            output_size = processed.bytes.size();
         }
         report_download_progress(DepotDownloadProgress{
             DepotDownloadKind::Chunk,
@@ -1207,10 +1801,10 @@ int download_chunk_from_manifest(const LoadedDepotManifest& loaded_manifest,
             display_name,
             1,
             1,
-            static_cast<std::uint64_t>(output_bytes.size()),
+            output_size,
             process_chunk ? selected_chunk.uncompressed_size : selected_chunk.compressed_size,
         });
-        out << "Chunk downloaded: " << output_bytes.size() << " bytes -> " << output_path << '\n';
+        out << "Chunk downloaded: " << output_size << " bytes -> " << output_path << '\n';
         return 0;
     }
 
@@ -1222,6 +1816,7 @@ int download_file_from_manifest(const LoadedDepotManifest& loaded_manifest,
                                 std::size_t file_index,
                                 std::uint32_t max_count,
                                 const std::string& output_path,
+                                const cauth::core::platform::RouteSelection* route_selection,
                                 const cauth::core::platform::FileWriteOptions& write_options,
                                 std::ostream& out,
                                 std::ostream& err) {
@@ -1232,6 +1827,7 @@ int download_file_from_manifest(const LoadedDepotManifest& loaded_manifest,
         file_index,
         max_count,
         output_path,
+        route_selection,
         write_options,
         DepotDownloadKind::File,
         0,
@@ -1255,6 +1851,7 @@ int download_file_from_manifest(const LoadedDepotManifest& loaded_manifest,
 int download_all_files_from_manifest(const LoadedDepotManifest& loaded_manifest,
                                      std::uint32_t max_count,
                                      const std::string& output_root,
+                                     const cauth::core::platform::RouteSelection* route_selection,
                                      const cauth::core::platform::FileWriteOptions& write_options,
                                      std::ostream& out,
                                      std::ostream& err) {
@@ -1275,6 +1872,26 @@ int download_all_files_from_manifest(const LoadedDepotManifest& loaded_manifest,
     const auto total_bytes = loaded_manifest.manifest.total_uncompressed_size;
     std::uint64_t completed_bytes = 0;
     std::uint64_t skipped_files = 0;
+    const auto batch_resume_state_path = make_all_files_resume_state_path(output_root);
+    const auto batch_resume_token = make_all_files_resume_token(loaded_manifest, output_root);
+    std::size_t resume_file_index = 0;
+
+    {
+        std::error_code state_ec;
+        if (std::filesystem::exists(batch_resume_state_path, state_ec) && !state_ec) {
+            DepotBatchResumeState batch_state;
+            std::string state_error;
+            if (load_all_files_resume_state(batch_resume_state_path, batch_state, state_error) &&
+                batch_state.token == batch_resume_token) {
+                resume_file_index = batch_state.next_file_index;
+                completed_bytes = batch_state.completed_bytes;
+                out << "Resuming all-files download from file index " << resume_file_index
+                    << "...\n";
+            } else {
+                clear_all_files_resume_state(batch_resume_state_path, state_error);
+            }
+        }
+    }
 
     report_download_progress(DepotDownloadProgress{
         DepotDownloadKind::AllFiles,
@@ -1282,12 +1899,13 @@ int download_all_files_from_manifest(const LoadedDepotManifest& loaded_manifest,
         output_root,
         0,
         total_files,
-        0,
+        completed_bytes,
         total_bytes,
     });
 
+    std::uint64_t completed_files = 0;
     for (std::size_t file_index = 0; file_index < files.size(); ++file_index) {
-        if (fail_if_download_canceled(err)) {
+        if (fail_if_download_interrupted(err)) {
             return 1;
         }
         const auto& file = files[file_index];
@@ -1296,7 +1914,13 @@ int download_all_files_from_manifest(const LoadedDepotManifest& loaded_manifest,
             if (!ensure_manifest_directory_exists(output_root, file.filename, err)) {
                 return 1;
             }
-            out << "Created manifest directory: " << display_name << '\n';
+            if (file_index >= resume_file_index) {
+                out << "Created manifest directory: " << display_name << '\n';
+            }
+            continue;
+        }
+        if (file_index < resume_file_index) {
+            ++completed_files;
             continue;
         }
         const auto output_path = make_safe_manifest_output_path(output_root, file.filename, err);
@@ -1304,18 +1928,12 @@ int download_all_files_from_manifest(const LoadedDepotManifest& loaded_manifest,
             return 1;
         }
 
-        std::uint64_t completed_files_before = 0;
-        for (std::size_t completed_index = 0; completed_index < file_index; ++completed_index) {
-            if (!cauth::core::depot::depot_file_is_directory(files[completed_index])) {
-                ++completed_files_before;
-            }
-        }
         report_download_progress(DepotDownloadProgress{
             DepotDownloadKind::AllFiles,
             "Downloading file " + std::to_string(file_index + 1) + "/" +
                 std::to_string(files.size()),
             display_name,
-            completed_files_before,
+            completed_files,
             total_files,
             completed_bytes,
             total_bytes,
@@ -1328,9 +1946,10 @@ int download_all_files_from_manifest(const LoadedDepotManifest& loaded_manifest,
             file_index,
             max_count,
             output_path->string(),
+            route_selection,
             write_options,
             DepotDownloadKind::AllFiles,
-            completed_files_before,
+            completed_files,
             total_files,
             completed_bytes,
             total_bytes,
@@ -1339,6 +1958,24 @@ int download_all_files_from_manifest(const LoadedDepotManifest& loaded_manifest,
             out,
             err);
         if (outcome.exit_code != 0) {
+            const auto action = current_download_interrupt_action();
+            if (action == DownloadInterruptAction::Pause) {
+                std::string state_error;
+                const DepotBatchResumeState batch_state{
+                    batch_resume_token,
+                    file_index,
+                    completed_bytes,
+                };
+                if (!save_all_files_resume_state(batch_resume_state_path, batch_state, state_error)) {
+                    err << state_error << '\n';
+                }
+            } else if (action == DownloadInterruptAction::Cancel) {
+                std::string state_error;
+                if (!clear_all_files_resume_state(batch_resume_state_path, state_error) &&
+                    !state_error.empty()) {
+                    err << state_error << '\n';
+                }
+            }
             err << "All-files download failed at file " << display_name << '\n';
             return outcome.exit_code;
         }
@@ -1347,10 +1984,17 @@ int download_all_files_from_manifest(const LoadedDepotManifest& loaded_manifest,
         }
 
         completed_bytes += outcome.written_bytes;
-        std::uint64_t completed_files = 0;
-        for (std::size_t completed_index = 0; completed_index <= file_index; ++completed_index) {
-            if (!cauth::core::depot::depot_file_is_directory(files[completed_index])) {
-                ++completed_files;
+        ++completed_files;
+        {
+            std::string state_error;
+            const DepotBatchResumeState batch_state{
+                batch_resume_token,
+                file_index + 1,
+                completed_bytes,
+            };
+            if (!save_all_files_resume_state(batch_resume_state_path, batch_state, state_error)) {
+                err << state_error << '\n';
+                return 1;
             }
         }
         report_download_progress(DepotDownloadProgress{
@@ -1377,6 +2021,12 @@ int download_all_files_from_manifest(const LoadedDepotManifest& loaded_manifest,
     out << "All files downloaded: " << files.size() << " file(s) -> " << output_root << '\n';
     if (skipped_files != 0) {
         out << "Skipped existing files: " << skipped_files << '\n';
+    }
+    std::string state_error;
+    if (!clear_all_files_resume_state(batch_resume_state_path, state_error) &&
+        !state_error.empty()) {
+        err << state_error << '\n';
+        return 1;
     }
     return 0;
 }

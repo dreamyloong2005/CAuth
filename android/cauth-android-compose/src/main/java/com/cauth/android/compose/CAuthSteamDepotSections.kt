@@ -74,6 +74,53 @@ fun CAuthSteamDepotQuerySection(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
+fun CAuthSteamDepotRouteSection(
+    state: CAuthSteamDepotState,
+    controller: CAuthSteamDepotController,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Download Route", style = MaterialTheme.typography.labelLarge)
+        OutlinedTextField(
+            value = state.routeEndpoint,
+            onValueChange = controller::setRouteEndpoint,
+            label = { Text("Route endpoint (optional)") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !state.busy,
+            singleLine = true,
+        )
+        OutlinedTextField(
+            value = state.routeProtocol,
+            onValueChange = controller::setRouteProtocol,
+            label = { Text("Route protocol (optional)") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !state.busy,
+            singleLine = true,
+        )
+        OutlinedTextField(
+            value = state.routeRole,
+            onValueChange = controller::setRouteRole,
+            label = { Text("Route role (optional)") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !state.busy,
+            singleLine = true,
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(enabled = !state.busy, onClick = controller::probeDownloadRoutes) {
+                Text("Probe Download Routes")
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
 fun CAuthSteamDepotQueryActions(
     busy: Boolean,
     onFetchBranches: () -> Unit,
@@ -358,6 +405,33 @@ fun CAuthSteamDepotResultsSection(
                 SelectableResultText(
                     "present=${snapshot.present} requestCode=${formatUnsignedDecimal(snapshot.requestCode)}",
                 )
+            }
+        }
+
+        state.routeProbe?.let { snapshot ->
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    "Depot Routes (${snapshot.routes.size}) backend=${snapshot.backend.ifBlank { "(none)" }}",
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                if (snapshot.message.isNotBlank()) {
+                    SelectableResultText(snapshot.message)
+                }
+                snapshot.routes.take(8).forEach { route ->
+                    SelectableActionResult(
+                        text = buildString {
+                            append(route.endpoint)
+                            append(" protocol=")
+                            append(route.protocol.ifBlank { "(none)" })
+                            append(" role=")
+                            append(route.role.ifBlank { "(none)" })
+                            append(" latency=")
+                            append(route.latencyLabel)
+                        },
+                        enabled = !state.busy,
+                        onAction = { controller.useRoute(route) },
+                    )
+                }
             }
         }
 

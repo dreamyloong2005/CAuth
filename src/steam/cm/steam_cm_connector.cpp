@@ -1,11 +1,15 @@
 #include "steam/cm/steam_cm_connector.hpp"
 
 #include "steam/cm/cm_client_hello.hpp"
+#include "core/platform/endpoint_route_cache.hpp"
+#include "core/platform/route_selection.hpp"
 #include "steam/cm/cm_message.hpp"
 #include "steam/cm/steam_directory.hpp"
 #include "steam/cm/websocket_transport.hpp"
 
+#include <chrono>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <utility>
 
@@ -16,6 +20,62 @@ void write_line(std::ostream* stream, const std::string& message) {
     if (stream != nullptr) {
         *stream << message << '\n';
     }
+}
+
+std::string cm_endpoint_route_key(const CmServerEndpoint& endpoint) {
+    return endpoint.address + ":" + std::to_string(endpoint.port);
+}
+
+std::vector<CmServerEndpoint> rank_websocket_servers(std::vector<CmServerEndpoint> servers) {
+    if (servers.size() <= 1) {
+        return servers;
+    }
+
+    return cauth::core::platform::rank_endpoints_by_route_health(
+        "steam.cm.websocket",
+        std::move(servers),
+        [](const CmServerEndpoint& endpoint) { return cm_endpoint_route_key(endpoint); },
+        [](const CmServerEndpoint& endpoint) {
+            CmWebSocketTransport transport;
+            const auto started = std::chrono::steady_clock::now();
+            const auto result = transport.probe(endpoint);
+            if (!result.ok) {
+                return cauth::core::platform::EndpointProbeOutcome::failed();
+            }
+            return cauth::core::platform::EndpointProbeOutcome::succeeded(
+                cauth::core::platform::elapsed_milliseconds(
+                    std::chrono::steady_clock::now() - started));
+        },
+        6);
+}
+
+std::optional<std::vector<CmServerEndpoint>> select_websocket_servers(
+    std::vector<CmServerEndpoint> servers,
+    const cauth::core::platform::RouteSelection* route_selection,
+    std::string& error_message) {
+    if (route_selection == nullptr || route_selection->empty()) {
+        return servers;
+    }
+
+    std::vector<CmServerEndpoint> selected;
+    selected.reserve(servers.size());
+    for (auto& server : servers) {
+        if (cauth::core::platform::route_selection_matches(
+                route_selection,
+                server.address + ":" + std::to_string(server.port),
+                "websocket")) {
+            selected.push_back(std::move(server));
+        }
+    }
+    if (!selected.empty()) {
+        return selected;
+    }
+
+    error_message = "selected CM route is not available: " + route_selection->endpoint;
+    if (!route_selection->protocol.empty()) {
+        error_message += " (protocol=" + route_selection->protocol + ")";
+    }
+    return std::nullopt;
 }
 
 std::string describe_cm_logon_failure(const CmSessionConnectResult& logon) {
@@ -98,30 +158,96 @@ CmServerListResult load_websocket_servers(std::uint32_t max_count) {
 
 } // namespace
 
+SteamCmRouteReport probe_websocket_routes(std::uint32_t max_count,
+                                          std::ostream* err,
+                                          const cauth::core::platform::RouteSelection* route_selection) {
+    SteamCmRouteReport report;
+    auto servers = load_websocket_servers(max_count);
+    if (!servers.ok) {
+        report.ok = false;
+        report.module_status = "failed";
+        report.message = "CM directory lookup failed: " + servers.error_message;
+        return report;
+    }
+    if (!servers.error_message.empty()) {
+        report.message = servers.error_message;
+        if (err != nullptr) {
+            write_line(err, servers.error_message);
+        }
+    } else {
+        report.message = "ok";
+    }
+
+    std::string selection_error;
+    auto selected_servers = select_websocket_servers(
+        std::move(servers.servers), route_selection, selection_error);
+    if (!selected_servers.has_value()) {
+        report.ok = false;
+        report.module_status = "failed";
+        report.message = selection_error;
+        return report;
+    }
+
+    servers.servers = rank_websocket_servers(std::move(*selected_servers));
+    auto& cache = cauth::core::platform::EndpointRouteCache::instance();
+    report.ok = true;
+    report.module_status = "succeeded";
+    report.routes.reserve(servers.servers.size());
+    for (const auto& server : servers.servers) {
+        const auto snapshot = cache.snapshot("steam.cm.websocket", cm_endpoint_route_key(server));
+        report.routes.push_back(SteamCmRouteEntry{
+            server,
+            cauth::core::platform::make_probed_route_entry(
+                server.address + ":" + std::to_string(server.port),
+                "websocket",
+                "control",
+                {},
+                snapshot),
+        });
+    }
+    return report;
+}
+
 SteamCmConnector::SteamCmConnector(std::ostream* out, std::ostream* err) : out_(out), err_(err) {}
 
 SteamCmOperationResult SteamCmConnector::with_service_client(
     std::uint32_t max_count,
+    const cauth::core::platform::RouteSelection* route_selection,
     const SteamCmServiceClientOperation& operation) const {
-    const auto servers = load_websocket_servers(max_count);
+    auto servers = load_websocket_servers(max_count);
     if (!servers.ok) {
         return {false, "CM directory lookup failed: " + servers.error_message};
     }
     if (!servers.error_message.empty()) {
         write_line(err_, servers.error_message);
     }
+    std::string selection_error;
+    auto selected_servers = select_websocket_servers(
+        std::move(servers.servers), route_selection, selection_error);
+    if (!selected_servers.has_value()) {
+        return {false, selection_error};
+    }
+    servers.servers = rank_websocket_servers(std::move(*selected_servers));
 
     CmWebSocketTransport transport;
     std::string last_error = "CM service connection failed for all endpoints";
     for (const auto& server : servers.servers) {
         write_line(out_, "Connecting CM websocket " + server.address + ":" + std::to_string(server.port) +
                              "...");
+        const auto connect_started = std::chrono::steady_clock::now();
         auto [connect_result, connection] = transport.connect(server);
         if (!connect_result.ok || !connection) {
+            cauth::core::platform::EndpointRouteCache::instance().record_failure(
+                "steam.cm.websocket", cm_endpoint_route_key(server));
             last_error = connect_result.error_message;
             write_line(err_, "Connect failed: " + connect_result.error_message);
             continue;
         }
+        cauth::core::platform::EndpointRouteCache::instance().record_success(
+            "steam.cm.websocket",
+            cm_endpoint_route_key(server),
+            cauth::core::platform::elapsed_milliseconds(
+                std::chrono::steady_clock::now() - connect_started));
 
         const auto hello = make_client_hello_message();
         const auto hello_result = connection->send_binary(encode_cm_message(hello));
@@ -151,26 +277,42 @@ SteamCmOperationResult SteamCmConnector::with_service_client(
 SteamCmOperationResult SteamCmConnector::with_logged_on_session(
     const cauth::core::session::AuthSession& session,
     std::uint32_t max_count,
+    const cauth::core::platform::RouteSelection* route_selection,
     const SteamCmSessionOperation& operation) const {
-    const auto servers = load_websocket_servers(max_count);
+    auto servers = load_websocket_servers(max_count);
     if (!servers.ok) {
         return {false, "CM directory lookup failed: " + servers.error_message};
     }
     if (!servers.error_message.empty()) {
         write_line(err_, servers.error_message);
     }
+    std::string selection_error;
+    auto selected_servers = select_websocket_servers(
+        std::move(servers.servers), route_selection, selection_error);
+    if (!selected_servers.has_value()) {
+        return {false, selection_error};
+    }
+    servers.servers = rank_websocket_servers(std::move(*selected_servers));
 
     CmWebSocketTransport transport;
     std::string last_error = "CM logon failed for all endpoints";
     for (const auto& server : servers.servers) {
         write_line(out_, "Connecting CM websocket " + server.address + ":" + std::to_string(server.port) +
                              "...");
+        const auto connect_started = std::chrono::steady_clock::now();
         auto [connect_result, connection] = transport.connect(server);
         if (!connect_result.ok || !connection) {
+            cauth::core::platform::EndpointRouteCache::instance().record_failure(
+                "steam.cm.websocket", cm_endpoint_route_key(server));
             last_error = connect_result.error_message;
             write_line(err_, "Connect failed: " + connect_result.error_message);
             continue;
         }
+        cauth::core::platform::EndpointRouteCache::instance().record_success(
+            "steam.cm.websocket",
+            cm_endpoint_route_key(server),
+            cauth::core::platform::elapsed_milliseconds(
+                std::chrono::steady_clock::now() - connect_started));
 
         CmSession cm_session{std::move(connection)};
         write_line(out_, "ClientLogon sent; waiting for response...");

@@ -1,6 +1,7 @@
 #include "cli/steam_cli.hpp"
 #include "cli/cli_support.hpp"
 
+#include "core/platform/route_selection.hpp"
 #include "steam/depot/steam_depot_application.hpp"
 
 #include <atomic>
@@ -18,13 +19,23 @@ namespace {
 using namespace cauth::cli::support;
 
 std::atomic_bool g_depot_cli_cancel_requested{false};
+std::atomic_bool g_depot_cli_pause_requested{false};
+std::atomic_bool g_depot_cli_pause_on_sigint{false};
 
 void on_depot_cli_signal(int) {
-    g_depot_cli_cancel_requested.store(true);
+    if (g_depot_cli_pause_on_sigint.load()) {
+        g_depot_cli_pause_requested.store(true);
+    } else {
+        g_depot_cli_cancel_requested.store(true);
+    }
 }
 
 bool depot_cli_cancel_requested(void*) {
     return g_depot_cli_cancel_requested.load();
+}
+
+bool depot_cli_pause_requested(void*) {
+    return g_depot_cli_pause_requested.load();
 }
 
 int apply_write_mode_flag(cauth::core::platform::FileWriteOptions& write_options,
@@ -89,12 +100,16 @@ void on_depot_progress(const cauth::steam::depot::DepotDownloadProgress& progres
 }
 
 struct ScopedDepotCliProgress {
-    explicit ScopedDepotCliProgress(bool enabled) : enabled_(enabled) {
+    explicit ScopedDepotCliProgress(bool enabled, bool pause_on_sigint)
+        : enabled_(enabled), pause_on_sigint_(pause_on_sigint) {
         g_depot_cli_cancel_requested.store(false);
+        g_depot_cli_pause_requested.store(false);
+        g_depot_cli_pause_on_sigint.store(pause_on_sigint_);
         previous_handler_ = std::signal(SIGINT, &on_depot_cli_signal);
         cauth::steam::depot::set_current_thread_depot_download_hooks(
             enabled_ ? &on_depot_progress : nullptr,
             &depot_cli_cancel_requested,
+            &depot_cli_pause_requested,
             &state_);
     }
 
@@ -103,16 +118,19 @@ struct ScopedDepotCliProgress {
         if (enabled_) {
             finish_progress_line(std::cerr, state_.line_state);
         }
+        g_depot_cli_pause_on_sigint.store(false);
         std::signal(SIGINT, previous_handler_);
     }
 
   private:
     bool enabled_ = false;
+    bool pause_on_sigint_ = false;
     DepotCliProgressState state_;
     void (*previous_handler_)(int) = SIG_DFL;
 };
 
 enum class DepotCommandKind {
+    Routes,
     Branches,
     Manifests,
     Key,
@@ -148,6 +166,8 @@ struct ParsedDepotCommand {
     std::string input_path;
     std::string output_path;
     std::string local_root;
+    bool pause_on_sigint = false;
+    cauth::core::platform::RouteSelection route_selection;
     cauth::core::platform::FileWriteOptions write_options;
     bool has_write_mode = false;
 };
@@ -167,7 +187,9 @@ ParsedDepotResult parse_depot_command(int argc, char** argv) {
     }
 
     const std::string_view subcommand = argv[2];
-    if (subcommand == "branches") {
+    if (subcommand == "routes") {
+        result.command.kind = DepotCommandKind::Routes;
+    } else if (subcommand == "branches") {
         result.command.kind = DepotCommandKind::Branches;
     } else if (subcommand == "manifests") {
         result.command.kind = DepotCommandKind::Manifests;
@@ -209,6 +231,22 @@ ParsedDepotResult parse_depot_command(int argc, char** argv) {
         }
         if (arg == "--max-count" && index + 1 < argc) {
             result.command.max_count = static_cast<std::uint32_t>(std::max(1, std::atoi(argv[++index])));
+            continue;
+        }
+        if ((result.command.kind == DepotCommandKind::ManifestDownload ||
+             result.command.kind == DepotCommandKind::ChunkDownload ||
+             result.command.kind == DepotCommandKind::FileDownload ||
+             result.command.kind == DepotCommandKind::AllFilesDownload) &&
+            arg == "--signal-action" && index + 1 < argc) {
+            const std::string_view action = argv[++index];
+            if (action == "pause") {
+                result.command.pause_on_sigint = true;
+            } else if (action == "cancel") {
+                result.command.pause_on_sigint = false;
+            } else {
+                std::cerr << "unknown signal action: " << action << '\n';
+                return result;
+            }
             continue;
         }
         if ((result.command.kind == DepotCommandKind::Key ||
@@ -312,6 +350,34 @@ ParsedDepotResult parse_depot_command(int argc, char** argv) {
                 continue;
             }
         }
+        if ((result.command.kind == DepotCommandKind::Branches ||
+             result.command.kind == DepotCommandKind::Manifests ||
+             result.command.kind == DepotCommandKind::Key ||
+             result.command.kind == DepotCommandKind::Preflight ||
+             result.command.kind == DepotCommandKind::ManifestCode ||
+             result.command.kind == DepotCommandKind::ManifestDownload ||
+             result.command.kind == DepotCommandKind::ChunkDownload ||
+             result.command.kind == DepotCommandKind::FileDownload ||
+             result.command.kind == DepotCommandKind::AllFilesDownload ||
+             result.command.kind == DepotCommandKind::Routes) &&
+            arg == "--route-endpoint" && index + 1 < argc) {
+            result.command.route_selection.endpoint = argv[++index];
+            continue;
+        }
+        if ((result.command.kind == DepotCommandKind::Branches ||
+             result.command.kind == DepotCommandKind::Manifests ||
+             result.command.kind == DepotCommandKind::Key ||
+             result.command.kind == DepotCommandKind::Preflight ||
+             result.command.kind == DepotCommandKind::ManifestCode ||
+             result.command.kind == DepotCommandKind::ManifestDownload ||
+             result.command.kind == DepotCommandKind::ChunkDownload ||
+             result.command.kind == DepotCommandKind::FileDownload ||
+             result.command.kind == DepotCommandKind::AllFilesDownload ||
+             result.command.kind == DepotCommandKind::Routes) &&
+            arg == "--route-protocol" && index + 1 < argc) {
+            result.command.route_selection.protocol = argv[++index];
+            continue;
+        }
         if ((result.command.kind == DepotCommandKind::ManifestDownload ||
              result.command.kind == DepotCommandKind::ChunkDownload ||
              result.command.kind == DepotCommandKind::FileDownload ||
@@ -341,6 +407,7 @@ ParsedDepotResult parse_depot_command(int argc, char** argv) {
     }
 
     const auto requires_app_id =
+        result.command.kind != DepotCommandKind::Routes &&
         result.command.kind != DepotCommandKind::ManifestDownload &&
         result.command.kind != DepotCommandKind::ManifestInfo &&
         result.command.kind != DepotCommandKind::FileList &&
@@ -435,23 +502,53 @@ int run_steam_depot(int argc, char** argv) {
         request.kind == DepotCommandKind::FileDownload ||
         request.kind == DepotCommandKind::AllFilesDownload ||
         request.kind == DepotCommandKind::VerifyLocal;
-    ScopedDepotCliProgress scoped_progress{enable_progress};
+    ScopedDepotCliProgress scoped_progress{enable_progress, request.pause_on_sigint};
 
+    if (request.kind == DepotCommandKind::Routes) {
+        return cauth::steam::depot::print_download_routes(
+            request.max_count,
+            request.route_selection.empty() ? nullptr : &request.route_selection,
+            std::cout,
+            std::cerr);
+    }
     if (request.kind == DepotCommandKind::Branches) {
         return cauth::steam::depot::print_branches(
-            request.steam_id, request.app_id, request.max_count, std::cout, std::cerr);
+            request.steam_id,
+            request.app_id,
+            request.max_count,
+            request.route_selection.empty() ? nullptr : &request.route_selection,
+            std::cout,
+            std::cerr);
     }
     if (request.kind == DepotCommandKind::Manifests) {
         return cauth::steam::depot::print_manifests(
-            request.steam_id, request.app_id, request.branch, request.max_count, std::cout, std::cerr);
+            request.steam_id,
+            request.app_id,
+            request.branch,
+            request.max_count,
+            request.route_selection.empty() ? nullptr : &request.route_selection,
+            std::cout,
+            std::cerr);
     }
     if (request.kind == DepotCommandKind::Preflight) {
         return cauth::steam::depot::print_preflight(
-            request.steam_id, request.app_id, request.branch, request.max_count, std::cout, std::cerr);
+            request.steam_id,
+            request.app_id,
+            request.branch,
+            request.max_count,
+            request.route_selection.empty() ? nullptr : &request.route_selection,
+            std::cout,
+            std::cerr);
     }
     if (request.kind == DepotCommandKind::Key) {
         return cauth::steam::depot::print_depot_key(
-            request.steam_id, request.app_id, request.depot_id, request.max_count, std::cout, std::cerr);
+            request.steam_id,
+            request.app_id,
+            request.depot_id,
+            request.max_count,
+            request.route_selection.empty() ? nullptr : &request.route_selection,
+            std::cout,
+            std::cerr);
     }
     if (request.kind == DepotCommandKind::ManifestCode) {
         return cauth::steam::depot::print_manifest_request_code(
@@ -461,6 +558,7 @@ int run_steam_depot(int argc, char** argv) {
             request.manifest_gid,
             request.branch,
             request.max_count,
+            request.route_selection.empty() ? nullptr : &request.route_selection,
             std::cout,
             std::cerr);
     }
@@ -471,6 +569,7 @@ int run_steam_depot(int argc, char** argv) {
             request.request_code,
             request.max_count,
             request.output_path,
+            request.route_selection.empty() ? nullptr : &request.route_selection,
             request.write_options,
             std::cout,
             std::cerr);
@@ -511,6 +610,7 @@ int run_steam_depot(int argc, char** argv) {
             loaded_manifest,
             request.max_count,
             request.output_path,
+            request.route_selection.empty() ? nullptr : &request.route_selection,
             request.write_options,
             std::cout,
             std::cerr);
@@ -541,6 +641,7 @@ int run_steam_depot(int argc, char** argv) {
             request.process_chunk,
             request.max_count,
             request.output_path,
+            request.route_selection.empty() ? nullptr : &request.route_selection,
             request.write_options,
             std::cout,
             std::cerr);
@@ -551,6 +652,7 @@ int run_steam_depot(int argc, char** argv) {
         *selected_file_index,
         request.max_count,
         request.output_path,
+        request.route_selection.empty() ? nullptr : &request.route_selection,
         request.write_options,
         std::cout,
         std::cerr);

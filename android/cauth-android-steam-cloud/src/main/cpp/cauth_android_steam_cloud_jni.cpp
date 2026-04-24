@@ -36,6 +36,10 @@ constexpr const char* kSteamCloudVerifySnapshotClassName =
     "com/cauth/android/steam/cloud/SteamCloudVerifySnapshot";
 constexpr const char* kSteamCloudTransferTaskSnapshotClassName =
     "com/cauth/android/steam/cloud/SteamCloudTransferTaskSnapshot";
+constexpr const char* kRouteProbeEntrySnapshotClassName =
+    "com/cauth/android/CAuthRouteProbeEntrySnapshot";
+constexpr const char* kRouteProbeSnapshotClassName =
+    "com/cauth/android/CAuthRouteProbeSnapshot";
 
 jclass g_steam_cloud_file_entry_snapshot_class = nullptr;
 jclass g_steam_cloud_file_list_snapshot_class = nullptr;
@@ -43,6 +47,8 @@ jclass g_steam_cloud_result_snapshot_class = nullptr;
 jclass g_steam_cloud_verify_entry_snapshot_class = nullptr;
 jclass g_steam_cloud_verify_snapshot_class = nullptr;
 jclass g_steam_cloud_transfer_task_snapshot_class = nullptr;
+jclass g_route_probe_entry_snapshot_class = nullptr;
+jclass g_route_probe_snapshot_class = nullptr;
 
 struct CloudVerifyStorage {
     std::vector<std::string> remote_filenames;
@@ -68,6 +74,10 @@ struct CloudTransferRequestParams {
     bool dry_run = false;
     bool delete_remote_orphans = false;
     cauth_steam_cloud_conflict_policy_t conflict_policy = CAUTH_STEAM_CLOUD_CONFLICT_DEFAULT;
+    cauth_steam_cloud_backend_t backend = CAUTH_STEAM_CLOUD_BACKEND_AUTO;
+    std::string route_endpoint;
+    std::string route_protocol;
+    std::string route_role;
     cauth_file_write_mode_t local_write_mode = CAUTH_FILE_WRITE_OVERWRITE;
     bool atomic_write = false;
     bool include_extra_local = false;
@@ -78,10 +88,12 @@ struct CloudTransferTask {
 
     std::mutex mutex;
     std::atomic_bool cancel_requested{false};
+    std::atomic_bool pause_requested{false};
     std::atomic_bool finished{false};
     CloudTransferTaskKind kind = CloudTransferTaskKind::Pull;
     bool succeeded = false;
     bool canceled = false;
+    bool paused = false;
     bool has_result = false;
     bool has_verify_report = false;
     std::string module_status = "idle";
@@ -94,6 +106,9 @@ struct CloudTransferTask {
     std::uint64_t total_steps = 0;
     std::uint64_t completed_bytes = 0;
     std::uint64_t total_bytes = 0;
+    bool resumable = false;
+    bool resumed = false;
+    std::uint64_t resume_from_bytes = 0;
     std::string result_module_status;
     cauth_steam_cloud_result_t result{};
     std::string verify_module_status;
@@ -165,6 +180,15 @@ jclass ensure_steam_cloud_transfer_task_snapshot_class(JNIEnv* env) {
         kSteamCloudTransferTaskSnapshotClassName);
 }
 
+jclass ensure_route_probe_entry_snapshot_class(JNIEnv* env) {
+    return require_global_class(
+        env, g_route_probe_entry_snapshot_class, kRouteProbeEntrySnapshotClassName);
+}
+
+jclass ensure_route_probe_snapshot_class(JNIEnv* env) {
+    return require_global_class(env, g_route_probe_snapshot_class, kRouteProbeSnapshotClassName);
+}
+
 std::string nullable_string(const char* value) {
     return value == nullptr ? std::string{} : std::string{value};
 }
@@ -196,6 +220,18 @@ cauth::steam::cloud::SteamCloudConflictPolicy from_ffi_conflict_policy(
     case CAUTH_STEAM_CLOUD_CONFLICT_DEFAULT:
     default:
         return cauth::steam::cloud::SteamCloudConflictPolicy::Default;
+    }
+}
+
+cauth::steam::cloud::SteamCloudBackend from_ffi_backend(cauth_steam_cloud_backend_t backend) {
+    switch (backend) {
+    case CAUTH_STEAM_CLOUD_BACKEND_WEB:
+        return cauth::steam::cloud::SteamCloudBackend::WebApi;
+    case CAUTH_STEAM_CLOUD_BACKEND_CM:
+        return cauth::steam::cloud::SteamCloudBackend::CmCloud;
+    case CAUTH_STEAM_CLOUD_BACKEND_AUTO:
+    default:
+        return cauth::steam::cloud::SteamCloudBackend::Auto;
     }
 }
 
@@ -247,6 +283,10 @@ cauth_steam_cloud_request_t make_request(const char* access_token,
                                          jboolean dry_run,
                                          jboolean delete_remote_orphans,
                                          jint conflict_policy,
+                                         jint backend,
+                                         const char* route_endpoint,
+                                         const char* route_protocol,
+                                         const char* route_role,
                                          jint local_write_mode,
                                          jboolean atomic_write) {
     cauth_steam_cloud_request_t request{};
@@ -258,6 +298,10 @@ cauth_steam_cloud_request_t make_request(const char* access_token,
     request.dry_run = dry_run ? 1 : 0;
     request.delete_remote_orphans = delete_remote_orphans ? 1 : 0;
     request.conflict_policy = static_cast<cauth_steam_cloud_conflict_policy_t>(conflict_policy);
+    request.backend = static_cast<cauth_steam_cloud_backend_t>(backend);
+    request.route_selection.endpoint = route_endpoint;
+    request.route_selection.protocol = route_protocol;
+    request.route_selection.role = route_role;
     request.local_write_mode = static_cast<cauth_file_write_mode_t>(local_write_mode);
     request.atomic_write = atomic_write ? 1 : 0;
     return request;
@@ -272,6 +316,10 @@ CloudTransferRequestParams make_request_params(JNIEnv* env,
                                                jboolean dry_run,
                                                jboolean delete_remote_orphans,
                                                jint conflict_policy,
+                                               jint backend,
+                                               jstring route_endpoint,
+                                               jstring route_protocol,
+                                               jstring route_role,
                                                jint local_write_mode,
                                                jboolean atomic_write) {
     CloudTransferRequestParams params;
@@ -283,6 +331,10 @@ CloudTransferRequestParams make_request_params(JNIEnv* env,
     params.dry_run = dry_run == JNI_TRUE;
     params.delete_remote_orphans = delete_remote_orphans == JNI_TRUE;
     params.conflict_policy = static_cast<cauth_steam_cloud_conflict_policy_t>(conflict_policy);
+    params.backend = static_cast<cauth_steam_cloud_backend_t>(backend);
+    params.route_endpoint = copy_jstring(env, route_endpoint);
+    params.route_protocol = copy_jstring(env, route_protocol);
+    params.route_role = copy_jstring(env, route_role);
     params.local_write_mode = static_cast<cauth_file_write_mode_t>(local_write_mode);
     params.atomic_write = atomic_write == JNI_TRUE;
     return params;
@@ -303,10 +355,13 @@ cauth::steam::cloud::SteamCloudRequest build_native_request(cauth_client_t* clie
     native_request.dry_run = params.dry_run;
     native_request.delete_remote_orphans = params.delete_remote_orphans;
     native_request.conflict_policy = from_ffi_conflict_policy(params.conflict_policy);
-    native_request.backend = cauth::steam::cloud::SteamCloudBackend::Auto;
+    native_request.backend = from_ffi_backend(params.backend);
     native_request.local_write_options.mode = from_ffi_file_write_mode(params.local_write_mode);
     native_request.local_write_options.atomic_write = params.atomic_write;
     native_request.local_write_options.temp_suffix = ".cauthdownload";
+    native_request.route_selection.endpoint = params.route_endpoint;
+    native_request.route_selection.protocol = params.route_protocol;
+    native_request.route_selection.role = params.route_role;
 
     if (native_request.access_token.empty() || native_request.refresh_token.empty()) {
         const auto session = native_request.steam_id == 0
@@ -330,6 +385,87 @@ cauth::steam::cloud::SteamCloudRequest build_native_request(cauth_client_t* clie
     return native_request;
 }
 
+jobject make_route_probe_entry(JNIEnv* env, const cauth_route_probe_entry_t& entry) {
+    jclass cls = ensure_route_probe_entry_snapshot_class(env);
+    if (cls == nullptr) {
+        return nullptr;
+    }
+    jmethodID ctor = env->GetMethodID(
+        cls,
+        "<init>",
+        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JZZII)V");
+    if (ctor == nullptr) {
+        return nullptr;
+    }
+    jstring endpoint = env->NewStringUTF(entry.endpoint == nullptr ? "" : entry.endpoint);
+    jstring protocol = env->NewStringUTF(entry.protocol == nullptr ? "" : entry.protocol);
+    jstring role = env->NewStringUTF(entry.role == nullptr ? "" : entry.role);
+    jstring note = env->NewStringUTF(entry.note == nullptr ? "" : entry.note);
+    jobject instance = env->NewObject(
+        cls,
+        ctor,
+        endpoint,
+        protocol,
+        role,
+        note,
+        static_cast<jlong>(entry.latency_ms),
+        static_cast<jboolean>(entry.latency_known != 0),
+        static_cast<jboolean>(entry.recent_success != 0),
+        static_cast<jboolean>(entry.recent_failure != 0),
+        static_cast<jint>(entry.success_count),
+        static_cast<jint>(entry.failure_count));
+    env->DeleteLocalRef(endpoint);
+    env->DeleteLocalRef(protocol);
+    env->DeleteLocalRef(role);
+    env->DeleteLocalRef(note);
+    return instance;
+}
+
+jobject make_route_probe_snapshot(JNIEnv* env, const cauth_route_probe_result_t& result) {
+    jclass entry_cls = ensure_route_probe_entry_snapshot_class(env);
+    jclass cls = ensure_route_probe_snapshot_class(env);
+    if (entry_cls == nullptr || cls == nullptr) {
+        return nullptr;
+    }
+    jmethodID ctor = env->GetMethodID(
+        cls,
+        "<init>",
+        "(ZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;[Lcom/cauth/android/CAuthRouteProbeEntrySnapshot;)V");
+    if (ctor == nullptr) {
+        return nullptr;
+    }
+    jobjectArray entries =
+        env->NewObjectArray(static_cast<jsize>(result.route_count), entry_cls, nullptr);
+    if (entries == nullptr) {
+        return nullptr;
+    }
+    for (jsize index = 0; index < static_cast<jsize>(result.route_count); ++index) {
+        jobject item = make_route_probe_entry(env, result.routes[index]);
+        if (item == nullptr) {
+            return nullptr;
+        }
+        env->SetObjectArrayElement(entries, index, item);
+        env->DeleteLocalRef(item);
+    }
+    jstring module_status =
+        env->NewStringUTF(result.module_status == nullptr ? "idle" : result.module_status);
+    jstring backend = env->NewStringUTF(result.backend == nullptr ? "" : result.backend);
+    jstring message = env->NewStringUTF(result.message == nullptr ? "" : result.message);
+    jobject instance = env->NewObject(
+        cls,
+        ctor,
+        static_cast<jboolean>(result.ok != 0),
+        module_status,
+        backend,
+        message,
+        entries);
+    env->DeleteLocalRef(module_status);
+    env->DeleteLocalRef(backend);
+    env->DeleteLocalRef(message);
+    env->DeleteLocalRef(entries);
+    return instance;
+}
+
 void fill_ffi_result(const cauth::steam::cloud::SteamCloudResult& result,
                      cauth_steam_cloud_result_t& out_result,
                      std::string& module_status_storage) {
@@ -345,6 +481,9 @@ void fill_ffi_result(const cauth::steam::cloud::SteamCloudResult& result,
     out_result.skipped_count = result.skipped_count;
     out_result.conflict_count = result.conflict_count;
     out_result.transferred_bytes = result.transferred_bytes;
+    out_result.resumable = result.resumable ? 1 : 0;
+    out_result.resumed = result.resumed ? 1 : 0;
+    out_result.resume_from_bytes = result.resume_from_bytes;
     out_result.module_status = module_status_storage.c_str();
 }
 
@@ -487,7 +626,7 @@ jobject make_steam_cloud_result(JNIEnv* env, const cauth_steam_cloud_result_t& r
         return nullptr;
     }
     jmethodID ctor =
-        env->GetMethodID(cls, "<init>", "(ZIIILjava/lang/String;JJJJJJJLjava/lang/String;)V");
+        env->GetMethodID(cls, "<init>", "(ZIIILjava/lang/String;JJJJJJJZZJLjava/lang/String;)V");
     if (ctor == nullptr) {
         return nullptr;
     }
@@ -500,7 +639,11 @@ jobject make_steam_cloud_result(JNIEnv* env, const cauth_steam_cloud_result_t& r
         static_cast<jlong>(result.local_file_count), static_cast<jlong>(result.remote_file_count),
         static_cast<jlong>(result.transferred_count), static_cast<jlong>(result.deleted_count),
         static_cast<jlong>(result.skipped_count), static_cast<jlong>(result.conflict_count),
-        static_cast<jlong>(result.transferred_bytes), message);
+        static_cast<jlong>(result.transferred_bytes),
+        static_cast<jboolean>(result.resumable != 0),
+        static_cast<jboolean>(result.resumed != 0),
+        static_cast<jlong>(result.resume_from_bytes),
+        message);
     env->DeleteLocalRef(module_status);
     env->DeleteLocalRef(message);
     return instance;
@@ -604,7 +747,7 @@ jobject make_steam_cloud_transfer_task(JNIEnv* env,
     jmethodID ctor = env->GetMethodID(
         cls,
         "<init>",
-        "(JIZZZZLjava/lang/String;Ljava/lang/String;JJJJLjava/lang/String;Ljava/lang/String;Lcom/cauth/android/steam/cloud/SteamCloudResultSnapshot;Lcom/cauth/android/steam/cloud/SteamCloudVerifySnapshot;)V");
+        "(JIZZZZZLjava/lang/String;Ljava/lang/String;JJJJZZJLjava/lang/String;Ljava/lang/String;Lcom/cauth/android/steam/cloud/SteamCloudResultSnapshot;Lcom/cauth/android/steam/cloud/SteamCloudVerifySnapshot;)V");
     if (ctor == nullptr) {
         return nullptr;
     }
@@ -614,6 +757,7 @@ jobject make_steam_cloud_transfer_task(JNIEnv* env,
     CloudTransferTaskKind kind = CloudTransferTaskKind::Pull;
     bool succeeded = false;
     bool canceled = false;
+    bool paused = false;
     bool has_result = false;
     bool has_verify_report = false;
     std::string module_status_value;
@@ -626,6 +770,9 @@ jobject make_steam_cloud_transfer_task(JNIEnv* env,
     std::uint64_t total_steps = 0;
     std::uint64_t completed_bytes = 0;
     std::uint64_t total_bytes = 0;
+    bool resumable = false;
+    bool resumed = false;
+    std::uint64_t resume_from_bytes = 0;
     cauth_steam_cloud_result_t result_snapshot{};
     cauth_steam_cloud_verify_report_t verify_snapshot{};
     {
@@ -633,6 +780,7 @@ jobject make_steam_cloud_transfer_task(JNIEnv* env,
         kind = task->kind;
         succeeded = task->succeeded;
         canceled = task->canceled;
+        paused = task->paused;
         has_result = task->has_result;
         has_verify_report = task->has_verify_report;
         module_status_value = task->module_status;
@@ -643,6 +791,9 @@ jobject make_steam_cloud_transfer_task(JNIEnv* env,
         total_steps = task->total_steps;
         completed_bytes = task->completed_bytes;
         total_bytes = task->total_bytes;
+        resumable = task->resumable;
+        resumed = task->resumed;
+        resume_from_bytes = task->resume_from_bytes;
         result_message = task->result_message;
         verify_message = task->verify_message;
         result_snapshot = task->result;
@@ -667,6 +818,7 @@ jobject make_steam_cloud_transfer_task(JNIEnv* env,
         static_cast<jboolean>(active),
         static_cast<jboolean>(finished),
         static_cast<jboolean>(canceled),
+        static_cast<jboolean>(paused),
         static_cast<jboolean>(succeeded),
         module_status,
         phase_string,
@@ -674,6 +826,9 @@ jobject make_steam_cloud_transfer_task(JNIEnv* env,
         static_cast<jlong>(total_steps),
         static_cast<jlong>(completed_bytes),
         static_cast<jlong>(total_bytes),
+        static_cast<jboolean>(resumable),
+        static_cast<jboolean>(resumed),
+        static_cast<jlong>(resume_from_bytes),
         target_string,
         message_string,
         result,
@@ -730,12 +885,20 @@ void on_transfer_progress(const cauth::steam::cloud::SteamCloudTransferProgress&
     task->total_steps = progress.total_steps;
     task->completed_bytes = progress.completed_bytes;
     task->total_bytes = progress.total_bytes;
+    task->resumable = progress.resumable;
+    task->resumed = progress.resumed;
+    task->resume_from_bytes = progress.resume_from_bytes;
     task->message = progress.phase;
 }
 
 bool is_transfer_cancel_requested(void* user_data) {
     auto* task = static_cast<CloudTransferTask*>(user_data);
     return task != nullptr && task->cancel_requested.load();
+}
+
+bool is_transfer_pause_requested(void* user_data) {
+    auto* task = static_cast<CloudTransferTask*>(user_data);
+    return task != nullptr && task->pause_requested.load();
 }
 
 void run_cloud_transfer_task(jlong client_handle,
@@ -757,7 +920,7 @@ void run_cloud_transfer_task(jlong client_handle,
         auto* client = client_from_handle(client_handle);
         const auto native_request = build_native_request(client, params);
         cauth::steam::cloud::set_current_thread_steam_cloud_transfer_hooks(
-            &on_transfer_progress, &is_transfer_cancel_requested, task.get());
+            &on_transfer_progress, &is_transfer_cancel_requested, &is_transfer_pause_requested, task.get());
         if (kind == CloudTransferTaskKind::Verify) {
             const auto verify_result =
                 cauth::steam::cloud::verify_cloud_local_files(native_request, params.include_extra_local);
@@ -801,11 +964,16 @@ void run_cloud_transfer_task(jlong client_handle,
             task->verify_message.empty() ? "" : task->verify_message.c_str();
         task->succeeded = native_result == CAUTH_OK &&
             (kind == CloudTransferTaskKind::Verify ? task->verify_report.present != 0 : task->result.ok != 0);
-        task->canceled =
-            task->cancel_requested.load() &&
-            (((task->has_result && task->result_message.find("operation canceled") != std::string::npos) ||
-              (task->has_verify_report && task->verify_message.find("operation canceled") != std::string::npos)) ||
-             native_result != CAUTH_OK);
+        const bool message_paused =
+            (task->has_result && task->result_message.find("operation paused") != std::string::npos) ||
+            (task->has_verify_report && task->verify_message.find("operation paused") != std::string::npos);
+        const bool message_canceled =
+            (task->has_result && task->result_message.find("operation canceled") != std::string::npos) ||
+            (task->has_verify_report && task->verify_message.find("operation canceled") != std::string::npos);
+        task->paused = !task->succeeded && (message_paused || task->pause_requested.load());
+        task->canceled = !task->paused &&
+            (task->cancel_requested.load() &&
+             (message_canceled || native_result != CAUTH_OK));
         const char* native_message = cauth_result_message(native_result);
         task->message = task->has_result ? task->result_message
             : task->has_verify_report ? task->verify_message
@@ -816,10 +984,13 @@ void run_cloud_transfer_task(jlong client_handle,
             task->module_status = task->verify_report.module_status;
         }
         if (task->module_status.empty() || task->module_status == "idle") {
-            task->module_status = task->canceled ? "canceled" : (task->succeeded ? "succeeded" : "failed");
+            task->module_status =
+                task->paused ? "paused" : (task->canceled ? "canceled" : (task->succeeded ? "succeeded" : "failed"));
         }
         if (task->phase.empty()) {
-            task->phase = kind == CloudTransferTaskKind::Pull ? "Pull finished"
+            task->phase = task->paused ? "Paused"
+                : task->canceled ? "Canceled"
+                : kind == CloudTransferTaskKind::Pull ? "Pull finished"
                 : kind == CloudTransferTaskKind::Push ? "Push finished"
                                                       : "Verify finished";
         }
@@ -865,6 +1036,10 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeListRemoteFiles(
     jboolean dry_run,
     jboolean delete_remote_orphans,
     jint conflict_policy,
+    jint backend,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role,
     jint local_write_mode,
     jboolean atomic_write,
     jint count,
@@ -876,10 +1051,18 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeListRemoteFiles(
         local_root == nullptr ? nullptr : env->GetStringUTFChars(local_root, nullptr);
     const char* remote_root_chars =
         remote_root == nullptr ? nullptr : env->GetStringUTFChars(remote_root, nullptr);
+    const char* route_endpoint_chars =
+        route_endpoint == nullptr ? nullptr : env->GetStringUTFChars(route_endpoint, nullptr);
+    const char* route_protocol_chars =
+        route_protocol == nullptr ? nullptr : env->GetStringUTFChars(route_protocol, nullptr);
+    const char* route_role_chars =
+        route_role == nullptr ? nullptr : env->GetStringUTFChars(route_role, nullptr);
 
     const auto request = make_request(access_token_chars, local_root_chars, remote_root_chars,
                                       app_id, steam_id, dry_run, delete_remote_orphans,
-                                      conflict_policy, local_write_mode, atomic_write);
+                                      conflict_policy, backend, route_endpoint_chars,
+                                      route_protocol_chars, route_role_chars, local_write_mode,
+                                      atomic_write);
     cauth_steam_cloud_file_list_t result{};
     const cauth_result_t native_result = cauth_steam_cloud_list_remote_files(
         client_from_handle(handle), &request, static_cast<unsigned int>(count),
@@ -894,12 +1077,174 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeListRemoteFiles(
     if (remote_root_chars != nullptr) {
         env->ReleaseStringUTFChars(remote_root, remote_root_chars);
     }
+    if (route_endpoint_chars != nullptr) {
+        env->ReleaseStringUTFChars(route_endpoint, route_endpoint_chars);
+    }
+    if (route_protocol_chars != nullptr) {
+        env->ReleaseStringUTFChars(route_protocol, route_protocol_chars);
+    }
+    if (route_role_chars != nullptr) {
+        env->ReleaseStringUTFChars(route_role, route_role_chars);
+    }
 
     if (native_result != CAUTH_OK) {
         throw_result_exception(env, "Steam cloud list failed", native_result);
         return nullptr;
     }
     return make_steam_cloud_file_list(env, result);
+}
+
+extern "C" JNIEXPORT jobject JNICALL
+Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeListRemoteFilesViaWebPage(
+    JNIEnv* env,
+    jclass,
+    jlong handle,
+    jint app_id,
+    jlong steam_id,
+    jstring access_token,
+    jstring local_root,
+    jstring remote_root,
+    jboolean dry_run,
+    jboolean delete_remote_orphans,
+    jint conflict_policy,
+    jint backend,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role,
+    jint local_write_mode,
+    jboolean atomic_write,
+    jint count,
+    jint start_index) {
+    const char* access_token_chars =
+        access_token == nullptr ? nullptr : env->GetStringUTFChars(access_token, nullptr);
+    const char* local_root_chars =
+        local_root == nullptr ? nullptr : env->GetStringUTFChars(local_root, nullptr);
+    const char* remote_root_chars =
+        remote_root == nullptr ? nullptr : env->GetStringUTFChars(remote_root, nullptr);
+    const char* route_endpoint_chars =
+        route_endpoint == nullptr ? nullptr : env->GetStringUTFChars(route_endpoint, nullptr);
+    const char* route_protocol_chars =
+        route_protocol == nullptr ? nullptr : env->GetStringUTFChars(route_protocol, nullptr);
+    const char* route_role_chars =
+        route_role == nullptr ? nullptr : env->GetStringUTFChars(route_role, nullptr);
+
+    const auto request = make_request(access_token_chars, local_root_chars, remote_root_chars,
+                                      app_id, steam_id, dry_run, delete_remote_orphans,
+                                      conflict_policy, backend, route_endpoint_chars,
+                                      route_protocol_chars, route_role_chars, local_write_mode,
+                                      atomic_write);
+    cauth_steam_cloud_file_list_t result{};
+    const cauth_result_t native_result = cauth_steam_cloud_list_remote_files_via_web_page(
+        client_from_handle(handle), &request, static_cast<unsigned int>(count),
+        static_cast<unsigned int>(start_index), &result);
+
+    if (access_token_chars != nullptr) {
+        env->ReleaseStringUTFChars(access_token, access_token_chars);
+    }
+    if (local_root_chars != nullptr) {
+        env->ReleaseStringUTFChars(local_root, local_root_chars);
+    }
+    if (remote_root_chars != nullptr) {
+        env->ReleaseStringUTFChars(remote_root, remote_root_chars);
+    }
+    if (route_endpoint_chars != nullptr) {
+        env->ReleaseStringUTFChars(route_endpoint, route_endpoint_chars);
+    }
+    if (route_protocol_chars != nullptr) {
+        env->ReleaseStringUTFChars(route_protocol, route_protocol_chars);
+    }
+    if (route_role_chars != nullptr) {
+        env->ReleaseStringUTFChars(route_role, route_role_chars);
+    }
+
+    if (native_result != CAUTH_OK) {
+        throw_result_exception(env, "Steam cloud web-page list failed", native_result);
+        return nullptr;
+    }
+    return make_steam_cloud_file_list(env, result);
+}
+
+extern "C" JNIEXPORT jobject JNICALL
+Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeProbeRoutes(
+    JNIEnv* env,
+    jclass,
+    jlong handle,
+    jint app_id,
+    jlong steam_id,
+    jstring access_token,
+    jstring local_root,
+    jstring remote_root,
+    jboolean dry_run,
+    jboolean delete_remote_orphans,
+    jint conflict_policy,
+    jint backend,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role,
+    jint local_write_mode,
+    jboolean atomic_write,
+    jint task,
+    jint max_count) {
+    const char* access_token_chars =
+        access_token == nullptr ? nullptr : env->GetStringUTFChars(access_token, nullptr);
+    const char* local_root_chars =
+        local_root == nullptr ? nullptr : env->GetStringUTFChars(local_root, nullptr);
+    const char* remote_root_chars =
+        remote_root == nullptr ? nullptr : env->GetStringUTFChars(remote_root, nullptr);
+    const char* route_endpoint_chars =
+        route_endpoint == nullptr ? nullptr : env->GetStringUTFChars(route_endpoint, nullptr);
+    const char* route_protocol_chars =
+        route_protocol == nullptr ? nullptr : env->GetStringUTFChars(route_protocol, nullptr);
+    const char* route_role_chars =
+        route_role == nullptr ? nullptr : env->GetStringUTFChars(route_role, nullptr);
+
+    const auto request = make_request(
+        access_token_chars,
+        local_root_chars,
+        remote_root_chars,
+        app_id,
+        steam_id,
+        dry_run,
+        delete_remote_orphans,
+        conflict_policy,
+        backend,
+        route_endpoint_chars,
+        route_protocol_chars,
+        route_role_chars,
+        local_write_mode,
+        atomic_write);
+    cauth_route_probe_result_t result{};
+    const cauth_result_t native_result = cauth_steam_cloud_probe_routes(
+        client_from_handle(handle),
+        &request,
+        static_cast<cauth_steam_cloud_route_task_t>(task),
+        static_cast<unsigned int>(max_count),
+        &result);
+
+    if (access_token_chars != nullptr) {
+        env->ReleaseStringUTFChars(access_token, access_token_chars);
+    }
+    if (local_root_chars != nullptr) {
+        env->ReleaseStringUTFChars(local_root, local_root_chars);
+    }
+    if (remote_root_chars != nullptr) {
+        env->ReleaseStringUTFChars(remote_root, remote_root_chars);
+    }
+    if (route_endpoint_chars != nullptr) {
+        env->ReleaseStringUTFChars(route_endpoint, route_endpoint_chars);
+    }
+    if (route_protocol_chars != nullptr) {
+        env->ReleaseStringUTFChars(route_protocol, route_protocol_chars);
+    }
+    if (route_role_chars != nullptr) {
+        env->ReleaseStringUTFChars(route_role, route_role_chars);
+    }
+
+    if (native_result != CAUTH_OK) {
+        throw_result_exception(env, "Steam cloud routes failed", native_result);
+        return nullptr;
+    }
+    return make_route_probe_snapshot(env, result);
 }
 
 extern "C" JNIEXPORT jobject JNICALL
@@ -915,6 +1260,10 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativePull(
     jboolean dry_run,
     jboolean delete_remote_orphans,
     jint conflict_policy,
+    jint backend,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role,
     jint local_write_mode,
     jboolean atomic_write) {
     const char* access_token_chars =
@@ -923,10 +1272,18 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativePull(
         local_root == nullptr ? nullptr : env->GetStringUTFChars(local_root, nullptr);
     const char* remote_root_chars =
         remote_root == nullptr ? nullptr : env->GetStringUTFChars(remote_root, nullptr);
+    const char* route_endpoint_chars =
+        route_endpoint == nullptr ? nullptr : env->GetStringUTFChars(route_endpoint, nullptr);
+    const char* route_protocol_chars =
+        route_protocol == nullptr ? nullptr : env->GetStringUTFChars(route_protocol, nullptr);
+    const char* route_role_chars =
+        route_role == nullptr ? nullptr : env->GetStringUTFChars(route_role, nullptr);
 
     const auto request = make_request(access_token_chars, local_root_chars, remote_root_chars,
                                       app_id, steam_id, dry_run, delete_remote_orphans,
-                                      conflict_policy, local_write_mode, atomic_write);
+                                      conflict_policy, backend, route_endpoint_chars,
+                                      route_protocol_chars, route_role_chars, local_write_mode,
+                                      atomic_write);
     cauth_steam_cloud_result_t result{};
     const cauth_result_t native_result =
         cauth_steam_cloud_pull(client_from_handle(handle), &request, &result);
@@ -939,6 +1296,15 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativePull(
     }
     if (remote_root_chars != nullptr) {
         env->ReleaseStringUTFChars(remote_root, remote_root_chars);
+    }
+    if (route_endpoint_chars != nullptr) {
+        env->ReleaseStringUTFChars(route_endpoint, route_endpoint_chars);
+    }
+    if (route_protocol_chars != nullptr) {
+        env->ReleaseStringUTFChars(route_protocol, route_protocol_chars);
+    }
+    if (route_role_chars != nullptr) {
+        env->ReleaseStringUTFChars(route_role, route_role_chars);
     }
 
     if (native_result != CAUTH_OK) {
@@ -961,6 +1327,10 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativePush(
     jboolean dry_run,
     jboolean delete_remote_orphans,
     jint conflict_policy,
+    jint backend,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role,
     jint local_write_mode,
     jboolean atomic_write) {
     const char* access_token_chars =
@@ -969,10 +1339,18 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativePush(
         local_root == nullptr ? nullptr : env->GetStringUTFChars(local_root, nullptr);
     const char* remote_root_chars =
         remote_root == nullptr ? nullptr : env->GetStringUTFChars(remote_root, nullptr);
+    const char* route_endpoint_chars =
+        route_endpoint == nullptr ? nullptr : env->GetStringUTFChars(route_endpoint, nullptr);
+    const char* route_protocol_chars =
+        route_protocol == nullptr ? nullptr : env->GetStringUTFChars(route_protocol, nullptr);
+    const char* route_role_chars =
+        route_role == nullptr ? nullptr : env->GetStringUTFChars(route_role, nullptr);
 
     const auto request = make_request(access_token_chars, local_root_chars, remote_root_chars,
                                       app_id, steam_id, dry_run, delete_remote_orphans,
-                                      conflict_policy, local_write_mode, atomic_write);
+                                      conflict_policy, backend, route_endpoint_chars,
+                                      route_protocol_chars, route_role_chars, local_write_mode,
+                                      atomic_write);
     cauth_steam_cloud_result_t result{};
     const cauth_result_t native_result =
         cauth_steam_cloud_push(client_from_handle(handle), &request, &result);
@@ -985,6 +1363,15 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativePush(
     }
     if (remote_root_chars != nullptr) {
         env->ReleaseStringUTFChars(remote_root, remote_root_chars);
+    }
+    if (route_endpoint_chars != nullptr) {
+        env->ReleaseStringUTFChars(route_endpoint, route_endpoint_chars);
+    }
+    if (route_protocol_chars != nullptr) {
+        env->ReleaseStringUTFChars(route_protocol, route_protocol_chars);
+    }
+    if (route_role_chars != nullptr) {
+        env->ReleaseStringUTFChars(route_role, route_role_chars);
     }
 
     if (native_result != CAUTH_OK) {
@@ -1007,6 +1394,10 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeVerifyLocalFiles(
     jboolean dry_run,
     jboolean delete_remote_orphans,
     jint conflict_policy,
+    jint backend,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role,
     jint local_write_mode,
     jboolean atomic_write,
     jboolean include_extra_local) {
@@ -1016,10 +1407,18 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeVerifyLocalFiles(
         local_root == nullptr ? nullptr : env->GetStringUTFChars(local_root, nullptr);
     const char* remote_root_chars =
         remote_root == nullptr ? nullptr : env->GetStringUTFChars(remote_root, nullptr);
+    const char* route_endpoint_chars =
+        route_endpoint == nullptr ? nullptr : env->GetStringUTFChars(route_endpoint, nullptr);
+    const char* route_protocol_chars =
+        route_protocol == nullptr ? nullptr : env->GetStringUTFChars(route_protocol, nullptr);
+    const char* route_role_chars =
+        route_role == nullptr ? nullptr : env->GetStringUTFChars(route_role, nullptr);
 
     const auto request = make_request(access_token_chars, local_root_chars, remote_root_chars,
                                       app_id, steam_id, dry_run, delete_remote_orphans,
-                                      conflict_policy, local_write_mode, atomic_write);
+                                      conflict_policy, backend, route_endpoint_chars,
+                                      route_protocol_chars, route_role_chars, local_write_mode,
+                                      atomic_write);
     cauth_steam_cloud_verify_report_t result{};
     const cauth_result_t native_result = cauth_steam_cloud_verify_local_files(
         client_from_handle(handle), &request, include_extra_local ? 1 : 0, &result);
@@ -1032,6 +1431,15 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeVerifyLocalFiles(
     }
     if (remote_root_chars != nullptr) {
         env->ReleaseStringUTFChars(remote_root, remote_root_chars);
+    }
+    if (route_endpoint_chars != nullptr) {
+        env->ReleaseStringUTFChars(route_endpoint, route_endpoint_chars);
+    }
+    if (route_protocol_chars != nullptr) {
+        env->ReleaseStringUTFChars(route_protocol, route_protocol_chars);
+    }
+    if (route_role_chars != nullptr) {
+        env->ReleaseStringUTFChars(route_role, route_role_chars);
     }
 
     if (native_result != CAUTH_OK) {
@@ -1054,6 +1462,10 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeStartPull(
     jboolean dry_run,
     jboolean delete_remote_orphans,
     jint conflict_policy,
+    jint backend,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role,
     jint local_write_mode,
     jboolean atomic_write) {
     if (handle == 0 || app_id <= 0 || steam_id <= 0) {
@@ -1071,6 +1483,10 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeStartPull(
         dry_run,
         delete_remote_orphans,
         conflict_policy,
+        backend,
+        route_endpoint,
+        route_protocol,
+        route_role,
         local_write_mode,
         atomic_write);
     const auto task = std::make_shared<CloudTransferTask>(CloudTransferTaskKind::Pull);
@@ -1098,6 +1514,10 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeStartPush(
     jboolean dry_run,
     jboolean delete_remote_orphans,
     jint conflict_policy,
+    jint backend,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role,
     jint local_write_mode,
     jboolean atomic_write) {
     if (handle == 0 || app_id <= 0 || steam_id <= 0) {
@@ -1115,6 +1535,10 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeStartPush(
         dry_run,
         delete_remote_orphans,
         conflict_policy,
+        backend,
+        route_endpoint,
+        route_protocol,
+        route_role,
         local_write_mode,
         atomic_write);
     const auto task = std::make_shared<CloudTransferTask>(CloudTransferTaskKind::Push);
@@ -1142,6 +1566,10 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeStartVerifyLocalF
     jboolean dry_run,
     jboolean delete_remote_orphans,
     jint conflict_policy,
+    jint backend,
+    jstring route_endpoint,
+    jstring route_protocol,
+    jstring route_role,
     jint local_write_mode,
     jboolean atomic_write,
     jboolean include_extra_local) {
@@ -1160,6 +1588,10 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeStartVerifyLocalF
         dry_run,
         delete_remote_orphans,
         conflict_policy,
+        backend,
+        route_endpoint,
+        route_protocol,
+        route_role,
         local_write_mode,
         atomic_write);
     params.include_extra_local = include_extra_local == JNI_TRUE;
@@ -1189,6 +1621,25 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativePollTransferTask(
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativePauseTransferTask(
+    JNIEnv*,
+    jclass,
+    jlong task_handle) {
+    const auto task = find_transfer_task(task_handle);
+    if (task == nullptr) {
+        return;
+    }
+    task->pause_requested.store(true);
+    task->cancel_requested.store(false);
+    std::lock_guard<std::mutex> lock(task->mutex);
+    task->module_status = "pausing";
+    task->message = "Pause requested...";
+    if (task->phase.empty() || task->phase == "Queued") {
+        task->phase = "Pause requested";
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeCancelTransferTask(
     JNIEnv*,
     jclass,
@@ -1198,8 +1649,9 @@ Java_com_cauth_android_steam_cloud_CAuthNativeSteamCloud_nativeCancelTransferTas
         return;
     }
     task->cancel_requested.store(true);
+    task->pause_requested.store(false);
     std::lock_guard<std::mutex> lock(task->mutex);
-    task->module_status = "canceled";
+    task->module_status = "canceling";
     task->message = "Cancel requested...";
 }
 

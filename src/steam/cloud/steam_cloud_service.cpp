@@ -11,6 +11,9 @@
 #include <cctype>
 #include <cmath>
 #include <exception>
+#include <initializer_list>
+#include <iostream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -25,6 +28,14 @@ constexpr std::string_view kSteamStoreBaseUrl = "https://store.steampowered.com"
 constexpr std::string_view kDefaultBrowserUserAgent =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+bool route_selection_applies_to_any_role(
+    const cauth::core::platform::RouteSelection& selection,
+    std::initializer_list<std::string_view> roles);
+std::string rewrite_url_for_route_selection(
+    std::string_view url,
+    const cauth::core::platform::RouteSelection& selection,
+    std::initializer_list<std::string_view> roles);
 
 std::size_t skip_json_string(std::string_view json, std::size_t offset) {
     for (std::size_t index = offset + 1; index < json.size(); ++index) {
@@ -121,6 +132,17 @@ std::string trim_ascii(std::string_view value) {
     }
 
     return std::string{value.substr(begin, end - begin)};
+}
+
+bool looks_like_html_document(std::string_view value) {
+    const auto trimmed = trim_ascii(value);
+    return !trimmed.empty() && trimmed.front() == '<';
+}
+
+bool looks_like_cloud_enumerate_json(std::string_view value) {
+    return value.find("\"response\"") != std::string_view::npos ||
+           value.find("\"total_files\"") != std::string_view::npos ||
+           value.find("\"files\"") != std::string_view::npos;
 }
 
 std::string html_unescape(std::string_view value) {
@@ -290,6 +312,32 @@ bool is_web_store_download_url(std::string_view url) {
     const auto host = host_from_url(url);
     return host == "cdn.steamusercontent.com" &&
            url.find("/filedownload/") != std::string_view::npos;
+}
+
+bool should_use_access_token_preferred_web_api_base(const SteamCloudRequest& request) {
+    return !request.access_token.empty();
+}
+
+bool steam_cloud_web_debug_enabled() {
+#ifdef _WIN32
+    char* value = nullptr;
+    std::size_t value_length = 0;
+    if (_dupenv_s(&value, &value_length, "CAUTH_DEBUG_CLOUD_WEB") != 0 || value == nullptr) {
+        return false;
+    }
+    std::unique_ptr<char, decltype(&std::free)> value_guard{value, std::free};
+    return value_length > 0 && std::string_view{value_guard.get()} == "1";
+#else
+    const auto* value = std::getenv("CAUTH_DEBUG_CLOUD_WEB");
+    return value != nullptr && std::string_view{value} == "1";
+#endif
+}
+
+void debug_log_cloud_web(std::string_view message) {
+    if (!steam_cloud_web_debug_enabled()) {
+        return;
+    }
+    std::cerr << "[cloud-web] " << message << '\n';
 }
 
 std::uint32_t parse_human_size_bytes(std::string_view value) {
@@ -504,13 +552,17 @@ SteamCloudFileListResult fetch_remote_file_list_via_store_page(const SteamCloudR
         return result;
     }
 
+    const auto base_url = rewrite_url_for_route_selection(
+        std::string{kSteamStoreBaseUrl},
+        request.route_selection,
+        {"control", "enumerate"});
+
     cauth::core::platform::HttpRequest http_request;
     http_request.method = cauth::core::platform::HttpMethod::Get;
-    http_request.url = std::string{kSteamStoreBaseUrl} +
-                       "/account/remotestorageapp/?appid=" + std::to_string(request.app_id);
+    http_request.url = base_url + "/account/remotestorageapp/?appid=" + std::to_string(request.app_id);
     http_request.headers.push_back({"Cookie", *store_cookie_header});
-    http_request.headers.push_back({"Origin", std::string{kSteamStoreBaseUrl}});
-    http_request.headers.push_back({"Referer", std::string{kSteamStoreBaseUrl} + "/"});
+    http_request.headers.push_back({"Origin", base_url});
+    http_request.headers.push_back({"Referer", base_url + "/"});
 
     const auto response = cauth::core::platform::perform_platform_http_request(http_request);
     if (!response.ok) {
@@ -563,6 +615,51 @@ SteamCloudBackend resolve_cloud_backend(const SteamCloudRequest& request) {
     return SteamCloudBackend::CmCloud;
 }
 
+bool route_selection_applies_to_any_role(
+    const cauth::core::platform::RouteSelection& selection,
+    std::initializer_list<std::string_view> roles) {
+    if (selection.empty() || selection.role.empty()) {
+        return true;
+    }
+    for (const auto role : roles) {
+        if (selection.role == role) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string rewrite_url_for_route_selection(
+    std::string_view url,
+    const cauth::core::platform::RouteSelection& selection,
+    std::initializer_list<std::string_view> roles) {
+    if (selection.empty() || !route_selection_applies_to_any_role(selection, roles)) {
+        return std::string{url};
+    }
+
+    const auto scheme_end = url.find("://");
+    if (scheme_end == std::string_view::npos) {
+        return std::string{url};
+    }
+    const auto authority_begin = scheme_end + 3;
+    auto authority_end = url.find('/', authority_begin);
+    if (authority_end == std::string_view::npos) {
+        authority_end = url.size();
+    }
+    if (authority_end <= authority_begin) {
+        return std::string{url};
+    }
+
+    const auto protocol = selection.protocol.empty()
+                              ? std::string{url.substr(0, scheme_end)}
+                              : selection.protocol;
+    const auto endpoint =
+        selection.endpoint.empty()
+            ? std::string{url.substr(authority_begin, authority_end - authority_begin)}
+            : selection.endpoint;
+    return protocol + "://" + endpoint + std::string{url.substr(authority_end)};
+}
+
 } // namespace
 
 SteamCloudRequest materialize_cloud_web_api_auth(const SteamCloudRequest& request,
@@ -591,11 +688,19 @@ SteamCloudRequest materialize_cloud_web_api_auth(const SteamCloudRequest& reques
     const auto cookie_result = cookie_service.get_web_cookies(
         session, "/account/remotestorageapp/?appid=" + std::to_string(effective.app_id));
     if (!cookie_result.ok) {
+        debug_log_cloud_web("web cookie materialization failed: " + cookie_result.error_message);
         if (error_message != nullptr) {
             *error_message = "web cookie auth materialization failed: " + cookie_result.error_message;
         }
         return effective;
     }
+    debug_log_cloud_web(
+        "web cookies ready; community_cookie=" +
+        std::string{cookie_result.community_cookie_header.empty() ? "no" : "yes"} +
+        " store_cookie=" +
+        std::string{cookie_result.store_cookie_header.empty() ? "no" : "yes"} +
+        " store_webapi_token=" +
+        std::string{cookie_result.store_webapi_token.empty() ? "no" : "yes"});
 
     effective.web_cookie_header = !cookie_result.community_cookie_header.empty()
                                       ? cookie_result.community_cookie_header
@@ -610,6 +715,10 @@ SteamCloudRequest materialize_cloud_web_api_auth(const SteamCloudRequest& reques
         cauth::steam::auth::extract_steam_refresh_token_from_web_cookies(
             cookie_result.cookies, effective.steam_id);
     if (!derived_refresh_token.has_value() || derived_refresh_token->empty()) {
+        if (!cookie_result.store_webapi_token.empty()) {
+            debug_log_cloud_web(
+                "store_webapi_token is available, but no refresh token could be derived; keeping cookie mode");
+        }
         return effective;
     }
 
@@ -624,22 +733,31 @@ SteamCloudRequest materialize_cloud_web_api_auth(const SteamCloudRequest& reques
         if (generated.result.ok && generated.value.has_value() &&
             !generated.value->access_token.empty()) {
             effective.access_token = generated.value->access_token;
-            effective.web_cookie_header.clear();
-            effective.store_cookie_header.clear();
+            debug_log_cloud_web("GenerateAccessTokenForApp returned a non-empty access token");
         } else if (error_message != nullptr &&
                    (!generated.result.ok || !generated.value.has_value())) {
             *error_message = "web cloud access token derivation failed: " +
                              generated.result.error_message;
+            debug_log_cloud_web("GenerateAccessTokenForApp failed: " + generated.result.error_message);
+        } else {
+            debug_log_cloud_web("GenerateAccessTokenForApp returned no usable access token");
         }
     } catch (const std::exception& ex) {
         if (error_message != nullptr) {
             *error_message =
                 "web cloud access token derivation threw: " + std::string{ex.what()};
         }
+        debug_log_cloud_web("GenerateAccessTokenForApp threw: " + std::string{ex.what()});
     } catch (...) {
         if (error_message != nullptr) {
             *error_message = "web cloud access token derivation threw an unknown exception";
         }
+        debug_log_cloud_web("GenerateAccessTokenForApp threw an unknown exception");
+    }
+
+    if (effective.access_token.empty() && !cookie_result.store_webapi_token.empty()) {
+        debug_log_cloud_web(
+            "store_webapi_token is available, but EnumerateUserFiles will stay in cookie mode because the token is not a proven cloud access token");
     }
 
     return effective;
@@ -649,8 +767,14 @@ std::string build_enumerate_user_files_url(const SteamCloudRequest& request,
                                            std::uint32_t count,
                                            std::uint32_t start_index,
                                            bool extended_details) {
-    auto url = std::string{request.web_cookie_header.empty() ? kSteamApiBaseUrl
-                                                             : kSteamCommunityBaseUrl} +
+    const auto base_url = rewrite_url_for_route_selection(
+        should_use_access_token_preferred_web_api_base(request)
+            ? std::string{kSteamApiBaseUrl}
+            : (request.web_cookie_header.empty() ? std::string{kSteamApiBaseUrl}
+                                                 : std::string{kSteamCommunityBaseUrl}),
+        request.route_selection,
+        {"control", "enumerate"});
+    auto url = base_url +
                "/ICloudService/EnumerateUserFiles/v1/?appid=" + std::to_string(request.app_id) +
                "&extended_details=" + (extended_details ? "1" : "0") +
                "&count=" + std::to_string(count) +
@@ -724,10 +848,6 @@ SteamCloudFileListResult fetch_remote_file_list_via_web_api(const SteamCloudRequ
                                  : auth_error;
             return result;
         }
-        if (effective_request.access_token.empty() &&
-            effective_request.session_type == cauth::steam::auth::kSteamSessionTypeWebBrowser) {
-            return fetch_remote_file_list_via_store_page(effective_request);
-        }
         if (!cauth::core::platform::is_platform_http_client_available()) {
             result.message = "platform HTTP client is not available";
             return result;
@@ -735,18 +855,42 @@ SteamCloudFileListResult fetch_remote_file_list_via_web_api(const SteamCloudRequ
 
         cauth::core::platform::HttpRequest http_request;
         http_request.method = cauth::core::platform::HttpMethod::Get;
-        http_request.url =
+        const auto request_url =
             build_enumerate_user_files_url(effective_request, count, start_index, extended_details);
-        if (!effective_request.web_cookie_header.empty()) {
+        http_request.url = request_url;
+        if (effective_request.access_token.empty() && !effective_request.web_cookie_header.empty()) {
+            debug_log_cloud_web("EnumerateUserFiles using community cookie mode");
+            const auto community_base_url = rewrite_url_for_route_selection(
+                std::string{kSteamCommunityBaseUrl},
+                effective_request.route_selection,
+                {"control", "enumerate"});
             http_request.headers.push_back({"Cookie", effective_request.web_cookie_header});
-            http_request.headers.push_back({"Origin", std::string{kSteamCommunityBaseUrl}});
-            http_request.headers.push_back({"Referer", std::string{kSteamCommunityBaseUrl} + "/"});
+            http_request.headers.push_back({"Origin", community_base_url});
+            http_request.headers.push_back({"Referer", community_base_url + "/"});
+        } else if (!effective_request.access_token.empty()) {
+            debug_log_cloud_web("EnumerateUserFiles using access_token mode");
         }
 
         const auto response = cauth::core::platform::perform_platform_http_request(http_request);
         const auto eresult = parse_x_eresult_header(response);
         result.eresult = eresult;
         if (!response.ok) {
+            debug_log_cloud_web(
+                "EnumerateUserFiles HTTP failed status=" + std::to_string(response.status_code) +
+                " error=" + response.error_message);
+            if (!effective_request.access_token.empty() &&
+                effective_request.session_type ==
+                    cauth::steam::auth::kSteamSessionTypeWebBrowser &&
+                (!effective_request.web_cookie_header.empty() ||
+                 !effective_request.store_cookie_header.empty())) {
+                debug_log_cloud_web("EnumerateUserFiles failed; trying store page fallback");
+                const auto fallback = fetch_remote_file_list_via_store_page(effective_request);
+                if (fallback.ok) {
+                    debug_log_cloud_web("store page fallback succeeded");
+                    return fallback;
+                }
+                debug_log_cloud_web("store page fallback also failed: " + fallback.message);
+            }
             result.message = response.error_message.empty() ? "Steam Cloud request failed"
                                                             : response.error_message;
             return result;
@@ -757,10 +901,48 @@ SteamCloudFileListResult fetch_remote_file_list_via_web_api(const SteamCloudRequ
             result.message = "failed to decode Steam Cloud response body";
             return result;
         }
+        if (looks_like_html_document(*body)) {
+            debug_log_cloud_web("EnumerateUserFiles returned HTML instead of JSON");
+            result.ok = false;
+            result.message =
+                "Steam Cloud enumerate returned HTML instead of JSON; the cookie-authenticated "
+                "community path may not be accepted for this account/app";
+            return result;
+        }
+        if (!looks_like_cloud_enumerate_json(*body)) {
+            debug_log_cloud_web("EnumerateUserFiles returned a non-cloud JSON payload");
+            result.ok = false;
+            result.message =
+                "Steam Cloud enumerate returned a non-cloud JSON payload; web enumerate is not "
+                "usable for this account/app";
+            return result;
+        }
 
         result = parse_enumerate_user_files_response(effective_request.app_id, *body, eresult);
         if (!result.ok && result.message.empty()) {
             result.message = "Steam Cloud enumerate failed";
+        }
+        if (result.ok && result.total_files == 0 && result.files.empty() &&
+            !looks_like_cloud_enumerate_json(*body)) {
+            result.ok = false;
+            result.message =
+                "Steam Cloud enumerate returned an unexpected empty payload; web enumerate is not "
+                "usable for this account/app";
+        }
+        if (!result.ok && !effective_request.access_token.empty() &&
+            effective_request.session_type ==
+                cauth::steam::auth::kSteamSessionTypeWebBrowser &&
+            (!effective_request.web_cookie_header.empty() ||
+             !effective_request.store_cookie_header.empty())) {
+            debug_log_cloud_web(
+                "EnumerateUserFiles response was not ok (eresult=" + std::to_string(result.eresult) +
+                "); trying store page fallback");
+            const auto fallback = fetch_remote_file_list_via_store_page(effective_request);
+            if (fallback.ok) {
+                debug_log_cloud_web("store page fallback succeeded after non-ok enumerate response");
+                return fallback;
+            }
+            debug_log_cloud_web("store page fallback also failed: " + fallback.message);
         }
     } catch (const std::exception& ex) {
         result.message = "Steam Cloud web API path threw: " + std::string{ex.what()};
@@ -768,6 +950,17 @@ SteamCloudFileListResult fetch_remote_file_list_via_web_api(const SteamCloudRequ
     } catch (...) {
         result.message = "Steam Cloud web API path threw an unknown exception";
         return result;
+    }
+    return result;
+}
+
+SteamCloudFileListResult fetch_remote_file_list_via_web_page_diagnostic(
+    const SteamCloudRequest& request) {
+    auto result = fetch_remote_file_list_via_store_page(request);
+    result.module_status = result.ok ? "succeeded" : "failed";
+    if (result.ok) {
+        result.message =
+            "ok (diagnostic store page list; not proof that Steam Cloud web backend is usable)";
     }
     return result;
 }
@@ -794,10 +987,11 @@ SteamCloudFileListResult fetch_remote_file_list(const SteamCloudRequest& request
 SteamCloudDownloadResult download_remote_file(
     const SteamCloudRequest& request,
     const SteamCloudFileEntry& file,
+    const SteamCloudDownloadOptions& download_options,
     const cauth::core::platform::HttpRequestCallbacks& callbacks) {
     switch (resolve_cloud_backend(request)) {
     case SteamCloudBackend::CmCloud:
-        return download_remote_file_via_cm(request, file, callbacks);
+        return download_remote_file_via_cm(request, file, download_options, callbacks);
     case SteamCloudBackend::WebApi:
         break;
     case SteamCloudBackend::Auto:
@@ -819,26 +1013,41 @@ SteamCloudDownloadResult download_remote_file(
 
     cauth::core::platform::HttpRequest http_request;
     http_request.method = cauth::core::platform::HttpMethod::Get;
-    http_request.url = file.url;
+    http_request.url = rewrite_url_for_route_selection(
+        file.url,
+        request.route_selection,
+        {"download", "content"});
     http_request.callbacks = callbacks;
+    http_request.use_range = download_options.use_range;
+    http_request.range_start = download_options.range_start;
+    http_request.response_write_hook = download_options.response_write_hook;
+    http_request.response_write_user_data = download_options.response_write_user_data;
     if (request.session_type == cauth::steam::auth::kSteamSessionTypeWebBrowser &&
-        is_web_store_download_url(file.url)) {
+        is_web_store_download_url(http_request.url)) {
+        const auto store_base_url = rewrite_url_for_route_selection(
+            std::string{kSteamStoreBaseUrl},
+            request.route_selection,
+            {"control", "download", "content"});
         if (const auto store_cookie_header = build_store_cookie_header_for_request(request);
             store_cookie_header.has_value() && !store_cookie_header->empty()) {
             http_request.headers.push_back({"Cookie", *store_cookie_header});
         }
-        http_request.headers.push_back({"Origin", std::string{kSteamStoreBaseUrl}});
+        http_request.headers.push_back({"Origin", store_base_url});
         http_request.headers.push_back(
             {"Referer",
-             std::string{kSteamStoreBaseUrl} +
+             store_base_url +
                  "/account/remotestorageapp/?appid=" + std::to_string(request.app_id)});
         http_request.headers.push_back({"User-Agent", std::string{kDefaultBrowserUserAgent}});
     }
 
     const auto response = cauth::core::platform::perform_platform_http_request(http_request);
     if (!response.ok) {
+        debug_log_cloud_web(
+            "download failed url=" + http_request.url +
+            " status=" + std::to_string(response.status_code) +
+            " error=" + response.error_message);
         if (request.session_type == cauth::steam::auth::kSteamSessionTypeWebBrowser &&
-            is_web_store_download_url(file.url) && response.error_message == "HTTP 404") {
+            is_web_store_download_url(http_request.url) && response.error_message == "HTTP 404") {
             result.message =
                 "Steam returned a store file listing, but the web download URL expired or "
                 "is not directly downloadable; use `steam auth login` and the CM backend "

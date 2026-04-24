@@ -72,6 +72,36 @@ struct ParsedUrl {
     std::string path_and_query;
 };
 
+struct ResolvedRequestBody {
+    const std::uint8_t* data = nullptr;
+    std::size_t size = 0;
+};
+
+std::optional<ResolvedRequestBody> resolve_request_body(const HttpRequest& request,
+                                                        std::string& error_message) {
+    const auto* body = request.body_view != nullptr ? request.body_view : &request.body;
+    if (request.body_offset > body->size()) {
+        error_message = "HTTP request body offset is out of range";
+        return std::nullopt;
+    }
+
+    const auto remaining = body->size() - static_cast<std::size_t>(request.body_offset);
+    const auto requested_length = request.body_length == 0
+                                      ? remaining
+                                      : static_cast<std::size_t>(request.body_length);
+    if (requested_length > remaining) {
+        error_message = "HTTP request body length is out of range";
+        return std::nullopt;
+    }
+
+    ResolvedRequestBody resolved;
+    resolved.size = requested_length;
+    if (requested_length > 0) {
+        resolved.data = body->data() + static_cast<std::ptrdiff_t>(request.body_offset);
+    }
+    return resolved;
+}
+
 #ifdef _WIN32
 std::optional<ParsedUrl> parse_url(std::string_view url) {
     ParsedUrl parsed;
@@ -186,6 +216,16 @@ std::uint64_t response_content_length(const std::vector<HttpHeader>& headers) {
     return 0;
 }
 
+std::uint64_t response_total_length(const HttpRequest& request,
+                                    std::uint32_t status_code,
+                                    const std::vector<HttpHeader>& headers) {
+    const auto content_length = response_content_length(headers);
+    if (request.use_range && request.range_start > 0 && status_code == 206 && content_length > 0) {
+        return request.range_start + content_length;
+    }
+    return content_length;
+}
+
 HttpResponse winhttp_request(const HttpRequest& request) {
     const auto parsed = parse_url(request.url);
     if (!parsed.has_value()) {
@@ -233,6 +273,9 @@ HttpResponse winhttp_request(const HttpRequest& request) {
     if (!request.content_type.empty()) {
         headers = widen_ascii("Content-Type: " + request.content_type + "\r\n");
     }
+    if (request.use_range) {
+        headers += widen_ascii("Range: bytes=" + std::to_string(request.range_start) + "-\r\n");
+    }
     for (const auto& header : request.headers) {
         headers += widen_ascii(header.name);
         headers += L": ";
@@ -240,7 +283,12 @@ HttpResponse winhttp_request(const HttpRequest& request) {
         headers += L"\r\n";
     }
 
-    if (request.body.size() >
+    std::string body_error;
+    const auto resolved_body = resolve_request_body(request, body_error);
+    if (!resolved_body.has_value()) {
+        return {false, body_error, 0, {}, {}};
+    }
+    if (resolved_body->size >
         static_cast<std::size_t>((std::numeric_limits<DWORD>::max)())) {
         return {false, "HTTP request body is too large", 0, {}, {}};
     }
@@ -249,7 +297,7 @@ HttpResponse winhttp_request(const HttpRequest& request) {
         return {false, "operation canceled", 0, {}, {}};
     }
 
-    const auto body_size = static_cast<DWORD>(request.body.size());
+    const auto body_size = static_cast<DWORD>(resolved_body->size);
     if (WinHttpSendRequest(http_request.get(),
                            headers.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.c_str(),
                            headers.empty() ? 0 : static_cast<DWORD>(headers.size()),
@@ -260,23 +308,23 @@ HttpResponse winhttp_request(const HttpRequest& request) {
         return {false, "WinHTTP request failed", 0, {}, {}};
     }
 
-    if (!request.body.empty()) {
+    if (resolved_body->size > 0) {
         constexpr std::size_t kUploadChunkSize = 64U * 1024U;
         report_transfer_progress(
-            request.callbacks, HttpTransferDirection::Upload, 0, request.body.size());
+            request.callbacks, HttpTransferDirection::Upload, 0, resolved_body->size);
 
         std::size_t offset = 0;
-        while (offset < request.body.size()) {
+        while (offset < resolved_body->size) {
             if (is_request_canceled(request.callbacks)) {
                 return {false, "operation canceled", 0, {}, {}};
             }
 
-            const auto remaining = request.body.size() - offset;
+            const auto remaining = resolved_body->size - offset;
             const auto requested =
                 static_cast<DWORD>((std::min<std::size_t>)(remaining, kUploadChunkSize));
             DWORD written = 0;
             if (WinHttpWriteData(http_request.get(),
-                                 request.body.data() + static_cast<std::ptrdiff_t>(offset),
+                                 resolved_body->data + static_cast<std::ptrdiff_t>(offset),
                                  requested,
                                  &written) == FALSE) {
                 return {false, "WinHttpWriteData failed", 0, {}, {}};
@@ -289,7 +337,7 @@ HttpResponse winhttp_request(const HttpRequest& request) {
             report_transfer_progress(request.callbacks,
                                      HttpTransferDirection::Upload,
                                      offset,
-                                     request.body.size());
+                                     resolved_body->size);
         }
     }
 
@@ -323,10 +371,22 @@ HttpResponse winhttp_request(const HttpRequest& request) {
     const std::wstring raw_headers =
         raw_headers_buffer.empty() ? std::wstring{} : std::wstring{raw_headers_buffer.data()};
     auto response_headers = parse_raw_headers(raw_headers);
-    const auto content_length = response_content_length(response_headers);
+    const auto total_length = response_total_length(request, status_code, response_headers);
+
+    if (request.use_range && request.range_start > 0 && status_code != 206) {
+        return {false,
+                "HTTP range request was not honored",
+                status_code,
+                {},
+                std::move(response_headers)};
+    }
 
     std::vector<std::uint8_t> body;
-    report_transfer_progress(request.callbacks, HttpTransferDirection::Download, 0, content_length);
+    report_transfer_progress(request.callbacks,
+                             HttpTransferDirection::Download,
+                             request.use_range ? request.range_start : 0,
+                             total_length);
+    std::uint64_t streamed_bytes = request.use_range ? request.range_start : 0;
     while (true) {
         if (is_request_canceled(request.callbacks)) {
             return {false, "operation canceled", status_code, {}, response_headers};
@@ -345,11 +405,29 @@ HttpResponse winhttp_request(const HttpRequest& request) {
         if (WinHttpReadData(http_request.get(), body.data() + offset, available, &read) == FALSE) {
             return {false, "WinHttpReadData failed", status_code, {}, response_headers};
         }
+        if (request.response_write_hook != nullptr && read > 0) {
+            if (!request.response_write_hook(body.data() + offset,
+                                             static_cast<std::size_t>(read),
+                                             request.response_write_user_data)) {
+                return {false,
+                        "HTTP response sink rejected data",
+                        status_code,
+                        {},
+                        response_headers};
+            }
+            streamed_bytes += read;
+            body.resize(offset);
+            report_transfer_progress(request.callbacks,
+                                     HttpTransferDirection::Download,
+                                     streamed_bytes,
+                                     total_length);
+            continue;
+        }
         body.resize(offset + read);
         report_transfer_progress(request.callbacks,
                                  HttpTransferDirection::Download,
-                                 body.size(),
-                                 content_length);
+                                 (request.use_range ? request.range_start : 0) + body.size(),
+                                 total_length);
     }
 
     if (status_code < 200 || status_code >= 300) {
@@ -373,16 +451,63 @@ HttpResponse perform_platform_http_request(const HttpRequest& request) {
 #ifdef _WIN32
     return winhttp_request(request);
 #elif defined(__ANDROID__)
+    auto request_copy = request;
+    if (request_copy.body_view != nullptr) {
+        std::string body_error;
+        const auto resolved_body = resolve_request_body(request_copy, body_error);
+        if (!resolved_body.has_value()) {
+            return {false, body_error, 0, {}, {}};
+        }
+        if (resolved_body->size == 0) {
+            request_copy.body.clear();
+        } else {
+            request_copy.body.assign(resolved_body->data,
+                                     resolved_body->data + resolved_body->size);
+        }
+        request_copy.body_view = nullptr;
+        request_copy.body_offset = 0;
+        request_copy.body_length = 0;
+    } else if (request_copy.body_offset != 0 || request_copy.body_length != 0) {
+        std::string body_error;
+        const auto resolved_body = resolve_request_body(request_copy, body_error);
+        if (!resolved_body.has_value()) {
+            return {false, body_error, 0, {}, {}};
+        }
+        if (resolved_body->size == 0) {
+            request_copy.body.clear();
+        } else {
+            request_copy.body.assign(resolved_body->data,
+                                     resolved_body->data + resolved_body->size);
+        }
+        request_copy.body_offset = 0;
+        request_copy.body_length = 0;
+    }
+    if (request_copy.use_range) {
+        request_copy.headers.push_back(
+            {"Range", "bytes=" + std::to_string(request_copy.range_start) + "-"});
+    }
     const auto response = cauth::core::runtime::android_bridge_http_request(
         request.method == HttpMethod::Post
             ? "POST"
             : request.method == HttpMethod::Put ? "PUT" : "GET",
-        request.url,
-        request.body,
-        request.content_type,
-        request.headers,
-        request.connect_timeout_ms,
-        request.read_timeout_ms);
+        request_copy.url,
+        request_copy.body,
+        request_copy.content_type,
+        request_copy.headers,
+        request_copy.connect_timeout_ms,
+        request_copy.read_timeout_ms);
+    if (request_copy.use_range && request_copy.range_start > 0 && response.ok &&
+        response.status_code != 206) {
+        return {false, "HTTP range request was not honored", response.status_code, {}, {}};
+    }
+    if (request_copy.response_write_hook != nullptr && response.ok && !response.body.empty()) {
+        if (!request_copy.response_write_hook(response.body.data(),
+                                              response.body.size(),
+                                              request_copy.response_write_user_data)) {
+            return {false, "HTTP response sink rejected data", response.status_code, {}, {}};
+        }
+        return {response.ok, response.error_message, response.status_code, {}, {}};
+    }
     return {response.ok,
             response.error_message,
             response.status_code,

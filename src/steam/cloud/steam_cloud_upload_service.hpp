@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/platform/http_client.hpp"
+#include "core/platform/route_selection.hpp"
 
 #include <cstdint>
 #include <string>
@@ -20,12 +21,16 @@ struct SteamCloudUploadFile {
 struct SteamCloudUploadResult {
     bool ok = false;
     std::string message;
+    bool resumable = false;
+    bool resumed = false;
+    std::uint64_t resume_from_bytes = 0;
 };
 
 struct SteamCloudWebAuthContext {
     std::string access_token;
     std::string web_cookie_header;
     std::string store_cookie_header;
+    cauth::core::platform::RouteSelection route_selection;
 };
 
 using SteamCloudUploadProgressHook =
@@ -33,11 +38,16 @@ using SteamCloudUploadProgressHook =
              std::uint64_t bytes_transferred,
              std::uint64_t total_bytes,
              void* user_data);
+using SteamCloudUploadStateHook =
+    void (*)(bool resumable, bool resumed, std::uint64_t resume_from_bytes, void* user_data);
 using SteamCloudUploadCancelHook = bool (*)(void* user_data);
+using SteamCloudUploadPauseHook = bool (*)(void* user_data);
 
 struct SteamCloudUploadCallbacks {
     SteamCloudUploadProgressHook progress_hook = nullptr;
+    SteamCloudUploadStateHook state_hook = nullptr;
     SteamCloudUploadCancelHook cancel_hook = nullptr;
+    SteamCloudUploadPauseHook pause_hook = nullptr;
     void* user_data = nullptr;
 };
 
