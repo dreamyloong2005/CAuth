@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 
 project(
     CAuth
-    VERSION 0.6.0
+    VERSION 0.6.1
     DESCRIPTION "Native Steam authentication, depot, and cloud toolkit"
     LANGUAGES C CXX
 )
@@ -40,6 +40,7 @@ set(CAUTH_CORE_SOURCES
     src/core/platform/endpoint_route_cache.cpp
     src/core/platform/file_write.cpp
     src/core/platform/http_client.cpp
+    src/core/platform/operation_cancel.cpp
     src/core/platform/password_crypto.cpp
     src/core/platform/session_repository_factory.cpp
     src/core/platform/websocket_client.cpp

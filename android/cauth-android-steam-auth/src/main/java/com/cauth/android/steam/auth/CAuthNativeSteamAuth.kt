@@ -23,6 +23,9 @@ internal object CAuthNativeSteamAuth {
     ): LoginResultSnapshot
 
     @JvmStatic
+    external fun nativeRequestLoginCancel(handle: Long)
+
+    @JvmStatic
     external fun nativeGetSavedSession(handle: Long, steamId: Long): SavedSessionSnapshot
 
     @JvmStatic

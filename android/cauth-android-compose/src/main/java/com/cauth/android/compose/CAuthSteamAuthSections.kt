@@ -176,6 +176,7 @@ fun CAuthSteamAuthRouteSection(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CAuthSteamAuthActionButtons(
+    state: CAuthSteamAuthState,
     controller: CAuthSteamAuthController,
     modifier: Modifier = Modifier,
 ) {
@@ -188,13 +189,23 @@ fun CAuthSteamAuthActionButtons(
         Button(
             onClick = controller::login,
             modifier = Modifier.fillMaxWidth(),
+            enabled = !state.busy,
         ) {
             Text("Login")
+        }
+        if (state.busy) {
+            Button(
+                onClick = controller::cancelLogin,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Cancel Login")
+            }
         }
 
         Button(
             onClick = controller::loadSavedSession,
             modifier = Modifier.fillMaxWidth(),
+            enabled = !state.busy,
         ) {
             Text("Saved Session")
         }
@@ -202,6 +213,7 @@ fun CAuthSteamAuthActionButtons(
         Button(
             onClick = controller::loadSavedAccounts,
             modifier = Modifier.fillMaxWidth(),
+            enabled = !state.busy,
         ) {
             Text("Saved Accounts")
         }
@@ -209,6 +221,7 @@ fun CAuthSteamAuthActionButtons(
         Button(
             onClick = controller::clearSavedSession,
             modifier = Modifier.fillMaxWidth(),
+            enabled = !state.busy,
         ) {
             Text("Clear Session")
         }
@@ -216,6 +229,7 @@ fun CAuthSteamAuthActionButtons(
         Button(
             onClick = controller::probeCm,
             modifier = Modifier.fillMaxWidth(),
+            enabled = !state.busy,
         ) {
             Text("CM Probe")
         }
@@ -223,6 +237,7 @@ fun CAuthSteamAuthActionButtons(
         Button(
             onClick = controller::logonCm,
             modifier = Modifier.fillMaxWidth(),
+            enabled = !state.busy,
         ) {
             Text("CM Logon")
         }

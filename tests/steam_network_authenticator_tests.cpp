@@ -9,6 +9,9 @@ class FakeTransport final : public cauth::steam::auth::SteamAuthenticationTransp
     cauth::steam::auth::SteamTransportResponse<cauth::steam::auth::SteamRsaPublicKey>
     get_password_rsa_public_key(const std::string&) override {
         ++key_calls;
+        if (cancel_key_request) {
+            return {{false, "operation canceled"}, std::nullopt};
+        }
         return {
             {true, ""},
             cauth::steam::auth::SteamRsaPublicKey{"modulus", "010001", 1234},
@@ -20,8 +23,12 @@ class FakeTransport final : public cauth::steam::auth::SteamAuthenticationTransp
         const cauth::steam::auth::SteamBeginAuthSessionRequest& request) override {
         ++begin_calls;
         last_begin_request = request;
+        if (cancel_begin_request) {
+            return {{false, "operation canceled"}, std::nullopt};
+        }
         if (guard_required && request.steam_guard_code.empty()) {
             cauth::steam::auth::SteamBeginAuthSessionResponse response;
+            response.interval_seconds = begin_interval_seconds;
             response.allowed_confirmations.push_back(
                 {guard_type, "guard"});
             if (guard_type ==
@@ -37,6 +44,7 @@ class FakeTransport final : public cauth::steam::auth::SteamAuthenticationTransp
         response.client_id = 42;
         response.request_id = {1, 2, 3};
         response.steam_id = 76561198000000000ULL;
+        response.interval_seconds = begin_interval_seconds;
         return {{true, ""}, response};
     }
 
@@ -48,10 +56,10 @@ class FakeTransport final : public cauth::steam::auth::SteamAuthenticationTransp
         return {
             {true, ""},
             cauth::steam::auth::SteamPollAuthSessionStatusResponse{
-                "refresh-token",
-                "access-token",
-                "test_account",
-                false,
+                poll_refresh_token,
+                poll_access_token,
+                poll_account_name,
+                poll_had_remote_interaction,
             },
         };
     }
@@ -70,11 +78,18 @@ class FakeTransport final : public cauth::steam::auth::SteamAuthenticationTransp
     }
 
     bool guard_required = false;
+    bool cancel_key_request = false;
+    bool cancel_begin_request = false;
     cauth::steam::auth::SteamGuardConfirmationType guard_type =
         cauth::steam::auth::SteamGuardConfirmationType::EmailCode;
     int key_calls = 0;
     int begin_calls = 0;
     int poll_calls = 0;
+    double begin_interval_seconds = 0.0;
+    std::string poll_refresh_token = "refresh-token";
+    std::string poll_access_token = "access-token";
+    std::string poll_account_name = "test_account";
+    bool poll_had_remote_interaction = false;
     cauth::steam::auth::SteamBeginAuthSessionRequest last_begin_request;
     cauth::steam::auth::SteamPollAuthSessionStatusRequest last_poll_request;
 };
@@ -154,6 +169,46 @@ int main() {
     const auto mobile_confirmation_result = authenticator.login(make_request());
     if (mobile_confirmation_result.status != cauth::steam::auth::SteamLoginStatus::Succeeded) {
         std::cerr << "mobile confirmation should continue to poll without a typed code\n";
+        return 1;
+    }
+
+    transport.poll_refresh_token.clear();
+    transport.poll_access_token.clear();
+    transport.begin_interval_seconds = 0.01;
+    bool cancel_requested = false;
+    int waiting_calls = 0;
+    cauth::steam::auth::SteamNetworkAuthenticator cancelable_authenticator{
+        transport,
+        encryptor,
+        cauth::steam::auth::SteamNetworkAuthenticatorOptions{
+            4,
+            [&](int, int, double) {
+                ++waiting_calls;
+                cancel_requested = true;
+            },
+            [&]() { return cancel_requested; },
+        },
+    };
+    const auto canceled_result = cancelable_authenticator.login(make_request());
+    if (canceled_result.status != cauth::steam::auth::SteamLoginStatus::Canceled ||
+        waiting_calls != 1) {
+        std::cerr << "polling cancel should surface as canceled after the first wait\n";
+        return 1;
+    }
+
+    transport.poll_refresh_token = "refresh-token";
+    transport.cancel_key_request = true;
+    const auto canceled_key_result = authenticator.login(make_request());
+    if (canceled_key_result.status != cauth::steam::auth::SteamLoginStatus::Canceled) {
+        std::cerr << "key request cancellation should surface as canceled\n";
+        return 1;
+    }
+
+    transport.cancel_key_request = false;
+    transport.cancel_begin_request = true;
+    const auto canceled_begin_result = authenticator.login(make_request());
+    if (canceled_begin_result.status != cauth::steam::auth::SteamLoginStatus::Canceled) {
+        std::cerr << "begin request cancellation should surface as canceled\n";
         return 1;
     }
 

@@ -224,13 +224,14 @@ bool has_guard_code_confirmation(
     return false;
 }
 
-cauth_login_status_t to_cauth_login_status(cauth::core::auth::AuthStatus status) {
-    using cauth::core::auth::AuthStatus;
+cauth_login_status_t to_cauth_login_status(cauth::steam::auth::SteamLoginStatus status) {
     switch (status) {
-    case AuthStatus::Succeeded: return CAUTH_LOGIN_SUCCEEDED;
-    case AuthStatus::AdditionalVerificationRequired: return CAUTH_LOGIN_STEAM_GUARD_REQUIRED;
-    case AuthStatus::Failed: return CAUTH_LOGIN_FAILED;
-    case AuthStatus::Unsupported: return CAUTH_LOGIN_UNSUPPORTED;
+    case cauth::steam::auth::SteamLoginStatus::Succeeded: return CAUTH_LOGIN_SUCCEEDED;
+    case cauth::steam::auth::SteamLoginStatus::SteamGuardRequired:
+        return CAUTH_LOGIN_STEAM_GUARD_REQUIRED;
+    case cauth::steam::auth::SteamLoginStatus::Failed: return CAUTH_LOGIN_FAILED;
+    case cauth::steam::auth::SteamLoginStatus::Unsupported: return CAUTH_LOGIN_UNSUPPORTED;
+    case cauth::steam::auth::SteamLoginStatus::Canceled: return CAUTH_LOGIN_CANCELED;
     }
     return CAUTH_LOGIN_FAILED;
 }
@@ -289,8 +290,15 @@ cauth_result_t cauth_auth_login_password(cauth_client_t* client,
         login_request.platform_type = to_platform_type(request->platform_type);
         login_request.route_selection = from_ffi_route_selection(&request->route_selection);
 
-        const auto login_result =
-            cauth::steam::auth::login_with_steam_platform_auth(*client->session_repository, login_request);
+        client->auth_login_cancel_requested.store(false);
+        cauth::steam::auth::SteamPlatformLoginOptions options;
+        options.authenticator_options.cancel_requested = [client]() {
+            return client->auth_login_cancel_requested.load();
+        };
+        const auto login_result = cauth::steam::auth::login_with_steam_platform_auth(
+            *client->session_repository,
+            login_request,
+            options);
 
         g_last_login_message = login_result.message;
         g_last_login_module_status =
@@ -299,14 +307,15 @@ cauth_result_t cauth_auth_login_password(cauth_client_t* client,
                 : login_result.status ==
                           cauth::steam::auth::SteamLoginStatus::SteamGuardRequired
                       ? "action_required"
+                      : login_result.status == cauth::steam::auth::SteamLoginStatus::Canceled
+                            ? "canceled"
                       : login_result.status == cauth::steam::auth::SteamLoginStatus::Unsupported
                             ? "unsupported"
                             : "failed";
         g_last_login_account_name =
             login_result.session.has_value() ? login_result.session->account_name : "";
 
-        out_result->status =
-            to_cauth_login_status(cauth::steam::auth::to_core_auth_status(login_result.status));
+        out_result->status = to_cauth_login_status(login_result.status);
         out_result->result = CAUTH_OK;
         out_result->module_status = g_last_login_module_status.c_str();
         out_result->message = g_last_login_message.c_str();
@@ -328,6 +337,14 @@ cauth_result_t cauth_auth_login_password(cauth_client_t* client,
         out_result->message = "internal error";
         return CAUTH_ERROR_INTERNAL;
     }
+}
+
+cauth_result_t cauth_auth_request_login_cancel(cauth_client_t* client) {
+    if (client == nullptr) {
+        return CAUTH_ERROR_INVALID_ARGUMENT;
+    }
+    client->auth_login_cancel_requested.store(true);
+    return CAUTH_OK;
 }
 
 cauth_result_t cauth_auth_get_saved_session(cauth_client_t* client,

@@ -46,12 +46,12 @@ for development and acceptance testing, but it is not required by library consum
 
 ## Current Version
 
-The current development version is `0.6.0`.
+The current development version is `0.6.1`.
 
 Native versioning is controlled by CMake:
 
 ```cmake
-project(CAuth VERSION 0.6.0)
+project(CAuth VERSION 0.6.1)
 ```
 
 CMake generates the native version header at configure time, and the CLI / C ABI read that same
@@ -164,6 +164,10 @@ $plain | & $cauth steam auth login --username your_steam_login --password-stdin 
 Remove-Variable plain
 Remove-Variable password
 ```
+
+All Steam auth login commands can now be canceled at any stage with `Ctrl+C`. Hosts using the C
+ABI can request the same behavior through `cauth_auth_request_login_cancel()`, and the Android
+controllers expose matching cancel hooks at the higher level.
 
 Inspect saved accounts and choose the account explicitly for later operations:
 

@@ -43,7 +43,7 @@ fun CAuthLoginPane(
                 state = state,
                 controller = controller,
             )
-            CAuthSteamAuthActionButtons(controller = controller)
+            CAuthSteamAuthActionButtons(state = state, controller = controller)
             CAuthSteamAuthStatus(
                 statusText = state.statusText,
                 moduleStatus = state.moduleStatus,

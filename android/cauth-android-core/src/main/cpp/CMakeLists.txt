@@ -22,6 +22,7 @@ target_include_directories(cauth_android_core_jni
 target_link_libraries(cauth_android_core_jni
     PRIVATE
         cauth::core_ffi
+        cauth::core
         android
         log
 )

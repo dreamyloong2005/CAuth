@@ -1,5 +1,6 @@
 #include "steam/auth/steam_web_api_auth_transport.hpp"
 #include "core/platform/http_client.hpp"
+#include "core/platform/operation_cancel.hpp"
 
 #include <charconv>
 #include <cctype>
@@ -699,6 +700,12 @@ parse_generate_access_token_for_app_protobuf(std::string_view bytes) {
     return response;
 }
 
+void attach_current_thread_cancel(cauth::core::platform::HttpRequest& request) {
+    const auto cancel_context = cauth::core::platform::current_thread_operation_cancel_context();
+    request.callbacks.cancel_hook = cancel_context.cancel_hook;
+    request.callbacks.user_data = cancel_context.user_data;
+}
+
 } // namespace
 
 std::vector<std::uint8_t> encode_begin_auth_session_request(
@@ -920,6 +927,7 @@ SteamWebApiAuthenticationTransport::get_password_rsa_public_key(const std::strin
     request.url = std::string{kSteamApiBaseUrl} +
                   "/IAuthenticationService/GetPasswordRSAPublicKey/v1/?account_name=" +
                   steam_web_api_url_encode(account_name);
+    attach_current_thread_cancel(request);
     const auto response = cauth::core::platform::perform_platform_http_request(request);
     if (!response.ok) {
         return {{false, response.error_message}, std::nullopt};
@@ -961,6 +969,7 @@ SteamWebApiAuthenticationTransport::begin_auth_session_via_credentials(
         describe_platform_context(request.platform_type, request.device_friendly_name).headers;
     const auto encoded_body = body.str();
     http_request.body.assign(encoded_body.begin(), encoded_body.end());
+    attach_current_thread_cancel(http_request);
 
     const auto response = cauth::core::platform::perform_platform_http_request(http_request);
     if (!response.ok) {
@@ -1005,6 +1014,7 @@ SteamWebApiAuthenticationTransport::poll_auth_session_status(
         describe_platform_context(request.platform_type, {}).headers;
     const auto encoded_body = body.str();
     http_request.body.assign(encoded_body.begin(), encoded_body.end());
+    attach_current_thread_cancel(http_request);
 
     const auto response = cauth::core::platform::perform_platform_http_request(http_request);
     if (!response.ok) {
@@ -1048,6 +1058,7 @@ SteamWebApiAuthenticationTransport::generate_access_token_for_app(
         describe_platform_context(request.platform_type, {}).headers;
     const auto encoded_body = body.str();
     http_request.body.assign(encoded_body.begin(), encoded_body.end());
+    attach_current_thread_cancel(http_request);
 
     const auto response = cauth::core::platform::perform_platform_http_request(http_request);
     if (!response.ok) {

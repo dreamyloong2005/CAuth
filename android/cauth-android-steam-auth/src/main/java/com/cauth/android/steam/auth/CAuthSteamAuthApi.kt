@@ -29,6 +29,10 @@ class CAuthSteamAuthApi(
         )
     }
 
+    suspend fun requestLoginCancel() = withContext(Dispatchers.IO) {
+        CAuthNativeSteamAuth.nativeRequestLoginCancel(client.requireNativeHandle())
+    }
+
     suspend fun getSavedSession(steamId: Long): SavedSessionSnapshot = withContext(Dispatchers.IO) {
         CAuthNativeSteamAuth.nativeGetSavedSession(client.requireNativeHandle(), steamId)
     }

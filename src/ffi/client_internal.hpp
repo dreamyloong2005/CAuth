@@ -2,8 +2,10 @@
 
 #include "core/session/session_repository.hpp"
 
+#include <atomic>
 #include <memory>
 
 struct cauth_client {
     std::unique_ptr<cauth::core::session::SessionRepository> session_repository;
+    std::atomic_bool auth_login_cancel_requested{false};
 };

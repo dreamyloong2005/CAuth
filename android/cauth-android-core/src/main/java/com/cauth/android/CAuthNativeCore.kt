@@ -19,4 +19,7 @@ internal object CAuthNativeCore {
 
     @JvmStatic
     external fun nativeDestroyClient(handle: Long)
+
+    @JvmStatic
+    external fun nativeIsOperationCanceled(): Boolean
 }

@@ -5,6 +5,7 @@
 #include <array>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string_view>
@@ -18,6 +19,11 @@
 
 namespace cauth::core::platform {
 namespace {
+
+bool is_request_canceled(const WebSocketRequest& request) {
+    return request.cancel_context.cancel_hook != nullptr &&
+           request.cancel_context.cancel_hook(request.cancel_context.user_data);
+}
 
 #ifdef _WIN32
 struct WinHttpHandleDeleter {
@@ -36,12 +42,20 @@ std::wstring widen_ascii(std::string_view value) {
 
 class WinHttpWebSocketConnection final : public WebSocketConnection {
   public:
-    explicit WinHttpWebSocketConnection(HINTERNET websocket, std::int32_t receive_timeout_ms)
-        : websocket_(websocket), receive_timeout_ms_(receive_timeout_ms) {}
+    explicit WinHttpWebSocketConnection(HINTERNET websocket,
+                                        std::int32_t receive_timeout_ms,
+                                        OperationCancelContext cancel_context)
+        : websocket_(websocket),
+          receive_timeout_ms_(receive_timeout_ms),
+          cancel_context_(cancel_context) {}
 
     WebSocketProbeResult send_binary(const std::vector<std::uint8_t>& bytes) override {
         if (!websocket_) {
             return {false, "websocket is closed"};
+        }
+        if (cancel_context_.cancel_hook != nullptr &&
+            cancel_context_.cancel_hook(cancel_context_.user_data)) {
+            return {false, "operation canceled"};
         }
 
         if (WinHttpWebSocketSend(websocket_.get(), WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE,
@@ -69,16 +83,32 @@ class WinHttpWebSocketConnection final : public WebSocketConnection {
             std::condition_variable receive_cv;
             bool receive_done = false;
             bool receive_timed_out = false;
+            bool receive_canceled = false;
             std::thread watchdog{[&]() {
                 std::unique_lock<std::mutex> lock{receive_mutex};
-                if (receive_cv.wait_for(
-                        lock, std::chrono::milliseconds{(std::max)(receive_timeout_ms_, 1)},
-                        [&]() { return receive_done; })) {
-                    return;
+                const auto deadline = std::chrono::steady_clock::now() +
+                                      std::chrono::milliseconds{(std::max)(receive_timeout_ms_, 1)};
+                while (!receive_done) {
+                    if (cancel_context_.cancel_hook != nullptr &&
+                        cancel_context_.cancel_hook(cancel_context_.user_data)) {
+                        receive_canceled = true;
+                        WinHttpCloseHandle(raw_websocket);
+                        return;
+                    }
+                    if (receive_cv.wait_until(
+                            lock,
+                            (std::min)(deadline,
+                                       std::chrono::steady_clock::now() +
+                                           std::chrono::milliseconds{50}),
+                            [&]() { return receive_done; })) {
+                        return;
+                    }
+                    if (std::chrono::steady_clock::now() >= deadline) {
+                        receive_timed_out = true;
+                        WinHttpCloseHandle(raw_websocket);
+                        return;
+                    }
                 }
-
-                receive_timed_out = true;
-                WinHttpCloseHandle(raw_websocket);
             }};
 
             const auto error = WinHttpWebSocketReceive(raw_websocket, buffer.data(),
@@ -91,6 +121,10 @@ class WinHttpWebSocketConnection final : public WebSocketConnection {
             receive_cv.notify_one();
             watchdog.join();
 
+            if (receive_canceled) {
+                websocket_.release();
+                return {false, "operation canceled", {}};
+            }
             if (receive_timed_out) {
                 websocket_.release();
                 return {false, "WinHttpWebSocketReceive timed out", {}};
@@ -128,18 +162,27 @@ class WinHttpWebSocketConnection final : public WebSocketConnection {
   private:
     WinHttpHandle websocket_;
     std::int32_t receive_timeout_ms_ = 10000;
+    OperationCancelContext cancel_context_{};
 };
 #endif
 
 #ifdef __ANDROID__
 class AndroidWebSocketConnection final : public WebSocketConnection {
   public:
-    explicit AndroidWebSocketConnection(std::int64_t handle, std::int32_t receive_timeout_ms)
-        : handle_(handle), receive_timeout_ms_(receive_timeout_ms) {}
+    explicit AndroidWebSocketConnection(std::int64_t handle,
+                                        std::int32_t receive_timeout_ms,
+                                        OperationCancelContext cancel_context)
+        : handle_(handle),
+          receive_timeout_ms_(receive_timeout_ms),
+          cancel_context_(cancel_context) {}
 
     WebSocketProbeResult send_binary(const std::vector<std::uint8_t>& bytes) override {
         if (handle_ == 0) {
             return {false, "websocket is closed"};
+        }
+        if (cancel_context_.cancel_hook != nullptr &&
+            cancel_context_.cancel_hook(cancel_context_.user_data)) {
+            return {false, "operation canceled"};
         }
 
         const auto result = cauth::core::runtime::android_bridge_websocket_send(handle_, bytes);
@@ -149,6 +192,11 @@ class AndroidWebSocketConnection final : public WebSocketConnection {
     WebSocketReceiveResult receive() override {
         if (handle_ == 0) {
             return {false, "websocket is closed", {}};
+        }
+        if (cancel_context_.cancel_hook != nullptr &&
+            cancel_context_.cancel_hook(cancel_context_.user_data)) {
+            close();
+            return {false, "operation canceled", {}};
         }
 
         const auto result = cauth::core::runtime::android_bridge_websocket_receive(
@@ -172,7 +220,47 @@ class AndroidWebSocketConnection final : public WebSocketConnection {
   private:
     std::int64_t handle_ = 0;
     std::int32_t receive_timeout_ms_ = 10000;
+    OperationCancelContext cancel_context_{};
 };
+#endif
+
+#ifdef _WIN32
+template <typename Fn>
+bool run_winhttp_call_with_cancel(HINTERNET handle,
+                                  const WebSocketRequest& request,
+                                  Fn&& fn,
+                                  std::string& error_message) {
+    std::mutex request_mutex;
+    std::condition_variable request_cv;
+    bool request_done = false;
+    bool request_canceled = false;
+    std::thread watchdog{[&]() {
+        std::unique_lock<std::mutex> lock{request_mutex};
+        while (!request_done) {
+            if (request.cancel_context.cancel_hook != nullptr &&
+                request.cancel_context.cancel_hook(request.cancel_context.user_data)) {
+                request_canceled = true;
+                WinHttpCloseHandle(handle);
+                return;
+            }
+            request_cv.wait_for(lock, std::chrono::milliseconds{50}, [&]() { return request_done; });
+        }
+    }};
+
+    const auto ok = fn();
+    {
+        std::lock_guard<std::mutex> lock{request_mutex};
+        request_done = true;
+    }
+    request_cv.notify_one();
+    watchdog.join();
+
+    if (request_canceled) {
+        error_message = "operation canceled";
+        return false;
+    }
+    return ok;
+}
 #endif
 
 } // namespace
@@ -191,6 +279,10 @@ std::pair<WebSocketProbeResult, std::unique_ptr<WebSocketConnection>>
 WebSocketClient::connect(const WebSocketRequest& request) const {
     if (!is_valid_websocket_request(request)) {
         return std::make_pair(WebSocketProbeResult{false, "invalid websocket request"},
+                              std::unique_ptr<WebSocketConnection>{});
+    }
+    if (is_request_canceled(request)) {
+        return std::make_pair(WebSocketProbeResult{false, "operation canceled"},
                               std::unique_ptr<WebSocketConnection>{});
     }
 
@@ -230,9 +322,22 @@ WebSocketClient::connect(const WebSocketRequest& request) const {
                               std::unique_ptr<WebSocketConnection>{});
     }
 
-    if (WinHttpSendRequest(http_request.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                           WINHTTP_NO_REQUEST_DATA, 0, 0, 0) == FALSE ||
-        WinHttpReceiveResponse(http_request.get(), nullptr) == FALSE) {
+    std::string request_error;
+    const auto upgraded = run_winhttp_call_with_cancel(
+        http_request.get(),
+        request,
+        [&]() {
+            return WinHttpSendRequest(http_request.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                                      WINHTTP_NO_REQUEST_DATA, 0, 0, 0) != FALSE &&
+                   WinHttpReceiveResponse(http_request.get(), nullptr) != FALSE;
+        },
+        request_error);
+    if (!upgraded) {
+        if (request_error == "operation canceled") {
+            http_request.release();
+            return std::make_pair(WebSocketProbeResult{false, "operation canceled"},
+                                  std::unique_ptr<WebSocketConnection>{});
+        }
         return std::make_pair(WebSocketProbeResult{
                                   false, "WinHTTP websocket upgrade request failed"},
                               std::unique_ptr<WebSocketConnection>{});
@@ -250,10 +355,15 @@ WebSocketClient::connect(const WebSocketRequest& request) const {
                      sizeof(receive_timeout));
 
     std::unique_ptr<WebSocketConnection> websocket =
-        std::make_unique<WinHttpWebSocketConnection>(raw_websocket, request.receive_timeout_ms);
+        std::make_unique<WinHttpWebSocketConnection>(
+            raw_websocket, request.receive_timeout_ms, request.cancel_context);
     return std::make_pair(WebSocketProbeResult{true, ""}, std::move(websocket));
 #else
     if (cauth::core::runtime::is_android_platform_bridge_available()) {
+        if (is_request_canceled(request)) {
+            return std::make_pair(WebSocketProbeResult{false, "operation canceled"},
+                                  std::unique_ptr<WebSocketConnection>{});
+        }
         const auto connect_result = cauth::core::runtime::android_bridge_websocket_connect(
             build_websocket_url(request), request.connect_timeout_ms);
         if (!connect_result.ok) {
@@ -262,8 +372,8 @@ WebSocketClient::connect(const WebSocketRequest& request) const {
         }
 
         std::unique_ptr<WebSocketConnection> websocket =
-            std::make_unique<AndroidWebSocketConnection>(connect_result.handle,
-                                                         request.receive_timeout_ms);
+            std::make_unique<AndroidWebSocketConnection>(
+                connect_result.handle, request.receive_timeout_ms, request.cancel_context);
         return std::make_pair(WebSocketProbeResult{true, ""}, std::move(websocket));
     }
     return std::make_pair(

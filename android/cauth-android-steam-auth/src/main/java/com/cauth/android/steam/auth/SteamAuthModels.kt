@@ -7,6 +7,7 @@ enum class LoginStatus {
     Succeeded,
     SteamGuardRequired,
     Failed,
+    Canceled,
     Unsupported;
 
     companion object {
@@ -14,7 +15,9 @@ enum class LoginStatus {
             0 -> Succeeded
             1 -> SteamGuardRequired
             2 -> Failed
-            else -> Unsupported
+            3 -> Unsupported
+            4 -> Canceled
+            else -> Failed
         }
     }
 }

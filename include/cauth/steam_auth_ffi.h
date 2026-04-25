@@ -11,7 +11,8 @@ typedef enum cauth_login_status {
     CAUTH_LOGIN_SUCCEEDED = 0,
     CAUTH_LOGIN_STEAM_GUARD_REQUIRED = 1,
     CAUTH_LOGIN_FAILED = 2,
-    CAUTH_LOGIN_UNSUPPORTED = 3
+    CAUTH_LOGIN_UNSUPPORTED = 3,
+    CAUTH_LOGIN_CANCELED = 4
 } cauth_login_status_t;
 
 typedef enum cauth_login_platform_type {
@@ -189,6 +190,7 @@ CAUTH_API cauth_result_t cauth_auth_parse_generate_access_token_response(
 CAUTH_API cauth_result_t cauth_auth_login_password(cauth_client_t* client,
                                                    const cauth_login_request_t* request,
                                                    cauth_login_result_t* out_result);
+CAUTH_API cauth_result_t cauth_auth_request_login_cancel(cauth_client_t* client);
 
 #ifdef __cplusplus
 }

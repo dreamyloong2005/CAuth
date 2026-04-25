@@ -31,6 +31,7 @@ enum class SteamLoginStatus {
     Succeeded,
     SteamGuardRequired,
     Failed,
+    Canceled,
     Unsupported,
 };
 
@@ -47,6 +48,7 @@ inline cauth::core::auth::AuthStatus to_core_auth_status(SteamLoginStatus status
     case SteamLoginStatus::SteamGuardRequired:
         return cauth::core::auth::AuthStatus::AdditionalVerificationRequired;
     case SteamLoginStatus::Failed:
+    case SteamLoginStatus::Canceled:
         return cauth::core::auth::AuthStatus::Failed;
     case SteamLoginStatus::Unsupported:
         return cauth::core::auth::AuthStatus::Unsupported;

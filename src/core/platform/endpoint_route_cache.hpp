@@ -1,6 +1,8 @@
 #ifndef CAUTH_CORE_PLATFORM_ENDPOINT_ROUTE_CACHE_HPP
 #define CAUTH_CORE_PLATFORM_ENDPOINT_ROUTE_CACHE_HPP
 
+#include "core/platform/operation_cancel.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -135,6 +137,9 @@ std::vector<Endpoint> rank_endpoints_by_route_health(std::string_view group,
 
     std::size_t probes_used = 0;
     for (auto& candidate : candidates) {
+        if (current_thread_operation_cancel_requested()) {
+            break;
+        }
         if (candidate.snapshot.has_fresh_latency || probes_used >= max_active_probes) {
             continue;
         }

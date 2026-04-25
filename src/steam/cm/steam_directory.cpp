@@ -1,6 +1,7 @@
 #include "steam/cm/steam_directory.hpp"
 
 #include "core/platform/http_client.hpp"
+#include "core/platform/operation_cancel.hpp"
 
 #include <charconv>
 #include <cctype>
@@ -235,6 +236,9 @@ CmServerListResult SteamDirectoryClient::get_cm_servers(const CmServerQuery& que
 
     platform::HttpRequest request;
     request.url = std::string{kSteamApiBaseUrl} + path.str();
+    const auto cancel_context = platform::current_thread_operation_cancel_context();
+    request.callbacks.cancel_hook = cancel_context.cancel_hook;
+    request.callbacks.user_data = cancel_context.user_data;
     const auto response = platform::perform_platform_http_request(request);
     if (!response.ok) {
         return {false, response.error_message, {}};

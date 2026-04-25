@@ -7,11 +7,17 @@ import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import javax.net.ssl.SSLHandshakeException
 import okhttp3.TlsVersion
 
 object CAuthAndroidHttpBridge {
+    private const val CancelPollIntervalMs = 50L
+
     private fun buildClient(
         connectTimeoutMs: Int,
         readTimeoutMs: Int,
@@ -47,11 +53,42 @@ object CAuthAndroidHttpBridge {
     private fun executeRequest(
         client: OkHttpClient,
         request: Request,
-    ): ByteArray = client.newCall(request).execute().use { response ->
-        if (!response.isSuccessful) {
-            throw IOException("HTTP ${response.code}")
+    ): ByteArray {
+        val call = client.newCall(request)
+        val executor = Executors.newSingleThreadExecutor()
+        val future: Future<ByteArray> = executor.submit<ByteArray> {
+            call.execute().use { response ->
+                if (!response.isSuccessful) {
+                    throw IOException("HTTP ${response.code}")
+                }
+                response.body?.bytes() ?: ByteArray(0)
+            }
         }
-        response.body?.bytes() ?: ByteArray(0)
+        try {
+            while (true) {
+                if (CAuthNativeCore.nativeIsOperationCanceled()) {
+                    call.cancel()
+                    future.cancel(true)
+                    throw IOException("operation canceled")
+                }
+                try {
+                    return future.get(CancelPollIntervalMs, TimeUnit.MILLISECONDS)
+                } catch (_: TimeoutException) {
+                    continue
+                } catch (error: ExecutionException) {
+                    val cause = error.cause
+                    if (cause is IOException) {
+                        throw cause
+                    }
+                    throw IOException("HTTP request failed", cause ?: error)
+                }
+            }
+        } finally {
+            executor.shutdownNow()
+            client.dispatcher.cancelAll()
+            client.dispatcher.executorService.shutdown()
+            client.connectionPool.evictAll()
+        }
     }
 
     @JvmStatic

@@ -154,6 +154,9 @@ EndpointProbeOutcome probe_http_endpoint(std::string_view url,
     request.url = std::string{url};
     request.connect_timeout_ms = connect_timeout_ms;
     request.read_timeout_ms = read_timeout_ms;
+    const auto cancel_context = current_thread_operation_cancel_context();
+    request.callbacks.cancel_hook = cancel_context.cancel_hook;
+    request.callbacks.user_data = cancel_context.user_data;
 
     const auto started = Clock::now();
     const auto response = perform_platform_http_request(request);

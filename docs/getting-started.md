@@ -74,7 +74,7 @@ path like:
 .\build\windows-msvc-debug\cauth.exe steam auth status
 ```
 
-`--version` should print the current native version, for example `CAuth 0.6.0`. If `doctor` and
+`--version` should print the current native version, for example `CAuth 0.6.1`. If `doctor` and
 `--version` work, the desktop toolchain is in decent shape.
 
 ## Steam auth quick test
@@ -90,6 +90,9 @@ $plain | .\build\windows-msvc-debug\cauth.exe steam auth login --username your_s
 Remove-Variable plain
 Remove-Variable password
 ```
+
+If you need to stop during setup, guard polling, or any other auth stage, press `Ctrl+C`. The login
+commands now honor cancellation across the whole flow instead of only during the final poll loop.
 
 Then verify the saved session:
 

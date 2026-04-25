@@ -12,6 +12,7 @@ namespace cauth::steam::auth {
 struct SteamNetworkAuthenticatorOptions {
     int max_poll_attempts = 24;
     std::function<void(int attempt, int max_attempts, double interval_seconds)> on_poll_waiting;
+    std::function<bool()> cancel_requested;
 };
 
 class SteamNetworkAuthenticator final : public SteamAuthenticator {

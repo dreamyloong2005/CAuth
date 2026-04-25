@@ -547,7 +547,7 @@ private fun ExampleScreen(modifier: Modifier = Modifier) {
                             state = authState,
                             controller = authController,
                         )
-                        CAuthSteamAuthActionButtons(controller = authController)
+                        CAuthSteamAuthActionButtons(state = authState, controller = authController)
                         CAuthSteamAuthStatus(
                             statusText = authState.statusText,
                             moduleStatus = authState.moduleStatus,

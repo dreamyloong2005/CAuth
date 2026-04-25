@@ -170,19 +170,25 @@ int run_login(cauth::core::session::SessionRepository& store,
               const SteamPlatformLoginOptions& options,
               std::ostream& out,
               std::ostream& err) {
-    const auto auth_result = to_core_auth_result(login_with_steam_platform_auth(store, request, options));
-    switch (auth_result.status) {
-    case cauth::core::auth::AuthStatus::Succeeded:
+    const auto login_result = login_with_steam_platform_auth(store, request, options);
+    switch (login_result.status) {
+    case SteamLoginStatus::Succeeded:
         out << "Steam login: signed in\n";
         return 0;
-    case cauth::core::auth::AuthStatus::AdditionalVerificationRequired:
+    case SteamLoginStatus::SteamGuardRequired:
         out << "Steam login: Steam Guard code required\n";
         return 3;
-    case cauth::core::auth::AuthStatus::Unsupported:
-        err << "Steam login: " << auth_result.message << '\n';
+    case SteamLoginStatus::Canceled:
+        err << "Steam login canceled: "
+            << (login_result.message.empty() ? "Steam authentication canceled"
+                                             : login_result.message)
+            << '\n';
+        return 130;
+    case SteamLoginStatus::Unsupported:
+        err << "Steam login: " << login_result.message << '\n';
         return 4;
-    case cauth::core::auth::AuthStatus::Failed:
-        err << "Steam login failed: " << auth_result.message << '\n';
+    case SteamLoginStatus::Failed:
+        err << "Steam login failed: " << login_result.message << '\n';
         return 1;
     }
     return 1;

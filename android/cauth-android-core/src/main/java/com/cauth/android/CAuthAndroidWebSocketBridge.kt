@@ -14,6 +14,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 object CAuthAndroidWebSocketBridge {
+    private const val CancelPollIntervalMs = 50L
+
     private val nextHandle = AtomicLong(1L)
     private val sessions = ConcurrentHashMap<Long, WebSocketSession>()
 
@@ -52,10 +54,21 @@ object CAuthAndroidWebSocketBridge {
             }
         })
 
-        if (!opened.await(connectTimeoutMs.toLong(), TimeUnit.MILLISECONDS)) {
-            webSocket.cancel()
-            client.dispatcher.executorService.shutdown()
-            throw IOException("websocket connect timed out")
+        val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(connectTimeoutMs.toLong())
+        while (session.webSocket == null && session.failure == null && !session.closed) {
+            if (CAuthNativeCore.nativeIsOperationCanceled()) {
+                webSocket.cancel()
+                client.dispatcher.executorService.shutdown()
+                throw IOException("operation canceled")
+            }
+            if (opened.await(CancelPollIntervalMs, TimeUnit.MILLISECONDS)) {
+                break
+            }
+            if (System.nanoTime() >= deadlineNanos) {
+                webSocket.cancel()
+                client.dispatcher.executorService.shutdown()
+                throw IOException("websocket connect timed out")
+            }
         }
 
         session.failure?.let {
@@ -79,6 +92,9 @@ object CAuthAndroidWebSocketBridge {
     fun sendBinary(handle: Long, bytes: ByteArray) {
         val session = sessions[handle] ?: throw IOException("invalid websocket handle")
         val webSocket = session.webSocket ?: throw IOException("websocket is not open")
+        if (CAuthNativeCore.nativeIsOperationCanceled()) {
+            throw IOException("operation canceled")
+        }
         if (!webSocket.send(ByteString.of(*bytes))) {
             throw IOException("websocket send failed")
         }
@@ -87,15 +103,26 @@ object CAuthAndroidWebSocketBridge {
     @JvmStatic
     fun receiveBinary(handle: Long, receiveTimeoutMs: Int): ByteArray {
         val session = sessions[handle] ?: throw IOException("invalid websocket handle")
-        session.failure?.let { throw IOException("websocket receive failed", it) }
-        val bytes = session.messages.poll(receiveTimeoutMs.toLong(), TimeUnit.MILLISECONDS)
-        if (bytes != null) {
-            return bytes
+        val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(receiveTimeoutMs.toLong())
+        while (true) {
+            session.failure?.let { throw IOException("websocket receive failed", it) }
+            if (CAuthNativeCore.nativeIsOperationCanceled()) {
+                session.webSocket?.cancel()
+                session.client.dispatcher.executorService.shutdown()
+                session.closed = true
+                throw IOException("operation canceled")
+            }
+            val bytes = session.messages.poll(CancelPollIntervalMs, TimeUnit.MILLISECONDS)
+            if (bytes != null) {
+                return bytes
+            }
+            if (session.closed) {
+                throw IOException("websocket is closing")
+            }
+            if (System.nanoTime() >= deadlineNanos) {
+                throw IOException("websocket receive timed out")
+            }
         }
-        if (session.closed) {
-            throw IOException("websocket is closing")
-        }
-        throw IOException("websocket receive timed out")
     }
 
     @JvmStatic

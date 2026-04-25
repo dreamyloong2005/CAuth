@@ -58,12 +58,48 @@ bool steam_auth_debug_enabled() {
 }
 
 SteamLoginResult transport_failure(const std::string& operation, const SteamTransportResult& result) {
+    if (result.error_message.find("operation canceled") != std::string::npos) {
+        return SteamLoginResult{
+            SteamLoginStatus::Canceled,
+            std::nullopt,
+            operation + " canceled",
+        };
+    }
+
     auto message = operation + " failed";
     if (!result.error_message.empty()) {
         message += ": " + result.error_message;
     }
 
     return SteamLoginResult{SteamLoginStatus::Failed, std::nullopt, message};
+}
+
+bool cancel_requested(const SteamNetworkAuthenticatorOptions& options) {
+    return options.cancel_requested && options.cancel_requested();
+}
+
+SteamLoginResult login_canceled() {
+    return SteamLoginResult{
+        SteamLoginStatus::Canceled,
+        std::nullopt,
+        "Steam authentication canceled",
+    };
+}
+
+bool wait_for_poll_interval(double interval_seconds, const SteamNetworkAuthenticatorOptions& options) {
+    using namespace std::chrono;
+
+    auto remaining = duration_cast<milliseconds>(duration<double>(interval_seconds));
+    constexpr auto kSlice = milliseconds{100};
+    while (remaining.count() > 0) {
+        if (cancel_requested(options)) {
+            return false;
+        }
+        const auto next = std::min(remaining, kSlice);
+        std::this_thread::sleep_for(next);
+        remaining -= next;
+    }
+    return !cancel_requested(options);
 }
 
 } // namespace
@@ -121,6 +157,10 @@ SteamLoginResult SteamNetworkAuthenticator::login(const SteamLoginRequest& reque
 
     const auto poll_attempts = std::max(options_.max_poll_attempts, 1);
     for (int attempt = 0; attempt < poll_attempts; ++attempt) {
+        if (cancel_requested(options_)) {
+            return login_canceled();
+        }
+
         const auto poll_response = transport_->poll_auth_session_status(poll_request);
         if (!poll_response.result.ok || !poll_response.value.has_value()) {
             return transport_failure("PollAuthSessionStatus", poll_response.result);
@@ -147,12 +187,19 @@ SteamLoginResult SteamNetworkAuthenticator::login(const SteamLoginRequest& reque
             return SteamLoginResult{SteamLoginStatus::Succeeded, std::move(session), "ok"};
         }
 
-        if (attempt + 1 < poll_attempts && begin.interval_seconds > 0.0) {
-            if (options_.on_poll_waiting) {
-                options_.on_poll_waiting(attempt + 1, poll_attempts, begin.interval_seconds);
+        if (attempt + 1 < poll_attempts) {
+            if (cancel_requested(options_)) {
+                return login_canceled();
             }
-            std::this_thread::sleep_for(
-                std::chrono::milliseconds{static_cast<int>(begin.interval_seconds * 1000.0)});
+            if (begin.interval_seconds > 0.0) {
+                if (options_.on_poll_waiting) {
+                    options_.on_poll_waiting(attempt + 1, poll_attempts, begin.interval_seconds);
+                }
+                if (cancel_requested(options_) ||
+                    !wait_for_poll_interval(begin.interval_seconds, options_)) {
+                    return login_canceled();
+                }
+            }
         }
     }
 

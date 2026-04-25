@@ -101,6 +101,36 @@ class CAuthSteamAuthController(
         }
     }
 
+    fun cancelLogin() {
+        if (!_state.value.busy) {
+            return
+        }
+        appendTrace("Cancel Login clicked")
+        cancelIdleReset()
+        _state.update {
+            it.copy(
+                statusText = "Cancel requested...",
+                moduleStatus = "canceling",
+                busy = true,
+                moduleTask = AuthTaskSnapshot(
+                    kind = "Login",
+                    active = true,
+                    moduleStatus = "canceling",
+                    message = "Cancel requested...",
+                ),
+            )
+        }
+        scope.launch {
+            runCatching { api.requestLoginCancel() }
+                .onSuccess {
+                    appendTrace("Login cancel request sent")
+                }
+                .onFailure { failure ->
+                    appendTrace("Login cancel failed: ${failure::class.simpleName}: ${failure.message ?: "(no message)"}")
+                }
+        }
+    }
+
     fun loadSavedSession() {
         val steamId = _state.value.steamId.toLongOrNull() ?: 0L
         appendTrace("Saved Session clicked steamId=$steamId")

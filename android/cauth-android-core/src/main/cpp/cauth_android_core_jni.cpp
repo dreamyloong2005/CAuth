@@ -1,4 +1,5 @@
 #include "cauth/core_ffi.h"
+#include "core/platform/operation_cancel.hpp"
 
 #include <android/log.h>
 #include <jni.h>
@@ -102,4 +103,10 @@ Java_com_cauth_android_CAuthNativeCore_nativeDestroyClient(JNIEnv*, jclass, jlon
                             client_from_handle(handle));
         cauth_client_destroy(client_from_handle(handle));
     }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_cauth_android_CAuthNativeCore_nativeIsOperationCanceled(JNIEnv*, jclass) {
+    return cauth::core::platform::current_thread_operation_cancel_requested() ? JNI_TRUE
+                                                                              : JNI_FALSE;
 }

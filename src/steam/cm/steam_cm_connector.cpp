@@ -2,6 +2,7 @@
 
 #include "steam/cm/cm_client_hello.hpp"
 #include "core/platform/endpoint_route_cache.hpp"
+#include "core/platform/operation_cancel.hpp"
 #include "core/platform/route_selection.hpp"
 #include "steam/cm/cm_message.hpp"
 #include "steam/cm/steam_directory.hpp"
@@ -24,6 +25,10 @@ void write_line(std::ostream* stream, const std::string& message) {
 
 std::string cm_endpoint_route_key(const CmServerEndpoint& endpoint) {
     return endpoint.address + ":" + std::to_string(endpoint.port);
+}
+
+bool is_operation_canceled(std::string_view message) {
+    return message.find("operation canceled") != std::string_view::npos;
 }
 
 std::vector<CmServerEndpoint> rank_websocket_servers(std::vector<CmServerEndpoint> servers) {
@@ -214,6 +219,9 @@ SteamCmOperationResult SteamCmConnector::with_service_client(
     std::uint32_t max_count,
     const cauth::core::platform::RouteSelection* route_selection,
     const SteamCmServiceClientOperation& operation) const {
+    if (cauth::core::platform::current_thread_operation_cancel_requested()) {
+        return {false, "operation canceled"};
+    }
     auto servers = load_websocket_servers(max_count);
     if (!servers.ok) {
         return {false, "CM directory lookup failed: " + servers.error_message};
@@ -232,11 +240,17 @@ SteamCmOperationResult SteamCmConnector::with_service_client(
     CmWebSocketTransport transport;
     std::string last_error = "CM service connection failed for all endpoints";
     for (const auto& server : servers.servers) {
+        if (cauth::core::platform::current_thread_operation_cancel_requested()) {
+            return {false, "operation canceled"};
+        }
         write_line(out_, "Connecting CM websocket " + server.address + ":" + std::to_string(server.port) +
                              "...");
         const auto connect_started = std::chrono::steady_clock::now();
         auto [connect_result, connection] = transport.connect(server);
         if (!connect_result.ok || !connection) {
+            if (is_operation_canceled(connect_result.error_message)) {
+                return {false, "operation canceled"};
+            }
             cauth::core::platform::EndpointRouteCache::instance().record_failure(
                 "steam.cm.websocket", cm_endpoint_route_key(server));
             last_error = connect_result.error_message;
@@ -252,6 +266,10 @@ SteamCmOperationResult SteamCmConnector::with_service_client(
         const auto hello = make_client_hello_message();
         const auto hello_result = connection->send_binary(encode_cm_message(hello));
         if (!hello_result.ok) {
+            if (is_operation_canceled(hello_result.error_message)) {
+                connection->close();
+                return {false, "operation canceled"};
+            }
             last_error = hello_result.error_message;
             write_line(err_, "ClientHello send failed: " + hello_result.error_message);
             connection->close();
@@ -266,6 +284,9 @@ SteamCmOperationResult SteamCmConnector::with_service_client(
             last_error = attempt.error_message;
         }
 
+        if (is_operation_canceled(attempt.error_message)) {
+            return {false, "operation canceled"};
+        }
         if (attempt.continuation == SteamCmContinuation::Stop) {
             return {attempt.ok, attempt.error_message};
         }
@@ -279,6 +300,9 @@ SteamCmOperationResult SteamCmConnector::with_logged_on_session(
     std::uint32_t max_count,
     const cauth::core::platform::RouteSelection* route_selection,
     const SteamCmSessionOperation& operation) const {
+    if (cauth::core::platform::current_thread_operation_cancel_requested()) {
+        return {false, "operation canceled"};
+    }
     auto servers = load_websocket_servers(max_count);
     if (!servers.ok) {
         return {false, "CM directory lookup failed: " + servers.error_message};
@@ -297,11 +321,17 @@ SteamCmOperationResult SteamCmConnector::with_logged_on_session(
     CmWebSocketTransport transport;
     std::string last_error = "CM logon failed for all endpoints";
     for (const auto& server : servers.servers) {
+        if (cauth::core::platform::current_thread_operation_cancel_requested()) {
+            return {false, "operation canceled"};
+        }
         write_line(out_, "Connecting CM websocket " + server.address + ":" + std::to_string(server.port) +
                              "...");
         const auto connect_started = std::chrono::steady_clock::now();
         auto [connect_result, connection] = transport.connect(server);
         if (!connect_result.ok || !connection) {
+            if (is_operation_canceled(connect_result.error_message)) {
+                return {false, "operation canceled"};
+            }
             cauth::core::platform::EndpointRouteCache::instance().record_failure(
                 "steam.cm.websocket", cm_endpoint_route_key(server));
             last_error = connect_result.error_message;
@@ -319,12 +349,18 @@ SteamCmOperationResult SteamCmConnector::with_logged_on_session(
         const auto logon = cm_session.logon(session);
         if (!logon.ok) {
             last_error = describe_cm_logon_failure(logon);
+            if (is_operation_canceled(last_error)) {
+                return {false, "operation canceled"};
+            }
             write_line(err_, last_error);
             continue;
         }
 
         const auto heartbeat_result = cm_session.send_heartbeat(session);
         if (!heartbeat_result.ok) {
+            if (is_operation_canceled(heartbeat_result.error_message)) {
+                return {false, "operation canceled"};
+            }
             return {false, "CM heartbeat send failed: " + heartbeat_result.error_message};
         }
 
@@ -333,6 +369,9 @@ SteamCmOperationResult SteamCmConnector::with_logged_on_session(
             last_error = attempt.error_message;
         }
 
+        if (is_operation_canceled(attempt.error_message)) {
+            return {false, "operation canceled"};
+        }
         if (attempt.continuation == SteamCmContinuation::Stop) {
             return {attempt.ok, attempt.error_message};
         }

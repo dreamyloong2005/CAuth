@@ -424,6 +424,17 @@ Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeLoginPassword(
     return make_login_result(env, result);
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeRequestLoginCancel(
+    JNIEnv* env,
+    jclass,
+    jlong handle) {
+    const cauth_result_t result = cauth_auth_request_login_cancel(client_from_handle(handle));
+    if (result != CAUTH_OK) {
+        throw_result_exception(env, "Steam login cancel failed", result);
+    }
+}
+
 extern "C" JNIEXPORT jobject JNICALL
 Java_com_cauth_android_steam_auth_CAuthNativeSteamAuth_nativeGetSavedSession(
     JNIEnv* env,

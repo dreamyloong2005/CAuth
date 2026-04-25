@@ -1,6 +1,8 @@
 #ifndef CAUTH_CORE_PLATFORM_WEBSOCKET_CLIENT_HPP
 #define CAUTH_CORE_PLATFORM_WEBSOCKET_CLIENT_HPP
 
+#include "core/platform/operation_cancel.hpp"
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -16,6 +18,7 @@ struct WebSocketRequest {
     bool secure = true;
     std::int32_t connect_timeout_ms = 5000;
     std::int32_t receive_timeout_ms = 10000;
+    OperationCancelContext cancel_context;
 };
 
 struct WebSocketProbeResult {

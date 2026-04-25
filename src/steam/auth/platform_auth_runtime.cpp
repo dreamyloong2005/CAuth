@@ -10,10 +10,33 @@
 #include "steam/cm/steam_cm_connector.hpp"
 #include "core/platform/session_repository_factory.hpp"
 #include "core/platform/http_client.hpp"
+#include "core/platform/operation_cancel.hpp"
 #include "core/platform/password_crypto.hpp"
+
+#include <functional>
 
 namespace cauth::steam::auth {
 namespace {
+
+bool invoke_login_cancel_hook(void* user_data) {
+    const auto* hook = static_cast<const std::function<bool()>*>(user_data);
+    return hook != nullptr && *hook && (*hook)();
+}
+
+bool is_operation_canceled(std::string_view error_message) {
+    return error_message.find("operation canceled") != std::string_view::npos;
+}
+
+cauth::core::platform::OperationCancelContext make_operation_cancel_context(
+    const SteamPlatformLoginOptions& options) {
+    if (!options.authenticator_options.cancel_requested) {
+        return {};
+    }
+    return {
+        invoke_login_cancel_hook,
+        const_cast<void*>(static_cast<const void*>(&options.authenticator_options.cancel_requested)),
+    };
+}
 
 SteamLoginResult login_with_web_api_auth(cauth::core::session::AuthSessionWriter& session_writer,
                                          const SteamLoginRequest& request,
@@ -51,7 +74,8 @@ SteamLoginResult login_with_cm_auth(cauth::core::session::AuthSessionWriter& ses
         auto login_result = service.login(request);
 
         if (login_result.status == SteamLoginStatus::Succeeded ||
-            login_result.status == SteamLoginStatus::SteamGuardRequired) {
+            login_result.status == SteamLoginStatus::SteamGuardRequired ||
+            login_result.status == SteamLoginStatus::Canceled) {
             terminal_result = login_result;
             return cauth::core::cm::SteamCmAttemptResult{
                 cauth::core::cm::SteamCmContinuation::Stop, true, login_result.message};
@@ -77,14 +101,22 @@ SteamLoginResult login_with_cm_auth(cauth::core::session::AuthSessionWriter& ses
     }
 
     if (!result.ok && !result.error_message.empty() && !last_failure.has_value()) {
+        if (is_operation_canceled(result.error_message)) {
+            return {SteamLoginStatus::Canceled, std::nullopt, result.error_message};
+        }
         return {SteamLoginStatus::Failed, std::nullopt, result.error_message};
     }
 
-    return last_failure.value_or(SteamLoginResult{
+    const auto fallback = last_failure.value_or(SteamLoginResult{
         SteamLoginStatus::Failed,
         std::nullopt,
         result.error_message.empty() ? "CM auth failed for all endpoints" : result.error_message,
     });
+    if (fallback.status == SteamLoginStatus::Failed &&
+        is_operation_canceled(fallback.message)) {
+        return {SteamLoginStatus::Canceled, std::nullopt, fallback.message};
+    }
+    return fallback;
 }
 
 } // namespace
@@ -112,6 +144,8 @@ SteamLoginResult login_with_steam_platform_auth(
     cauth::core::session::AuthSessionWriter& session_writer,
     const SteamLoginRequest& request,
     const SteamPlatformLoginOptions& options) {
+    const cauth::core::platform::ScopedCurrentThreadOperationCancel scoped_cancel{
+        make_operation_cancel_context(options)};
     if (request.platform_type == SteamLoginPlatformType::WebBrowser) {
         return login_with_web_api_auth(session_writer, request, options);
     }

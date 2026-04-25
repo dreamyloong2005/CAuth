@@ -120,6 +120,7 @@ Main operations:
 - `cauth_auth_clear_saved_session()`
 - `cauth_auth_save_session()`
 - `cauth_auth_login_password()`
+- `cauth_auth_request_login_cancel()`
 
 Web-flow helpers:
 
@@ -136,6 +137,7 @@ Web-flow helpers:
 `CAuthSteamAuthApi`:
 
 - `loginPassword(...)`
+- `requestLoginCancel()`
 - `getSavedSession(steamId)`
 - `listSavedAccounts()`
 - `clearSavedSession(steamId)`
@@ -151,6 +153,7 @@ Web-flow helpers:
 - owns saved-session snapshot
 - owns saved-account list snapshot
 - owns CM probe/logon snapshots
+- supports login cancellation through `cancelLogin()`
 - exposes `login()`, `loadSavedSession()`, `loadSavedAccounts()`, `selectSavedAccount(steamId)`,
   `clearSavedSession()`, `probeCm()`, `logonCm()`
 
@@ -167,6 +170,9 @@ Web-flow helpers:
 - `cauth steam auth token-info --steam-id <id>`
 - `cauth steam auth clear (--steam-id <id>|--all)`
 - `cauth steam auth cm ...`
+
+All auth login commands can be canceled with `Ctrl+C`. That maps to the same native cancellation
+path that `cauth_auth_request_login_cancel()` and the Android auth controller use.
 
 ## Steam depot surface
 

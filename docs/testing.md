@@ -26,7 +26,7 @@ $cauth = ".\\build\\windows-msvc-debug\\cauth.exe"
 Expected version output for the current development line:
 
 ```text
-CAuth 0.6.0
+CAuth 0.6.1
 ```
 
 ## 2. Steam auth
@@ -46,6 +46,10 @@ Expected result:
 - mobile confirmation or guard flow appears
 - login eventually reports success
 - `steam auth status` shows a saved session
+
+You can now cancel any stage of the login flow with `Ctrl+C`, including the early RSA/session setup
+requests and the later Steam Guard polling phase. A canceled login should return a clear canceled
+result instead of leaving the CLI stuck in an in-flight wait.
 
 ### Follow-up auth checks
 

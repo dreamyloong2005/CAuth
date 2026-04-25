@@ -447,6 +447,9 @@ HttpResponse perform_platform_http_request(const HttpRequest& request) {
     if (request.url.empty()) {
         return {false, "URL is required", 0, {}, {}};
     }
+    if (request.callbacks.cancel_hook != nullptr && request.callbacks.cancel_hook(request.callbacks.user_data)) {
+        return {false, "operation canceled", 0, {}, {}};
+    }
 
 #ifdef _WIN32
     return winhttp_request(request);
@@ -496,6 +499,9 @@ HttpResponse perform_platform_http_request(const HttpRequest& request) {
         request_copy.headers,
         request_copy.connect_timeout_ms,
         request_copy.read_timeout_ms);
+    if (!response.ok && response.error_message.find("operation canceled") != std::string::npos) {
+        return {false, "operation canceled", response.status_code, {}, {}};
+    }
     if (request_copy.use_range && request_copy.range_start > 0 && response.ok &&
         response.status_code != 206) {
         return {false, "HTTP range request was not honored", response.status_code, {}, {}};

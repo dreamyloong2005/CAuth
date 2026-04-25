@@ -7,6 +7,8 @@
 #include "steam/auth/steam_auth_cm_application.hpp"
 #include "steam/auth/steam_login_service.hpp"
 
+#include <atomic>
+#include <csignal>
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -17,6 +19,31 @@
 
 namespace {
 using namespace cauth::cli::support;
+
+std::atomic_bool g_auth_cli_cancel_requested{false};
+
+void on_auth_cli_signal(int) {
+    g_auth_cli_cancel_requested.store(true);
+}
+
+bool auth_cli_cancel_requested() {
+    return g_auth_cli_cancel_requested.load();
+}
+
+struct ScopedAuthCliLoginCancel {
+    ScopedAuthCliLoginCancel() {
+        g_auth_cli_cancel_requested.store(false);
+        previous_handler_ = std::signal(SIGINT, &on_auth_cli_signal);
+    }
+
+    ~ScopedAuthCliLoginCancel() {
+        std::signal(SIGINT, previous_handler_);
+    }
+
+  private:
+    using SignalHandler = void (*)(int);
+    SignalHandler previous_handler_ = SIG_DFL;
+};
 
 enum class AuthCommandKind {
     Login,
@@ -362,7 +389,8 @@ ParsedAuthResult parse_auth_command(int argc, char** argv) {
     request.options.authenticator_options.on_poll_waiting =
         [](int attempt, int max_attempts, double interval_seconds) {
             std::cerr << "[polling] Waiting for Steam confirmation... poll " << attempt << '/'
-                      << max_attempts << ", next check in " << interval_seconds << "s\n";
+                      << max_attempts << ", next check in " << interval_seconds
+                      << "s (Ctrl+C to cancel)\n";
         };
 
     request.request.platform_type =
@@ -425,12 +453,19 @@ int run_steam_auth(int argc, char** argv) {
     const auto store = cauth::core::platform::make_platform_session_repository();
     switch (parsed.command.kind) {
     case AuthCommandKind::Login:
-        return cauth::steam::auth::run_login(
-            *store,
-            parsed.command.login->request,
-            parsed.command.login->options,
-            std::cout,
-            std::cerr);
+        {
+            auto login = *parsed.command.login;
+            login.options.authenticator_options.cancel_requested = [] {
+                return auth_cli_cancel_requested();
+            };
+            const ScopedAuthCliLoginCancel scoped_cancel;
+            return cauth::steam::auth::run_login(
+                *store,
+                login.request,
+                login.options,
+                std::cout,
+                std::cerr);
+        }
     case AuthCommandKind::Status:
         return cauth::steam::auth::print_status(*store, std::cout);
     case AuthCommandKind::WhoAmI:
