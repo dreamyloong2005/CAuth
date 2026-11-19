@@ -1,0 +1,16 @@
+# C ABI over cauth_steam_auth.
+[package]
+namespace = "cauth"
+name      = "steam-auth-ffi"
+
+[targets.cauth_steam_auth_ffi]
+kind = "shared"
+
+[build]
+sources = ["../../src/ffi/steam_auth.cpp"]
+defines = ["CAUTH_BUILD_SHARED=1"]
+
+[dependencies]
+cauth.core     = { path = "../core" }
+cauth.core-ffi = { path = "../core-ffi" }
+cauth.steam-auth = { path = "../steam-auth" }

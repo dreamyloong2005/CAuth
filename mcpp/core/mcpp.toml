@@ -1,0 +1,19 @@
+# Shared runtime, transport, session storage, versioning and transfer helpers.
+[package]
+namespace = "cauth"
+name      = "core"
+
+[targets.cauth_core]
+kind = "lib"
+linkage = "shared"
+
+[build]
+sources = [
+    "../../src/application/*.cpp",
+    "../../src/core/**/*.cpp",
+    "../../third_party/lzma-sdk/LzmaDec.c",
+]
+include_dirs         = ["../../include", "../../src", "../../third_party/lzma-sdk"]
+
+[target.'cfg(os = "windows")'.build]
+ldflags = ["-lbcrypt", "-lcrypt32", "-lwinhttp"]

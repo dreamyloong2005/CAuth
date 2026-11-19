@@ -1,0 +1,17 @@
+# C ABI over cauth_steam_cloud.
+[package]
+namespace = "cauth"
+name      = "steam-cloud-ffi"
+
+[targets.cauth_steam_cloud_ffi]
+kind = "shared"
+
+[build]
+sources = ["../../src/ffi/steam_cloud.cpp"]
+defines = ["CAUTH_BUILD_SHARED=1"]
+
+[dependencies]
+cauth.core     = { path = "../core" }
+cauth.core-ffi = { path = "../core-ffi" }
+cauth.steam-auth  = { path = "../steam-auth" }
+cauth.steam-cloud = { path = "../steam-cloud" }

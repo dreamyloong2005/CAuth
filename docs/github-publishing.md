@@ -26,11 +26,11 @@ The public repository should not contain:
 The root `.gitignore` excludes:
 
 - `build/`
+- mcpp `target/` output directories
 - Android `build/` / `.gradle/` / `.kotlin/`
 - `reference/`
 - local temp files
 - test download artifacts
-- local dependency build caches under `.deps/`
 - stray local binaries and generated artifacts
 
 ## Before creating the GitHub repo
@@ -44,7 +44,7 @@ The root `.gitignore` excludes:
 4. Confirm no account data, tokens, manifests, or downloaded content remain in the working tree
 5. Confirm the published version
   - current development version is `0.6.1`
-   - version source of truth is `project(CAuth VERSION ...)` in `CMakeLists.txt`
+   - version source of truth is `[workspace.package] version` in the root `mcpp.toml`
 
 ## Suggested first push flow
 

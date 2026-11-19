@@ -6,20 +6,25 @@ This guide gets a fresh CAuth workspace into a buildable, testable state as quic
 
 ### Windows desktop
 
-- Visual Studio 2022 Build Tools or full Visual Studio 2022
-- CMake 3.22 or newer
-- A Developer PowerShell or another shell with MSVC environment variables loaded
+- Visual Studio 2022 Build Tools or full Visual Studio 2022, used as the MSVC sysroot
+- LLVM clang 22.1.8; the workspace expects it at `D:/Dev/Tools/LLVM`
+- mcpp 2026.11.17.1 or newer on `PATH`
+
+mcpp finds the MSVC tools itself, so a Developer PowerShell is not required. If LLVM is installed
+elsewhere, change `[workspace.toolchain] windows` in the root `mcpp.toml`, or set
+`MCPP_TOOLCHAIN=path:<dir>` for a single build.
 
 ### Android
 
 - Android Studio Hedgehog or newer
 - Android SDK / platform tools
-- Android NDK installed at the version expected by `CMakePresets.json`
+- mcpp available on `PATH` so Gradle can build the JNI libraries; mcpp installs the Android NDK
+  it needs itself, so `ndk.dir` and `ANDROID_NDK_HOME` are not used for native builds
 - A device or emulator for the Compose example app
 
 ## Compression dependencies
 
-Two optional native dependencies unlock important Steam paths:
+Two native dependencies unlock important Steam paths:
 
 - zlib
   - required for compressed CM multi messages
@@ -28,50 +33,40 @@ Two optional native dependencies unlock important Steam paths:
   - required for VZstd depot chunks
   - without it, some depot downloads may fail with `VZstd chunk processing requires zstd support`
 
-This repository automatically uses bundled dependency trees when they are present:
-
-```text
-.deps/zlib-1.3.1
-.deps/zstd-1.5.7
-```
-
-You can also point CMake at custom installs with `CAUTH_ZLIB_ROOT` and `CAUTH_ZSTD_ROOT`.
+The mcpp build takes zlib 1.3.2 and zstd 1.5.7 from the mcpp registry (`compat.zlib`,
+`compat.zstd`) and always enables both.
 
 ## Configure and build
 
-From a Visual Studio 2022 developer shell:
+From the repository root:
 
 ```powershell
-cmake --preset default
-cmake --build --preset default
-ctest --preset default
+mcpp build
+mcpp test
 ```
 
-The default preset is a Windows debug build rooted at:
+`mcpp build` uses the debug profile by default; `mcpp build --release` builds the release profile.
+Outputs are rooted at:
 
 ```text
-build/windows-msvc-debug
+target/x86_64-windows-msvc/<fingerprint>/bin/<member>/
 ```
 
-The resulting CLI path is:
+The CLI is staged with the DLLs it needs in `bin/cli/`. For the rest of this guide, assume:
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe
+$cauth = ".\target\x86_64-windows-msvc\<fingerprint>\bin\cli\cauth.exe"
 ```
 
-If you build with a separate Visual Studio multi-config tree, the executable is commonly under a
-path like:
-
-```powershell
-.\build\windows-vs2022-debug\Debug\cauth.exe
-```
+Replace `<fingerprint>` with the directory name mcpp created. `mcpp run cauth -- --version` also
+runs the CLI without a path.
 
 ## First smoke checks
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe --version
-.\build\windows-msvc-debug\cauth.exe doctor
-.\build\windows-msvc-debug\cauth.exe steam auth status
+& $cauth --version
+& $cauth doctor
+& $cauth steam auth status
 ```
 
 `--version` should print the current native version, for example `CAuth 0.6.1`. If `doctor` and
@@ -86,7 +81,7 @@ $password = Read-Host "Steam password" -AsSecureString
 $plain = [Runtime.InteropServices.Marshal]::PtrToStringUni(
     [Runtime.InteropServices.Marshal]::SecureStringToBSTR($password)
 )
-$plain | .\build\windows-msvc-debug\cauth.exe steam auth login --username your_steam_login --password-stdin --poll-attempts 48
+$plain | & $cauth steam auth login --username your_steam_login --password-stdin --poll-attempts 48
 Remove-Variable plain
 Remove-Variable password
 ```
@@ -97,10 +92,10 @@ commands now honor cancellation across the whole flow instead of only during the
 Then verify the saved session:
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam auth status
-.\build\windows-msvc-debug\cauth.exe steam auth accounts
-.\build\windows-msvc-debug\cauth.exe steam auth whoami --steam-id 7656119...
-.\build\windows-msvc-debug\cauth.exe steam auth token-info --steam-id 7656119...
+& $cauth steam auth status
+& $cauth steam auth accounts
+& $cauth steam auth whoami --steam-id 7656119...
+& $cauth steam auth token-info --steam-id 7656119...
 ```
 
 Depot, cloud, and authenticated CM commands do not use hidden global account state. Pass the

@@ -13,7 +13,7 @@ Recommended reading order:
 
 1. [getting-started.md](getting-started.md)
    - prerequisites
-   - build presets
+   - mcpp build commands
    - where binaries and APKs land
 2. [testing.md](testing.md)
    - desktop smoke tests
@@ -25,7 +25,7 @@ Recommended reading order:
    - CLI and Android account operations
 4. [integration.md](integration.md)
    - how to choose modules
-   - native CMake consumption
+   - native target consumption
    - Android/Compose integration shape
 5. [architecture.md](architecture.md)
    - module boundaries
@@ -53,8 +53,8 @@ Recommended reading order:
    - Android module layering
    - controllers, panes, and example app
 12. [packaging.md](packaging.md)
-   - install components
-   - exported targets
+   - mcpp workspace members
+   - build output layout
 13. [github-publishing.md](github-publishing.md)
    - pre-publish checklist
    - Git workaround notes

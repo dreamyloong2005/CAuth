@@ -1,0 +1,41 @@
+[workspace]
+members = [
+    "mcpp/core",
+    "mcpp/steam-auth",
+    "mcpp/steam-depot",
+    "mcpp/steam-cloud",
+    "mcpp/core-ffi",
+    "mcpp/steam-auth-ffi",
+    "mcpp/steam-depot-ffi",
+    "mcpp/steam-cloud-ffi",
+    "mcpp/cli",
+    "tests",
+    "android/cauth-android-core/src/main/cpp",
+    "android/cauth-android-steam-auth/src/main/cpp",
+    "android/cauth-android-steam-depot/src/main/cpp",
+    "android/cauth-android-steam-cloud/src/main/cpp",
+]
+
+[workspace.package]
+mcpp     = ">=2026.11.17.1"
+version  = "0.6.1"
+standard = "c++23"
+license  = "MIT"
+
+[workspace.toolchain]
+windows = { path = "D:/Dev/Tools/LLVM" }
+
+# Android needs the NDK's bionic sysroot; API 26 matches the Gradle modules' minSdk.
+[workspace.target.aarch64-linux-android]
+toolchain     = "android-ndk@30.0.16248370"
+min_api_level = 26
+
+[workspace.target.x86_64-linux-android]
+toolchain     = "android-ndk@30.0.16248370"
+min_api_level = 26
+
+[workspace.build]
+# Every library is its own DLL/.so: the FFI libraries and programs load one
+# shared copy of cauth_core, the Steam modules, zlib and zstd.
+dependency_linkage = "shared"
+cxxflags = ["-Wall", "-Wextra", "-Wpedantic"]

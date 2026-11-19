@@ -1,0 +1,26 @@
+# Every tests/*_tests.cpp file is one test program.
+[package]
+namespace = "cauth"
+name      = "tests"
+
+[build]
+# cli_tests.cpp drives the CLI handlers directly, without src/cli/main.cpp.
+sources = [
+    "../src/cli/cli_support.cpp",
+    "../src/cli/steam_cli.cpp",
+    "../src/cli/steam_auth_cli.cpp",
+    "../src/cli/steam_depot_cli.cpp",
+    "../src/cli/steam_cloud_cli.cpp",
+]
+
+[dependencies]
+cauth.core            = { path = "../mcpp/core" }
+cauth.steam-auth      = { path = "../mcpp/steam-auth" }
+cauth.steam-depot     = { path = "../mcpp/steam-depot" }
+cauth.steam-cloud     = { path = "../mcpp/steam-cloud" }
+cauth.core-ffi        = { path = "../mcpp/core-ffi" }
+cauth.steam-depot-ffi = { path = "../mcpp/steam-depot-ffi" }
+cauth.steam-cloud-ffi = { path = "../mcpp/steam-cloud-ffi" }
+
+[test]
+discover = ["*_tests.cpp"]

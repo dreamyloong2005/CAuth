@@ -4,7 +4,7 @@ This file tracks the project direction after the module split. It is not a promi
 
 ## Completed Foundation
 
-- CMake project and install components.
+- mcpp workspace and native targets.
 - Public C++ umbrella headers.
 - Split C ABI headers and FFI libraries.
 - Windows desktop CLI.

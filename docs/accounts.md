@@ -3,6 +3,8 @@
 CAuth stores auth state as an account repository. Any operation that needs a saved login state must
 be given the account subject explicitly.
 
+Commands below use `$cauth` for the CLI built by `mcpp build`; see [getting-started.md](getting-started.md).
+
 For Steam, the generic key is:
 
 ```text
@@ -58,34 +60,34 @@ updates that slot instead of creating a duplicate user-facing account.
 List saved accounts:
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam auth accounts
+& $cauth steam auth accounts
 ```
 
 Show repository status and inspect one saved account:
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam auth status
-.\build\windows-msvc-debug\cauth.exe steam auth whoami --steam-id 7656119...
+& $cauth steam auth status
+& $cauth steam auth whoami --steam-id 7656119...
 ```
 
 Run account-specific operations by passing the same SteamID:
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam auth refresh-access --steam-id 7656119...
-.\build\windows-msvc-debug\cauth.exe steam auth web-cookies --steam-id 7656119...
-.\build\windows-msvc-debug\cauth.exe steam auth cm logon --steam-id 7656119...
+& $cauth steam auth refresh-access --steam-id 7656119...
+& $cauth steam auth web-cookies --steam-id 7656119...
+& $cauth steam auth cm logon --steam-id 7656119...
 ```
 
 Clear only one account:
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam auth clear --steam-id 7656119...
+& $cauth steam auth clear --steam-id 7656119...
 ```
 
 Clear every saved account:
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam auth clear --all
+& $cauth steam auth clear --all
 ```
 
 ## Android API

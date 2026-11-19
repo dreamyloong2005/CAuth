@@ -226,7 +226,7 @@ int main() {
         });
 
     if (!encrypted.has_value() || encrypted->bytes.size() != 172 || encrypted->timestamp != 1234 ||
-        encrypted->bytes == "plain-password" || encrypted->bytes.find('=') == std::string::npos) {
+        encrypted->bytes == "plain-password" || !encrypted->bytes.contains('=')) {
         std::cerr << "platform encryptor should produce base64 1024-bit RSA ciphertext\n";
         return 1;
     }

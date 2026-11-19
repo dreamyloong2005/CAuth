@@ -118,11 +118,11 @@ int main() {
 
     const auto url =
         cauth::steam::cloud::build_enumerate_user_files_url(request, 10, 5, true);
-    if (url.find("ICloudService/EnumerateUserFiles/v1/") == std::string::npos ||
-        url.find("access_token=token") == std::string::npos ||
-        url.find("appid=440") == std::string::npos ||
-        url.find("count=10") == std::string::npos ||
-        url.find("start_index=5") == std::string::npos) {
+    if (!url.contains("ICloudService/EnumerateUserFiles/v1/") ||
+        !url.contains("access_token=token") ||
+        !url.contains("appid=440") ||
+        !url.contains("count=10") ||
+        !url.contains("start_index=5")) {
         std::cerr << "steam cloud enumerate URL should include request parameters\n";
         return 1;
     }
@@ -133,7 +133,7 @@ int main() {
     const auto cookie_url =
         cauth::steam::cloud::build_enumerate_user_files_url(cookie_request, 10, 5, true);
     if (cookie_url.find("https://steamcommunity.com/ICloudService/EnumerateUserFiles/v1/") != 0 ||
-        cookie_url.find("access_token=") != std::string::npos) {
+        cookie_url.contains("access_token=")) {
         std::cerr << "steam cloud enumerate URL should switch to cookie session mode without access_token\n";
         return 1;
     }
@@ -143,7 +143,7 @@ int main() {
     const auto token_preferred_url =
         cauth::steam::cloud::build_enumerate_user_files_url(token_preferred_request, 10, 5, true);
     if (token_preferred_url.find("https://api.steampowered.com/ICloudService/EnumerateUserFiles/v1/") != 0 ||
-        token_preferred_url.find("access_token=store-web-token") == std::string::npos) {
+        !token_preferred_url.contains("access_token=store-web-token")) {
         std::cerr << "steam cloud enumerate URL should prefer API token mode when both token and cookies exist\n";
         return 1;
     }
@@ -168,7 +168,7 @@ int main() {
     invalid_pull_request.session_type =
         std::string{cauth::steam::auth::kSteamSessionTypeSteamClient};
     const auto invalid_pull = cauth::steam::cloud::pull_cloud_save(invalid_pull_request);
-    if (invalid_pull.ok || invalid_pull.message.find("local_root is required") == std::string::npos) {
+    if (invalid_pull.ok || !invalid_pull.message.contains("local_root is required")) {
         std::cerr << "steam cloud pull should validate local_root before download\n";
         return 1;
     }
@@ -180,8 +180,7 @@ int main() {
             cauth::steam::cloud::fetch_remote_file_list_via_web_page_diagnostic(
                 diagnostic_request);
         if (diagnostic_result.ok ||
-            diagnostic_result.message.find("web cookie auth materialization failed") ==
-                std::string::npos) {
+            !diagnostic_result.message.contains("web cookie auth materialization failed")) {
             std::cerr << "steam cloud web-page diagnostic list should fail cleanly without web auth material\n";
             return 1;
         }
@@ -189,11 +188,11 @@ int main() {
 
     const auto batch_form = cauth::steam::cloud::build_begin_app_upload_batch_form_body(
         "token", 440, "CAuth", {"remote/save1.sav", "remote/save2.sav"}, {"remote/old.sav"});
-    if (batch_form.find("access_token=token") == std::string::npos ||
-        batch_form.find("BeginAppUploadBatch") != std::string::npos ||
-        batch_form.find("input_json=") == std::string::npos ||
-        batch_form.find("remote%2Fsave1.sav") == std::string::npos ||
-        batch_form.find("remote%2Fold.sav") == std::string::npos) {
+    if (!batch_form.contains("access_token=token") ||
+        batch_form.contains("BeginAppUploadBatch") ||
+        !batch_form.contains("input_json=") ||
+        !batch_form.contains("remote%2Fsave1.sav") ||
+        !batch_form.contains("remote%2Fold.sav")) {
         std::cerr << "steam cloud batch form body should encode token and upload list\n";
         return 1;
     }
@@ -204,9 +203,9 @@ int main() {
         "CAuth",
         {"remote/save1.sav"},
         {});
-    if (cookie_batch_form.find("access_token=") != std::string::npos ||
-        cookie_batch_form.find("input_json=") == std::string::npos ||
-        cookie_batch_form.find("remote%2Fsave1.sav") == std::string::npos) {
+    if (cookie_batch_form.contains("access_token=") ||
+        !cookie_batch_form.contains("input_json=") ||
+        !cookie_batch_form.contains("remote%2Fsave1.sav")) {
         std::cerr << "steam cloud batch form body should support cookie-backed uploads without access_token\n";
         return 1;
     }
@@ -272,10 +271,10 @@ int main() {
             std::cerr << "print_remote_files should succeed with mocked list data\n";
             return 1;
         }
-        if (out.str().find("matched=2") == std::string::npos ||
-            out.str().find("filtered_out=1") == std::string::npos ||
-            out.str().find("file=saves/a.sav") == std::string::npos ||
-            out.str().find("file=other/c.sav") != std::string::npos) {
+        if (!out.str().contains("matched=2") ||
+            !out.str().contains("filtered_out=1") ||
+            !out.str().contains("file=saves/a.sav") ||
+            out.str().contains("file=other/c.sav")) {
             std::cerr << "print_remote_files should report filtered stats and only print matching files\n";
             return 1;
         }
@@ -566,7 +565,7 @@ int main() {
         pull_request.conflict_policy = cauth::steam::cloud::SteamCloudConflictPolicy::FailOnConflict;
         const auto result = cauth::steam::cloud::pull_cloud_save(pull_request);
         if (result.ok || result.conflict_count != 1 ||
-            result.message.find("conflict detected") == std::string::npos) {
+            !result.message.contains("conflict detected")) {
             std::cerr << "pull should fail immediately on conflict when policy is fail\n";
             return 1;
         }
@@ -684,7 +683,7 @@ int main() {
         const auto result = cauth::steam::cloud::pull_cloud_save(pull_request);
         if (!result.ok || result.transferred_count != 2 || result.conflict_count != 1 ||
             g_download_call_count != 0 ||
-            result.message.find("would download 2 file(s)") == std::string::npos) {
+            !result.message.contains("would download 2 file(s)")) {
             std::cerr << "pull dry-run should summarize planned downloads without fetching bytes\n";
             return 1;
         }
@@ -736,9 +735,9 @@ int main() {
         const auto result = cauth::steam::cloud::push_cloud_save(push_request);
         if (!result.ok || result.transferred_count != 1 || result.deleted_count != 1 ||
             result.skipped_count != 1 || result.conflict_count != 1 || g_upload_call_count != 0 ||
-            result.message.find("would upload 1 file(s)") == std::string::npos ||
-            result.message.find("1 unchanged") == std::string::npos ||
-            result.message.find("deleted 1 remote file(s)") == std::string::npos) {
+            !result.message.contains("would upload 1 file(s)") ||
+            !result.message.contains("1 unchanged") ||
+            !result.message.contains("deleted 1 remote file(s)")) {
             std::cerr << "push dry-run should plan uploads and orphan deletes without sending them"
                       << " ok=" << result.ok
                       << " transferred=" << result.transferred_count
@@ -780,7 +779,7 @@ int main() {
         const auto result = cauth::steam::cloud::pull_cloud_save(pull_request);
         if (!result.ok || result.transferred_count != 0 || result.skipped_count != 1 ||
             result.conflict_count != 1 || g_download_call_count != 0 ||
-            result.message.find("1 skipped by policy") == std::string::npos) {
+            !result.message.contains("1 skipped by policy")) {
             std::cerr << "pull should keep local file when conflict policy is local-wins\n";
             return 1;
         }
@@ -816,7 +815,7 @@ int main() {
         const auto result = cauth::steam::cloud::pull_cloud_save(pull_request);
         if (!result.ok || result.transferred_count != 0 || result.skipped_count != 1 ||
             g_download_call_count != 0 ||
-            result.message.find("1 existing") == std::string::npos ||
+            !result.message.contains("1 existing") ||
             read_text_file(local_path) != "local") {
             std::cerr << "pull skip-existing should skip local targets before download\n";
             return 1;
@@ -852,7 +851,7 @@ int main() {
             cauth::core::platform::FileWriteMode::FailIfExists;
         const auto result = cauth::steam::cloud::pull_cloud_save(pull_request);
         if (result.ok || g_download_call_count != 0 ||
-            result.message.find("already exists") == std::string::npos) {
+            !result.message.contains("already exists")) {
             std::cerr << "pull fail-if-exists should stop before download\n";
             return 1;
         }
@@ -919,7 +918,7 @@ int main() {
         push_request.conflict_policy = cauth::steam::cloud::SteamCloudConflictPolicy::FailOnConflict;
         const auto result = cauth::steam::cloud::push_cloud_save(push_request);
         if (result.ok || result.conflict_count != 1 ||
-            result.message.find("conflict detected") == std::string::npos ||
+            !result.message.contains("conflict detected") ||
             g_upload_call_count != 0) {
             std::cerr << "push should fail before upload when policy is fail-on-conflict\n";
             return 1;

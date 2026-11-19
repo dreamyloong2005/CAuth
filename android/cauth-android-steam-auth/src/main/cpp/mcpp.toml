@@ -1,0 +1,24 @@
+[package]
+namespace = "cauth"
+name      = "android-steam-auth-jni"
+
+# The JNI bridge exists only on Android. Elsewhere the package is a static
+# library of one empty stub, so a desktop `mcpp build` of the workspace skips it.
+[targets.cauth_android_steam_auth_jni]
+kind = "lib"
+
+[build]
+sources = ["../../../../jni_desktop_stub.cpp"]
+
+[target.'cfg(env = "android")'.targets.cauth_android_steam_auth_jni]
+kind = "shared"
+
+[target.'cfg(env = "android")'.build]
+sources = ["cauth_android_steam_auth_jni.cpp"]
+ldflags = ["-landroid", "-llog"]
+
+[dependencies]
+cauth.core            = { path = "../../../../../mcpp/core" }
+cauth.core-ffi        = { path = "../../../../../mcpp/core-ffi" }
+cauth.steam-auth      = { path = "../../../../../mcpp/steam-auth" }
+cauth.steam-auth-ffi  = { path = "../../../../../mcpp/steam-auth-ffi" }

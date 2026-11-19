@@ -28,7 +28,7 @@ std::string cm_endpoint_route_key(const CmServerEndpoint& endpoint) {
 }
 
 bool is_operation_canceled(std::string_view message) {
-    return message.find("operation canceled") != std::string_view::npos;
+    return message.contains("operation canceled");
 }
 
 std::vector<CmServerEndpoint> rank_websocket_servers(std::vector<CmServerEndpoint> servers) {

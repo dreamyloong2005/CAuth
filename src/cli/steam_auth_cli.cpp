@@ -6,6 +6,7 @@
 #include "steam/auth/steam_auth_application.hpp"
 #include "steam/auth/steam_auth_cm_application.hpp"
 #include "steam/auth/steam_login_service.hpp"
+#include "steam/depot/depot_cm_app_info.hpp"
 
 #include <atomic>
 #include <csignal>
@@ -430,7 +431,7 @@ int run_auth_cm_command(const ParsedAuthCmCommand& request) {
             std::cout,
             std::cerr);
     case AuthCmCommandKind::AppInfo:
-        return cauth::steam::auth::run_cm_app_info(
+        return cauth::steam::depot::run_cm_app_info(
             request.query,
             parse_steam_id_value(request.steam_id),
             request.app_id,

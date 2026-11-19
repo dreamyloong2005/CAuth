@@ -53,8 +53,11 @@ Owns Steam content and depot workflows:
 - manifest request codes and manifest download
 - chunk download, decompression, decryption, hashing, and file extraction
 - local file verification against downloaded content
+- the `steam auth cm app-info` PICS diagnostic, which runs after a CM logon through
+  `run_cm_logon_then(...)` in `cauth_steam_auth`
 
 This module depends on `cauth_steam_auth`, and therefore transitively on `cauth_core`.
+`cauth_steam_auth` does not call depot code.
 
 ### `cauth_steam_cloud`
 
@@ -112,13 +115,19 @@ Depot and cloud modules should not parse repository internals directly. They sho
 
 ## Packaging Model
 
-CMake install/export is also split by module:
+The root `mcpp.toml` is a virtual workspace. Its members under `mcpp/` (plus `tests/`) hold only
+manifests; sources stay in `src/`, `include/`, and `third_party/`. Members are split by module:
 
-- `Core`
-- `SteamAuth`
-- `SteamDepot`
-- `SteamCloud`
-- `Cli`
+- `cauth_core`
+- `cauth_steam_auth`
+- `cauth_steam_depot`
+- `cauth_steam_cloud`
+- `cauth`
+- `*_ffi` shared libraries for the C ABI
 
-The generated `CAuthConfig.cmake` loads whichever module target files are present in the install
-prefix and verifies the dependency chain before reporting requested components as found.
+The four C++ libraries are shared libraries too. The workspace sets
+`dependency_linkage = "shared"`, so every FFI library and program loads one copy of `cauth_core`,
+the Steam modules, zlib, and zstd.
+
+Android feature modules invoke mcpp for their JNI bridge packages before packaging and copy the
+resulting shared libraries into Gradle-managed `jniLibs` folders.

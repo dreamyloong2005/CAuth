@@ -1,0 +1,23 @@
+# The `cauth` command line tool.
+[package]
+namespace = "cauth"
+name      = "cli"
+
+[targets.cauth]
+kind = "bin"
+main = "../../src/cli/main.cpp"
+
+[build]
+sources = [
+    "../../src/cli/cli_support.cpp",
+    "../../src/cli/steam_cli.cpp",
+    "../../src/cli/steam_auth_cli.cpp",
+    "../../src/cli/steam_depot_cli.cpp",
+    "../../src/cli/steam_cloud_cli.cpp",
+]
+
+[dependencies]
+cauth.core        = { path = "../core" }
+cauth.steam-auth  = { path = "../steam-auth" }
+cauth.steam-depot = { path = "../steam-depot" }
+cauth.steam-cloud = { path = "../steam-cloud" }

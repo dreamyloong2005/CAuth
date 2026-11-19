@@ -48,21 +48,23 @@ for development and acceptance testing, but it is not required by library consum
 
 The current development version is `0.6.1`.
 
-Native versioning is controlled by CMake:
+Native versioning is controlled by the root `mcpp.toml` workspace manifest:
 
-```cmake
-project(CAuth VERSION 0.6.1)
+```toml
+[workspace.package]
+version = "0.6.1"
 ```
 
-CMake generates the native version header at configure time, and the CLI / C ABI read that same
-value. Android's example app has its own `versionCode` / `versionName` for APK packaging.
+The checked-in native version header mirrors
+that version, and the CLI / C ABI read that same value. Android's example app has its own `versionCode` / `versionName` for APK packaging.
 
 See [docs/versioning.md](docs/versioning.md) before bumping the version.
 
 ## Repository Layout
 
 ```text
-cmake/              CMake package helpers and generated-header templates
+mcpp.toml            Native mcpp workspace manifest
+mcpp/                Member manifests for the native libraries, FFI libraries, and CLI
 include/cauth/       Public C++ and C ABI headers
 src/core/            Shared runtime, storage, session, crypto, and transport infrastructure
 src/steam/auth/      Steam login, account, web auth, and CM auth workflows
@@ -74,7 +76,6 @@ src/cli/             Development CLI frontend
 android/             Android JNI, Kotlin APIs, Compose UI, and example app
 docs/                Integration and validation guides
 tests/               Unit and smoke tests
-.deps/               Vendored zlib/zstd source trees used by the build
 ```
 
 `reference/` is intentionally ignored. It is only for local research snapshots and should not be
@@ -84,15 +85,19 @@ published.
 
 Desktop Windows:
 
-- Visual Studio 2022 Build Tools or full Visual Studio 2022
-- CMake 3.22 or newer
-- a Developer PowerShell or another shell with the MSVC environment loaded
+- Visual Studio 2022 Build Tools or full Visual Studio 2022, used as the MSVC sysroot
+- LLVM clang 22.1.8; the workspace expects it at `D:/Dev/Tools/LLVM`
+- mcpp 2026.11.17.1 or newer on `PATH`
+
+mcpp finds the MSVC tools itself, so a Developer PowerShell is not required. If LLVM is installed
+elsewhere, change `[workspace.toolchain] windows` in `mcpp.toml`, or set
+`MCPP_TOOLCHAIN=path:<dir>` for a single build.
 
 Android:
 
 - Android Studio or a compatible Gradle/SDK setup
 - Android SDK platform tools
-- Android NDK matching the Android CMake configuration
+- mcpp available on `PATH` for native JNI builds; mcpp installs the Android NDK it needs itself
 - a device or emulator for the example app
 
 Steam compatibility dependencies:
@@ -100,29 +105,28 @@ Steam compatibility dependencies:
 - zlib is required for compressed CM multi messages
 - zstd is required for VZstd depot chunks
 
-The repository currently contains vendored source trees under `.deps/zlib-1.3.1` and
-`.deps/zstd-1.5.7`. Build outputs and downloaded archives under `.deps/` are ignored.
+The build takes zlib 1.3.2 and zstd 1.5.7 from the mcpp registry (`compat.zlib`, `compat.zstd`)
+as shared libraries.
 
 ## Build
 
-From a Visual Studio 2022 developer shell:
+From the repository root:
 
 ```powershell
-cmake --preset default
-cmake --build --preset default
-ctest --preset default
+mcpp build
+mcpp test
 ```
 
-The default Windows build tree is:
+`mcpp build --release` builds the release profile. Build outputs go under:
 
 ```text
-build/windows-msvc-debug
+target/x86_64-windows-msvc/<fingerprint>/bin/<member>/
 ```
 
 The CLI is normally:
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe
+mcpp run cauth -- --version
 ```
 
 ## Android Example
@@ -148,7 +152,7 @@ project.
 ## Quick CLI Flow
 
 ```powershell
-$cauth = ".\build\windows-msvc-debug\cauth.exe"
+$cauth = ".\target\x86_64-windows-msvc\<fingerprint>\bin\cli\cauth.exe"
 & $cauth --version
 & $cauth doctor
 ```
@@ -219,40 +223,24 @@ results:
 
 For a full validation path, use [docs/testing.md](docs/testing.md).
 
-## Installation Components
+## Native Targets
 
-CMake install components are split by module:
+mcpp workspace members are split by module. They build these artifacts:
 
-- `Core`
-- `SteamAuth`
-- `SteamDepot`
-- `SteamCloud`
-- `Cli`
-
-Examples:
-
-```powershell
-cmake --install .\build\windows-msvc-debug --config Debug --prefix .\build\install --component Core
-cmake --install .\build\windows-msvc-debug --config Debug --prefix .\build\install --component SteamAuth
-cmake --install .\build\windows-msvc-debug --config Debug --prefix .\build\install --component SteamDepot
-cmake --install .\build\windows-msvc-debug --config Debug --prefix .\build\install --component SteamCloud
-```
-
-Native consumers use the exported CMake package:
-
-```cmake
-find_package(CAuth CONFIG REQUIRED COMPONENTS core steam_auth steam_depot)
-
-target_link_libraries(my_app
-    PRIVATE
-        cauth::core
-        cauth::steam_auth
-        cauth::steam_depot
-)
-```
+- `cauth_core`
+- `cauth_steam_auth`
+- `cauth_steam_depot`
+- `cauth_steam_cloud`
+- `cauth`
+- `cauth_core_ffi`
+- `cauth_steam_auth_ffi`
+- `cauth_steam_depot_ffi`
+- `cauth_steam_cloud_ffi`
 
 Use the `*_ffi` targets when a C ABI is needed for JNI, game engines, or other foreign-function
-hosts.
+hosts. The C++ libraries and the `*_ffi` libraries are all shared libraries (DLL/.so). Android
+library modules call mcpp before packaging and copy the required JNI libraries into
+their generated `jniLibs` directories.
 
 ## Documentation
 

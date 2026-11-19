@@ -3,6 +3,8 @@
 `cauth_steam_depot` owns Steam app info, depot metadata, manifest access, content download, and
 local verification.
 
+Commands below use `$cauth` for the CLI built by `mcpp build`; see [getting-started.md](getting-started.md).
+
 ## What the module covers
 
 - branch discovery
@@ -20,9 +22,9 @@ local verification.
 ### 1. Inspect the app
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam depot branches --steam-id 7656119... --app-id 2868840 --max-count 20
-.\build\windows-msvc-debug\cauth.exe steam depot manifests --steam-id 7656119... --app-id 2868840 --branch public --max-count 20
-.\build\windows-msvc-debug\cauth.exe steam depot preflight --steam-id 7656119... --app-id 2868840 --branch public --max-count 20
+& $cauth steam depot branches --steam-id 7656119... --app-id 2868840 --max-count 20
+& $cauth steam depot manifests --steam-id 7656119... --app-id 2868840 --branch public --max-count 20
+& $cauth steam depot preflight --steam-id 7656119... --app-id 2868840 --branch public --max-count 20
 ```
 
 `preflight` is the best starting point because it joins branch, depot, and manifest information into
@@ -32,7 +34,7 @@ Depot metadata operations use saved Steam auth material and therefore require an
 If you have multiple accounts saved, choose the account that owns the target app and pass that ID:
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam auth accounts
+& $cauth steam auth accounts
 ```
 
 ## Platform-aware depot selection
@@ -66,8 +68,8 @@ platform.
 Once you have a target depot and manifest:
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam depot key --steam-id 7656119... --app-id 2868840 --depot-id <depot_id> --max-count 20
-.\build\windows-msvc-debug\cauth.exe steam depot manifest-code --steam-id 7656119... --app-id 2868840 --depot-id <depot_id> --manifest-gid <manifest_gid> --branch public --max-count 20
+& $cauth steam depot key --steam-id 7656119... --app-id 2868840 --depot-id <depot_id> --max-count 20
+& $cauth steam depot manifest-code --steam-id 7656119... --app-id 2868840 --depot-id <depot_id> --manifest-gid <manifest_gid> --branch public --max-count 20
 ```
 
 Common failure hints:
@@ -82,14 +84,14 @@ Common failure hints:
 ## 3. Download the manifest
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam depot manifest-download --depot-id <depot_id> --manifest-gid <manifest_gid> --request-code <request_code> --out .\build\manifest.bin --max-count 20
+& $cauth steam depot manifest-download --depot-id <depot_id> --manifest-gid <manifest_gid> --request-code <request_code> --out .\build\manifest.bin --max-count 20
 ```
 
 Then inspect it:
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam depot manifest-info --in .\build\manifest.bin --depot-key <depot_key_hex>
-.\build\windows-msvc-debug\cauth.exe steam depot file-list --in .\build\manifest.bin --depot-key <depot_key_hex> --limit 50
+& $cauth steam depot manifest-info --in .\build\manifest.bin --depot-key <depot_key_hex>
+& $cauth steam depot file-list --in .\build\manifest.bin --depot-key <depot_key_hex> --limit 50
 ```
 
 Directory-only entries are filtered out of download and verify workflows even if they exist in the
@@ -100,7 +102,7 @@ raw manifest tree.
 ### One chunk
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam depot chunk-download --in .\build\manifest.bin --file "relative/path" --chunk-index 0 --out .\build\chunk.bin --depot-key <depot_key_hex> --process --max-count 20
+& $cauth steam depot chunk-download --in .\build\manifest.bin --file "relative/path" --chunk-index 0 --out .\build\chunk.bin --depot-key <depot_key_hex> --process --max-count 20
 ```
 
 On the current Windows desktop path, depot transfer commands print live byte progress in the CLI
@@ -109,13 +111,13 @@ while manifest, chunk, and file data are being transferred.
 ### One file
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam depot file-download --in .\build\manifest.bin --file "relative/path" --depot-key <depot_key_hex> --out .\build\out\relative\path --max-count 20
+& $cauth steam depot file-download --in .\build\manifest.bin --file "relative/path" --depot-key <depot_key_hex> --out .\build\out\relative\path --max-count 20
 ```
 
 ### Everything
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam depot all-files-download --in .\build\manifest.bin --depot-key <depot_key_hex> --out-dir .\build\out --max-count 20
+& $cauth steam depot all-files-download --in .\build\manifest.bin --depot-key <depot_key_hex> --out-dir .\build\out --max-count 20
 ```
 
 `all-files-download` recreates the manifest directory structure under `--out-dir`.
@@ -123,7 +125,7 @@ while manifest, chunk, and file data are being transferred.
 ## 5. Verify local files
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam depot verify-local --in .\build\manifest.bin --depot-key <depot_key_hex> --local-root .\build\out
+& $cauth steam depot verify-local --in .\build\manifest.bin --depot-key <depot_key_hex> --local-root .\build\out
 ```
 
 Verification checks:

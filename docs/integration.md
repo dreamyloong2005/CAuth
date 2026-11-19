@@ -4,8 +4,8 @@ This document is the fastest way to wire CAuth into a real project.
 
 It answers three questions:
 
-1. Which modules should I install?
-2. How do I link them into a native desktop project?
+1. Which modules should I build?
+2. How do I consume the native outputs?
 3. How do I consume them from an Android Compose app?
 
 ## Choose Modules
@@ -37,110 +37,87 @@ Use the smallest set that matches your product:
 - `cauth_core + cauth_steam_auth + cauth_steam_cloud`
   - Steam Cloud list / verify / pull / push
 
-## Install From a Build Tree
+## Build From the Native Tree
 
-Build first:
-
-```powershell
-cmake --preset default
-cmake --build --preset default
-```
-
-If you want the full Steam feature set, make sure zlib and zstd support are available. zlib is
-needed for compressed CM multi messages; zstd is needed for VZstd depot chunks.
-
-Install the full stack:
+Build first, from the repository root:
 
 ```powershell
-cmake --install .\build\windows-msvc-debug --config Debug --prefix .\build\install
+mcpp build
 ```
 
-Install only the reusable substrate:
+This builds every workspace member, which is the full stack. zlib and zstd come from the mcpp
+registry and are always enabled. zlib is needed for compressed CM multi messages; zstd is needed
+for VZstd depot chunks.
+
+`mcpp build -p <package>` builds one member and its dependencies.
+
+Build only the reusable substrate:
 
 ```powershell
-cmake --install .\build\windows-msvc-debug --config Debug --prefix .\build\install-core --component Core
+mcpp build -p cauth.core-ffi
 ```
 
-Add Steam auth into an existing prefix:
+Build Steam auth:
 
 ```powershell
-cmake --install .\build\windows-msvc-debug --config Debug --prefix .\build\install --component SteamAuth
+mcpp build -p cauth.steam-auth-ffi
 ```
 
-Add Steam depot into an existing prefix:
+Build Steam depot:
 
 ```powershell
-cmake --install .\build\windows-msvc-debug --config Debug --prefix .\build\install --component SteamDepot
+mcpp build -p cauth.steam-depot-ffi
 ```
 
-Add Steam cloud into an existing prefix:
+Build Steam cloud:
 
 ```powershell
-cmake --install .\build\windows-msvc-debug --config Debug --prefix .\build\install --component SteamCloud
+mcpp build -p cauth.steam-cloud-ffi
 ```
 
-## Native CMake Consumer
+Each FFI package depends on its C++ library, so building it also builds that library.
+
+Outputs go under `target/x86_64-windows-msvc/<fingerprint>/bin/`. That directory holds every
+library's DLL and import library (`.lib`). Each `bin/<member>/` directory holds that member's DLL
+with the MSVC runtime DLLs, and `bin/cli/` holds `cauth.exe` with all the DLLs it needs. mcpp has
+no install step yet; copy the files you need from those directories.
+
+## Native Consumer
+
+The current repository is consumed either by building CAuth directly with mcpp or by copying the
+shared libraries from the mcpp `bin` directories and using the public headers from `include/`.
+All listed libraries are shared libraries (DLL/.so).
 
 ### Core only
 
-```cmake
-find_package(CAuth CONFIG REQUIRED COMPONENTS core)
-
-target_link_libraries(my_app
-    PRIVATE
-        cauth::core
-        cauth::core_ffi
-)
+```text
+headers: include/cauth/core.hpp, include/cauth/core_ffi.h
+libraries: cauth_core, cauth_core_ffi
 ```
 
 ### Steam auth
 
-```cmake
-find_package(CAuth CONFIG REQUIRED COMPONENTS core steam_auth)
-
-target_link_libraries(my_app
-    PRIVATE
-        cauth::core
-        cauth::steam_auth
-        cauth::core_ffi
-        cauth::steam_auth_ffi
-)
+```text
+headers: include/cauth/core.hpp, include/cauth/steam_auth.hpp, include/cauth/steam_auth_ffi.h
+libraries: cauth_core, cauth_steam_auth, cauth_core_ffi, cauth_steam_auth_ffi
 ```
 
 ### Steam depot
 
-```cmake
-find_package(CAuth CONFIG REQUIRED COMPONENTS core steam_auth steam_depot)
-
-target_link_libraries(my_app
-    PRIVATE
-        cauth::core
-        cauth::steam_auth
-        cauth::steam_depot
-        cauth::core_ffi
-        cauth::steam_auth_ffi
-        cauth::steam_depot_ffi
-)
+```text
+headers: include/cauth/steam_depot.hpp, include/cauth/steam_depot_ffi.h
+libraries: cauth_core, cauth_steam_auth, cauth_steam_depot, cauth_core_ffi, cauth_steam_depot_ffi
 ```
 
 ### Steam cloud
 
-```cmake
-find_package(CAuth CONFIG REQUIRED COMPONENTS core steam_auth steam_cloud)
-
-target_link_libraries(my_app
-    PRIVATE
-        cauth::core
-        cauth::steam_auth
-        cauth::steam_cloud
-        cauth::core_ffi
-        cauth::steam_auth_ffi
-        cauth::steam_cloud_ffi
-)
+```text
+headers: include/cauth/steam_cloud.hpp, include/cauth/steam_cloud_ffi.h
+libraries: cauth_core, cauth_steam_auth, cauth_steam_cloud, cauth_core_ffi, cauth_steam_cloud_ffi
 ```
 
-On Windows, if you use the FFI DLL targets, make sure the installed `bin` directory is visible at
-runtime.
+On Windows, make sure the CAuth DLLs, `zlib.dll`, and `zstd.dll` are visible at runtime, for
+example by copying them next to your executable.
 
 ## Public Headers
 
@@ -173,11 +150,12 @@ subject into operations:
 3. let the user choose an account when more than one exists
 4. run depot or cloud work with that account's SteamID
 
-Desktop CLI equivalents:
+Desktop CLI equivalents, with `$cauth` set to the built `cauth.exe` as in
+[getting-started.md](getting-started.md):
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam auth accounts
-.\build\windows-msvc-debug\cauth.exe steam auth whoami --steam-id 7656119...
+& $cauth steam auth accounts
+& $cauth steam auth whoami --steam-id 7656119...
 ```
 
 Android API equivalents:
@@ -196,35 +174,35 @@ After integrating, verify each layer independently.
 ### Auth
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam auth status
-.\build\windows-msvc-debug\cauth.exe steam auth accounts
-.\build\windows-msvc-debug\cauth.exe steam auth whoami --steam-id 7656119...
-.\build\windows-msvc-debug\cauth.exe steam auth cm probe --max-count 5
+& $cauth steam auth status
+& $cauth steam auth accounts
+& $cauth steam auth whoami --steam-id 7656119...
+& $cauth steam auth cm probe --max-count 5
 ```
 
 ### Depot
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam depot branches --steam-id 7656119... --app-id 2868840 --max-count 10
-.\build\windows-msvc-debug\cauth.exe steam depot manifests --steam-id 7656119... --app-id 2868840 --branch public --max-count 10
-.\build\windows-msvc-debug\cauth.exe steam depot preflight --steam-id 7656119... --app-id 2868840 --branch public --max-count 10
-.\build\windows-msvc-debug\cauth.exe steam depot key --steam-id 7656119... --app-id 2868840 --depot-id 2868843 --max-count 10
+& $cauth steam depot branches --steam-id 7656119... --app-id 2868840 --max-count 10
+& $cauth steam depot manifests --steam-id 7656119... --app-id 2868840 --branch public --max-count 10
+& $cauth steam depot preflight --steam-id 7656119... --app-id 2868840 --branch public --max-count 10
+& $cauth steam depot key --steam-id 7656119... --app-id 2868840 --depot-id 2868843 --max-count 10
 ```
 
 If you already have a manifest and depot key:
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam depot all-files-download --in .\manifest.bin --depot-key <hex> --out-dir .\out --max-count 20
-.\build\windows-msvc-debug\cauth.exe steam depot verify-local --in .\manifest.bin --depot-key <hex> --local-root .\out
+& $cauth steam depot all-files-download --in .\manifest.bin --depot-key <hex> --out-dir .\out --max-count 20
+& $cauth steam depot verify-local --in .\manifest.bin --depot-key <hex> --local-root .\out
 ```
 
 ### Cloud
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam cloud list --steam-id 7656119... --app-id 2868840 --remote-root savegames
-.\build\windows-msvc-debug\cauth.exe steam cloud verify --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-cloud --remote-root savegames
-.\build\windows-msvc-debug\cauth.exe steam cloud pull --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-cloud --remote-root savegames --dry-run
-.\build\windows-msvc-debug\cauth.exe steam cloud push --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-cloud --remote-root savegames --dry-run
+& $cauth steam cloud list --steam-id 7656119... --app-id 2868840 --remote-root savegames
+& $cauth steam cloud verify --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-cloud --remote-root savegames
+& $cauth steam cloud pull --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-cloud --remote-root savegames --dry-run
+& $cauth steam cloud push --steam-id 7656119... --app-id 2868840 --local-root .\build\slay2-cloud --remote-root savegames --dry-run
 ```
 
 ## Android Integration

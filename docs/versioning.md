@@ -8,25 +8,20 @@ The current development version is:
 
 ## Native Source Of Truth
 
-The native C/C++ version is controlled by the CMake project declaration:
+The native C/C++ version is controlled by the workspace version in the root `mcpp.toml`:
 
-```cmake
-project(CAuth VERSION 0.6.1)
+```toml
+[workspace.package]
+version = "0.6.1"
 ```
 
-During configure, CMake expands:
+The native code reads:
 
 ```text
-cmake/cauth_version_generated.hpp.in
+src/core/version_generated.hpp
 ```
 
-into a generated build-tree header:
-
-```text
-build/<preset>/generated/core/version_generated.hpp
-```
-
-`src/core/version.cpp` reads that generated header. This means these surfaces all report the same
+`src/core/version.cpp` reads that header. This means these surfaces all report the same
 native version:
 
 - `cauth --version`
@@ -34,7 +29,8 @@ native version:
 - `CAuthClient.version()` on Android
 - C++ callers using `cauth::core::version()`
 
-Do not edit generated headers in `build/`.
+Keep both `mcpp.toml` versions and `src/core/version_generated.hpp` in sync by hand when bumping
+the native version.
 
 ## Android Example Version
 
@@ -61,21 +57,22 @@ separate library publication versions.
 
 When bumping CAuth:
 
-1. Update `project(CAuth VERSION ...)` in `CMakeLists.txt`.
+1. Update `version` in `mcpp.toml`.
 2. Update `versionName` and increment `versionCode` in `android/example-android/build.gradle.kts`.
-3. Update version expectations in tests that assert exact text.
+3. Update `src/core/version_generated.hpp`.
 4. Update this document if the current version changes.
-5. Reconfigure and build the native tree.
-6. Run the version and packaging checks.
-7. Build the Android example app.
+5. Update version expectations in tests that assert exact text.
+6. Build the native tree.
+7. Run the version and packaging checks.
+8. Build the Android example app.
 
 Recommended commands:
 
 ```powershell
-cmake --preset default
-cmake --build --preset default
-ctest --test-dir .\build\windows-msvc-debug --output-on-failure -R "cauth_core_tests|cauth_cli_tests"
-.\build\windows-msvc-debug\cauth.exe --version
+mcpp build
+mcpp test core_version_tests
+mcpp test cli_tests
+mcpp run cauth -- --version
 
 cd .\android
 .\gradlew.bat :example-android:assembleDebug

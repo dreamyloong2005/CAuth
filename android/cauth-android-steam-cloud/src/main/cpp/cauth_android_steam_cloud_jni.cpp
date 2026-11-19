@@ -189,10 +189,6 @@ jclass ensure_route_probe_snapshot_class(JNIEnv* env) {
     return require_global_class(env, g_route_probe_snapshot_class, kRouteProbeSnapshotClassName);
 }
 
-std::string nullable_string(const char* value) {
-    return value == nullptr ? std::string{} : std::string{value};
-}
-
 std::string copy_jstring(JNIEnv* env, jstring value) {
     if (value == nullptr) {
         return {};
@@ -965,11 +961,11 @@ void run_cloud_transfer_task(jlong client_handle,
         task->succeeded = native_result == CAUTH_OK &&
             (kind == CloudTransferTaskKind::Verify ? task->verify_report.present != 0 : task->result.ok != 0);
         const bool message_paused =
-            (task->has_result && task->result_message.find("operation paused") != std::string::npos) ||
-            (task->has_verify_report && task->verify_message.find("operation paused") != std::string::npos);
+            (task->has_result && task->result_message.contains("operation paused")) ||
+            (task->has_verify_report && task->verify_message.contains("operation paused"));
         const bool message_canceled =
-            (task->has_result && task->result_message.find("operation canceled") != std::string::npos) ||
-            (task->has_verify_report && task->verify_message.find("operation canceled") != std::string::npos);
+            (task->has_result && task->result_message.contains("operation canceled")) ||
+            (task->has_verify_report && task->verify_message.contains("operation canceled"));
         task->paused = !task->succeeded && (message_paused || task->pause_requested.load());
         task->canceled = !task->paused &&
             (task->cancel_requested.load() &&

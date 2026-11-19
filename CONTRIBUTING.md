@@ -17,12 +17,11 @@ Thanks for contributing to CAuth.
 
 ## Development setup
 
-From a Visual Studio 2022 developer shell:
+From the repository root, with mcpp on `PATH` (see [README.md](README.md#requirements)):
 
 ```powershell
-cmake --preset default
-cmake --build --preset default
-ctest --preset default
+mcpp build
+mcpp test
 ```
 
 For Android:

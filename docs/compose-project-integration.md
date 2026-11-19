@@ -231,7 +231,10 @@ the shared native runtime and storage layer.
 
 ## 9. Native build assumptions
 
-Each Android feature module builds its JNI layer by pointing CMake back to the CAuth repo root.
+Each Android feature module builds its JNI layer by invoking mcpp from the CAuth repository root,
+whose `mcpp.toml` workspace includes the JNI bridge packages. mcpp
+installs the Android NDK it needs itself. Only `arm64-v8a` and `x86_64` are built, because mcpp
+has no `armeabi-v7a` or `x86` Android targets.
 That means:
 
 - keep the checked-out CAuth directory structure intact

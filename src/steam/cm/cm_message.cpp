@@ -3,6 +3,7 @@
 #include <cstring>
 #include <iomanip>
 #include <sstream>
+#include <utility>
 
 #ifdef CAUTH_HAS_ZLIB
 #include <zlib.h>
@@ -165,7 +166,7 @@ bool inflate_multi_body(const std::vector<std::uint8_t>& compressed,
 } // namespace
 
 std::uint32_t raw_emsg(EMsg emsg, bool protobuf) {
-    auto raw = static_cast<std::uint32_t>(emsg);
+    auto raw = std::to_underlying(emsg);
     if (protobuf) {
         raw |= kProtoMask;
     }

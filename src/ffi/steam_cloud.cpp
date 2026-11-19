@@ -30,11 +30,11 @@ cauth::core::platform::RouteSelection from_ffi_route_selection(
 }
 
 bool message_indicates_cancel(std::string_view message) {
-    return message.find("operation canceled") != std::string_view::npos;
+    return message.contains("operation canceled");
 }
 
 bool message_indicates_pause(std::string_view message) {
-    return message.find("operation paused") != std::string_view::npos;
+    return message.contains("operation paused");
 }
 
 thread_local std::string g_last_cloud_message;

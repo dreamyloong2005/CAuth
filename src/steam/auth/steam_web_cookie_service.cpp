@@ -411,8 +411,7 @@ std::string host_from_url(std::string_view url) {
 }
 
 std::string maybe_attach_domain(std::string_view cookie, std::string_view domain) {
-    if (cookie.find("Domain=") != std::string_view::npos ||
-        cookie.find("domain=") != std::string_view::npos) {
+    if (cookie.contains("Domain=") || cookie.contains("domain=")) {
         return trim_ascii(cookie);
     }
     return trim_ascii(cookie) + "; Domain=" + std::string{domain};

@@ -499,7 +499,7 @@ HttpResponse perform_platform_http_request(const HttpRequest& request) {
         request_copy.headers,
         request_copy.connect_timeout_ms,
         request_copy.read_timeout_ms);
-    if (!response.ok && response.error_message.find("operation canceled") != std::string::npos) {
+    if (!response.ok && response.error_message.contains("operation canceled")) {
         return {false, "operation canceled", response.status_code, {}, {}};
     }
     if (request_copy.use_range && request_copy.range_start > 0 && response.ok &&

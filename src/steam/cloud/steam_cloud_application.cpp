@@ -62,7 +62,7 @@ std::string lowercase_ascii(std::string_view value) {
 
 bool contains_ascii_case_insensitive(std::string_view value, std::string_view needle) {
     if (needle.empty()) return true;
-    return lowercase_ascii(value).find(lowercase_ascii(needle)) != std::string::npos;
+    return lowercase_ascii(value).contains(lowercase_ascii(needle));
 }
 
 std::string infer_cloud_module_status(SteamCloudTransferKind kind, std::string_view phase) {

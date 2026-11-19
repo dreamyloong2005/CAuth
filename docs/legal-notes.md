@@ -11,8 +11,9 @@ CAuth is intended as an original native implementation.
 
 ## Vendored Dependencies
 
-CAuth currently vendors zlib and zstd source trees under `.deps/` for build reliability. Those
-dependencies retain their upstream licenses and notices. Do not rewrite their license headers or
+CAuth vendors the LZMA SDK decoder under `third_party/lzma-sdk/`. zlib and zstd come from the mcpp
+package registry (`compat.zlib`, `compat.zstd`). These dependencies retain their upstream licenses
+and notices. Do not rewrite their license headers or
 mix their terms into CAuth's MIT license.
 
 ## Project Hygiene

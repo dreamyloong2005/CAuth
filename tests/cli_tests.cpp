@@ -30,7 +30,7 @@ std::vector<char*> make_argv(std::vector<std::string>& args) {
 }
 
 bool contains(std::string_view text, std::string_view needle) {
-    return text.find(needle) != std::string_view::npos;
+    return text.contains(needle);
 }
 
 int expect_true(bool condition, const char* message) {

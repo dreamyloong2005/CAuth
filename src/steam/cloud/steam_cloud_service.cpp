@@ -140,9 +140,9 @@ bool looks_like_html_document(std::string_view value) {
 }
 
 bool looks_like_cloud_enumerate_json(std::string_view value) {
-    return value.find("\"response\"") != std::string_view::npos ||
-           value.find("\"total_files\"") != std::string_view::npos ||
-           value.find("\"files\"") != std::string_view::npos;
+    return value.contains("\"response\"") ||
+           value.contains("\"total_files\"") ||
+           value.contains("\"files\"");
 }
 
 std::string html_unescape(std::string_view value) {
@@ -311,7 +311,7 @@ std::string_view host_from_url(std::string_view url) {
 bool is_web_store_download_url(std::string_view url) {
     const auto host = host_from_url(url);
     return host == "cdn.steamusercontent.com" &&
-           url.find("/filedownload/") != std::string_view::npos;
+           url.contains("/filedownload/");
 }
 
 bool should_use_access_token_preferred_web_api_base(const SteamCloudRequest& request) {
@@ -517,8 +517,7 @@ SteamCloudFileListResult parse_remote_storage_app_page(std::uint32_t app_id, std
         if (filename.empty()) {
             continue;
         }
-        if (!folder.empty() && filename.find('/') == std::string::npos &&
-            filename.find('\\') == std::string::npos) {
+        if (!folder.empty() && !filename.contains('/') && !filename.contains('\\')) {
             entry.filename = folder + "/" + filename;
         } else {
             entry.filename = std::move(filename);

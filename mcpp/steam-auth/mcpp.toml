@@ -1,0 +1,19 @@
+# Steam login, account persistence, web-cookie helpers and CM auth flows.
+[package]
+namespace = "cauth"
+name      = "steam-auth"
+
+[targets.cauth_steam_auth]
+kind = "lib"
+linkage = "shared"
+
+[build]
+sources = ["../../src/steam/auth/*.cpp", "../../src/steam/cm/*.cpp"]
+defines = ["CAUTH_HAS_ZLIB"]
+
+[target.'cfg(os = "windows")'.build]
+ldflags = ["-lwinhttp"]
+
+[dependencies]
+cauth.core  = { path = "../core" }
+compat.zlib = "1.3.2"

@@ -1,0 +1,25 @@
+[package]
+namespace = "cauth"
+name      = "android-steam-cloud-jni"
+
+# The JNI bridge exists only on Android. Elsewhere the package is a static
+# library of one empty stub, so a desktop `mcpp build` of the workspace skips it.
+[targets.cauth_android_steam_cloud_jni]
+kind = "lib"
+
+[build]
+sources = ["../../../../jni_desktop_stub.cpp"]
+
+[target.'cfg(env = "android")'.targets.cauth_android_steam_cloud_jni]
+kind = "shared"
+
+[target.'cfg(env = "android")'.build]
+sources = ["cauth_android_steam_cloud_jni.cpp"]
+ldflags = ["-landroid", "-llog"]
+
+[dependencies]
+cauth.core            = { path = "../../../../../mcpp/core" }
+cauth.core-ffi        = { path = "../../../../../mcpp/core-ffi" }
+cauth.steam-auth      = { path = "../../../../../mcpp/steam-auth" }
+cauth.steam-cloud     = { path = "../../../../../mcpp/steam-cloud" }
+cauth.steam-cloud-ffi = { path = "../../../../../mcpp/steam-cloud-ffi" }

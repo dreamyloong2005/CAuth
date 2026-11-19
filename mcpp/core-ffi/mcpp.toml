@@ -1,0 +1,14 @@
+# C ABI over cauth_core.
+[package]
+namespace = "cauth"
+name      = "core-ffi"
+
+[targets.cauth_core_ffi]
+kind = "shared"
+
+[build]
+sources = ["../../src/ffi/core.cpp"]
+defines = ["CAUTH_BUILD_SHARED=1"]
+
+[dependencies]
+cauth.core = { path = "../core" }

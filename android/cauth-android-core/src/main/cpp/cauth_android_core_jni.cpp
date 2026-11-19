@@ -92,7 +92,8 @@ Java_com_cauth_android_CAuthNativeCore_nativeCreateClientWithOptions(
         throw_result_exception(env, "Failed to create CAuth client", result);
         return 0;
     }
-    __android_log_print(ANDROID_LOG_INFO, kLogTag, "nativeCreateClientWithOptions ok handle=%p", client);
+    __android_log_print(ANDROID_LOG_INFO, kLogTag, "nativeCreateClientWithOptions ok handle=%p",
+                        static_cast<void*>(client));
     return handle_from_client(client);
 }
 
@@ -100,7 +101,7 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_cauth_android_CAuthNativeCore_nativeDestroyClient(JNIEnv*, jclass, jlong handle) {
     if (handle != 0) {
         __android_log_print(ANDROID_LOG_INFO, kLogTag, "nativeDestroyClient handle=%p",
-                            client_from_handle(handle));
+                            static_cast<void*>(client_from_handle(handle)));
         cauth_client_destroy(client_from_handle(handle));
     }
 }

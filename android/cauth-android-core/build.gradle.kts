@@ -5,6 +5,15 @@ plugins {
 
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
+extra["cauthMcppPackages"] = listOf("cauth.android-core-jni")
+extra["cauthMcppLibraries"] = listOf(
+    "libcauth_core.so",
+    "libcauth_core_ffi.so",
+    "libcauth_android_core_jni.so",
+)
+extra["cauthMcppCopySharedStl"] = true
+apply(from = "../gradle/mcpp-native.gradle")
+
 android {
     namespace = "com.cauth.android"
     compileSdk = 35
@@ -12,17 +21,6 @@ android {
     defaultConfig {
         minSdk = 26
 
-        externalNativeBuild {
-            cmake {
-                cppFlags += listOf("-std=c++20")
-                arguments += listOf(
-                    "-DANDROID_STL=c++_shared",
-                    "-DCAUTH_BUILD_CLI=OFF",
-                    "-DCAUTH_BUILD_TESTS=OFF",
-                    "-DCAUTH_BUILD_FFI=ON"
-                )
-            }
-        }
     }
 
     buildFeatures {
@@ -39,13 +37,6 @@ android {
                 "**/libcauth_android_steam_depot_jni.so",
                 "**/libcauth_android_steam_cloud_jni.so",
             )
-        }
-    }
-
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
         }
     }
 

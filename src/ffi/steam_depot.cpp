@@ -121,6 +121,8 @@ cauth::core::platform::FileWriteOptions make_write_options(cauth_file_write_mode
         from_ffi_file_write_mode(mode),
         atomic_write != 0,
         ".cauthdownload",
+        false,
+        {},
     };
 }
 
@@ -145,11 +147,11 @@ void set_last_error_detail(std::string detail) {
 }
 
 bool message_indicates_cancel(std::string_view message) {
-    return message.find("operation canceled") != std::string_view::npos;
+    return message.contains("operation canceled");
 }
 
 bool message_indicates_pause(std::string_view message) {
-    return message.find("operation paused") != std::string_view::npos;
+    return message.contains("operation paused");
 }
 
 bool depot_task_cancel_requested(void* user_data) {
@@ -995,8 +997,7 @@ cauth_result_t cauth_depot_list_manifest_files(const char* input_path,
             }
             const auto display_name = cauth::core::depot::depot_manifest_path_for_display(file.filename);
             ++total_count;
-            if (!filter.empty() &&
-                display_name.find(filter) == std::string::npos) {
+            if (!filter.empty() && !display_name.contains(filter)) {
                 continue;
             }
             ++matched_count;
@@ -1013,8 +1014,7 @@ cauth_result_t cauth_depot_list_manifest_files(const char* input_path,
                 continue;
             }
             const auto display_name = cauth::core::depot::depot_manifest_path_for_display(file.filename);
-            if (!filter.empty() &&
-                display_name.find(filter) == std::string::npos) {
+            if (!filter.empty() && !display_name.contains(filter)) {
                 continue;
             }
             if (printed_index >= g_manifest_file_names.size()) {

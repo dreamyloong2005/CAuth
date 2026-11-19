@@ -1,0 +1,20 @@
+# Steam Cloud list, verify, pull and push.
+[package]
+namespace = "cauth"
+name      = "steam-cloud"
+
+[targets.cauth_steam_cloud]
+kind = "lib"
+linkage = "shared"
+
+[build]
+sources = ["../../src/steam/cloud/*.cpp"]
+defines = ["CAUTH_HAS_ZLIB"]
+
+[target.'cfg(os = "windows")'.build]
+ldflags = ["-lwinhttp"]
+
+[dependencies]
+cauth.core       = { path = "../core" }
+cauth.steam-auth = { path = "../steam-auth" }
+compat.zlib = "1.3.2"

@@ -127,7 +127,7 @@ int main() {
     const auto failed = login.login(
         make_request(cauth::steam::auth::SteamLoginPlatformType::MobileApp));
     if (failed.status != cauth::steam::auth::SteamLoginStatus::Failed ||
-        failed.message.find("GenerateAccessTokenForApp failed") == std::string::npos) {
+        !failed.message.contains("GenerateAccessTokenForApp failed")) {
         std::cerr << "mobile app token generation failures should surface clearly\n";
         return 1;
     }

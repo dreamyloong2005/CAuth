@@ -58,7 +58,7 @@ bool steam_auth_debug_enabled() {
 }
 
 SteamLoginResult transport_failure(const std::string& operation, const SteamTransportResult& result) {
-    if (result.error_message.find("operation canceled") != std::string::npos) {
+    if (result.error_message.contains("operation canceled")) {
         return SteamLoginResult{
             SteamLoginStatus::Canceled,
             std::nullopt,

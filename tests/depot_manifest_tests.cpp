@@ -299,14 +299,14 @@ int main() {
         &verify_missing_report);
     std::filesystem::remove_all(verify_root);
     if (verify_ok != 0 || verify_bad == 0 || verify_missing == 0 ||
-        verify_out.str().find("OK file=folder/file.bin") == std::string::npos ||
-        verify_bad_out.str().find("MISMATCH file=folder/file.bin") == std::string::npos ||
-        verify_missing_out.str().find("MISSING file=folder/file.bin") == std::string::npos ||
+        !verify_out.str().contains("OK file=folder/file.bin") ||
+        !verify_bad_out.str().contains("MISMATCH file=folder/file.bin") ||
+        !verify_missing_out.str().contains("MISSING file=folder/file.bin") ||
         verify_ok_report.entries.size() != 1 ||
         verify_ok_report.entries[0].status != cauth::steam::depot::LocalVerifyStatus::Ok ||
         verify_bad_report.entries.size() != 1 ||
         verify_bad_report.entries[0].status != cauth::steam::depot::LocalVerifyStatus::Mismatched ||
-        verify_bad_report.entries[0].reason.find("incorrect") == std::string::npos ||
+        !verify_bad_report.entries[0].reason.contains("incorrect") ||
         verify_missing_report.entries.size() != 1 ||
         verify_missing_report.entries[0].status != cauth::steam::depot::LocalVerifyStatus::MissingLocal) {
         std::cerr << "manifest local verification should report ok, mismatch, and missing files\n";
@@ -364,7 +364,7 @@ int main() {
                 ".cauthdownload",
             });
         if (prepared.ok() ||
-            prepared.error_message().find("already exists") == std::string::npos) {
+            !prepared.error_message().contains("already exists")) {
             std::cerr << "fail-if-exists file write should reject existing output path\n";
             return 1;
         }
@@ -384,9 +384,9 @@ int main() {
         10,
         directory_list_out);
     if (directory_list_exit != 0 ||
-        directory_list_out.str().find("file[0]=folder") != std::string::npos ||
-        directory_list_out.str().find("file[1]=folder/file.bin") == std::string::npos ||
-        directory_list_out.str().find("total=1") == std::string::npos) {
+        directory_list_out.str().contains("file[0]=folder") ||
+        !directory_list_out.str().contains("file[1]=folder/file.bin") ||
+        !directory_list_out.str().contains("total=1")) {
         std::cerr << "manifest file list should skip directory entries\n";
         return 1;
     }
@@ -399,7 +399,7 @@ int main() {
         {},
         directory_select_err);
     if (directory_selection.has_value() ||
-        directory_select_err.str().find("directory") == std::string::npos) {
+        !directory_select_err.str().contains("directory")) {
         std::cerr << "directory entries should be rejected as downloadable files\n";
         return 1;
     }
@@ -428,7 +428,7 @@ int main() {
     if (directory_verify_exit != 0 ||
         directory_verify_report.total_count != 1 ||
         directory_verify_report.checked_count != 1 ||
-        directory_verify_out.str().find("file=folder path=") != std::string::npos) {
+        directory_verify_out.str().contains("file=folder path=")) {
         std::cerr << "local verify should skip directory entries\n";
         return 1;
     }

@@ -24,7 +24,7 @@ bool invoke_login_cancel_hook(void* user_data) {
 }
 
 bool is_operation_canceled(std::string_view error_message) {
-    return error_message.find("operation canceled") != std::string_view::npos;
+    return error_message.contains("operation canceled");
 }
 
 cauth::core::platform::OperationCancelContext make_operation_cancel_context(
@@ -81,8 +81,8 @@ SteamLoginResult login_with_cm_auth(cauth::core::session::AuthSessionWriter& ses
                 cauth::core::cm::SteamCmContinuation::Stop, true, login_result.message};
         }
 
-        if (login_result.message.find("RateLimitExceeded") != std::string::npos ||
-            login_result.message.find("AccountLoginDeniedThrottle") != std::string::npos) {
+        if (login_result.message.contains("RateLimitExceeded") ||
+            login_result.message.contains("AccountLoginDeniedThrottle")) {
             terminal_result = login_result;
             return cauth::core::cm::SteamCmAttemptResult{
                 cauth::core::cm::SteamCmContinuation::Stop, false, login_result.message};

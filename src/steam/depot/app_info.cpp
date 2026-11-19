@@ -590,19 +590,18 @@ std::vector<std::string> depot_platform_tags(std::string_view os_list) {
         if (normalized.empty()) {
             return;
         }
-        if (normalized.find("windows") != std::string::npos || normalized == "win32" ||
+        if (normalized.contains("windows") || normalized == "win32" ||
             normalized == "win64" || normalized == "win") {
             normalized = "windows";
-        } else if (normalized.find("linux") != std::string::npos) {
+        } else if (normalized.contains("linux")) {
             normalized = "linux";
-        } else if (normalized.find("mac") != std::string::npos ||
-                   normalized.find("osx") != std::string::npos) {
+        } else if (normalized.contains("mac") || normalized.contains("osx")) {
             normalized = "macos";
-        } else if (normalized.find("android") != std::string::npos) {
+        } else if (normalized.contains("android")) {
             normalized = "android";
-        } else if (normalized.find("ios") != std::string::npos ||
-                   normalized.find("iphone") != std::string::npos ||
-                   normalized.find("ipad") != std::string::npos) {
+        } else if (normalized.contains("ios") ||
+                   normalized.contains("iphone") ||
+                   normalized.contains("ipad")) {
             normalized = "ios";
         }
         for (const auto& existing : tags) {

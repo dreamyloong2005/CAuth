@@ -191,9 +191,9 @@ std::optional<cauth::core::session::AuthSession> make_cm_auth_session(
 }
 
 bool is_retryable_cm_error(std::string_view error) {
-    return error.find("websocket") != std::string_view::npos ||
-           error.find("timed out") != std::string_view::npos ||
-           error.find("receive failed") != std::string_view::npos;
+    return error.contains("websocket") ||
+           error.contains("timed out") ||
+           error.contains("receive failed");
 }
 
 std::optional<std::vector<std::uint8_t>> decode_hex_bytes(std::string_view hex) {

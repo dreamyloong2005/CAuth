@@ -870,10 +870,10 @@ std::thread([task, runner = std::forward<Runner>(runner)]() mutable {
         std::lock_guard lock(task->mutex);
         task->succeeded = succeeded;
         task->paused = !succeeded &&
-            (message.find("operation paused") != std::string::npos || task->pause_requested.load());
+            (message.contains("operation paused") || task->pause_requested.load());
         task->canceled = !task->paused &&
             (canceled || (!succeeded &&
-                          (message.find("operation canceled") != std::string::npos ||
+                          (message.contains("operation canceled") ||
                            task->cancel_requested.load())));
         task->module_status =
             task->paused ? "paused" : (task->canceled ? "canceled" : (succeeded ? "succeeded" : "failed"));
@@ -1447,7 +1447,7 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeStartDepotManifes
                 const char* result_message = cauth_result_message(native_result);
                 message = result_message == nullptr ? "manifest download failed" : result_message;
             }
-            canceled = native_result != CAUTH_OK && message.find("operation canceled") != std::string::npos;
+            canceled = native_result != CAUTH_OK && message.contains("operation canceled");
             succeeded = native_result == CAUTH_OK;
         });
 }
@@ -1539,7 +1539,7 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeStartDepotChunkDo
                 const char* result_message = cauth_result_message(native_result);
                 message = result_message == nullptr ? "chunk download failed" : result_message;
             }
-            canceled = native_result != CAUTH_OK && message.find("operation canceled") != std::string::npos;
+            canceled = native_result != CAUTH_OK && message.contains("operation canceled");
             succeeded = native_result == CAUTH_OK;
         });
 }
@@ -1625,7 +1625,7 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeStartDepotFileDow
                 const char* result_message = cauth_result_message(native_result);
                 message = result_message == nullptr ? "file download failed" : result_message;
             }
-            canceled = native_result != CAUTH_OK && message.find("operation canceled") != std::string::npos;
+            canceled = native_result != CAUTH_OK && message.contains("operation canceled");
             succeeded = native_result == CAUTH_OK;
         });
 }
@@ -1700,7 +1700,7 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeStartDepotAllFile
                 const char* result_message = cauth_result_message(native_result);
                 message = result_message == nullptr ? "all-files download failed" : result_message;
             }
-            canceled = native_result != CAUTH_OK && message.find("operation canceled") != std::string::npos;
+            canceled = native_result != CAUTH_OK && message.contains("operation canceled");
             succeeded = native_result == CAUTH_OK;
         });
 }
@@ -1756,7 +1756,7 @@ Java_com_cauth_android_steam_depot_CAuthNativeSteamDepot_nativeStartDepotVerifyL
                 const char* result_message = cauth_result_message(native_result);
                 message = result_message == nullptr ? "local verify failed" : result_message;
             }
-            canceled = native_result != CAUTH_OK && message.find("operation canceled") != std::string::npos;
+            canceled = native_result != CAUTH_OK && message.contains("operation canceled");
             succeeded = native_result == CAUTH_OK;
             if (succeeded) {
                 std::lock_guard<std::mutex> lock(task->mutex);

@@ -4,13 +4,15 @@
 CM-backed workflow. CAuth still keeps the standalone web-cookie tooling around for diagnostics, but
 the Cloud `web` backend itself is intentionally treated as unsupported.
 
+Commands below use `$cauth` for the CLI built by `mcpp build`; see [getting-started.md](getting-started.md).
+
 ## CLI shape
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam cloud list --steam-id 7656119... --app-id 440
-.\build\windows-msvc-debug\cauth.exe steam cloud verify --steam-id 7656119... --app-id 440 --local-root .\build\tf2-cloud
-.\build\windows-msvc-debug\cauth.exe steam cloud pull --steam-id 7656119... --app-id 440 --local-root .\build\tf2-cloud --dry-run
-.\build\windows-msvc-debug\cauth.exe steam cloud push --steam-id 7656119... --app-id 440 --local-root .\build\tf2-cloud --dry-run
+& $cauth steam cloud list --steam-id 7656119... --app-id 440
+& $cauth steam cloud verify --steam-id 7656119... --app-id 440 --local-root .\build\tf2-cloud
+& $cauth steam cloud pull --steam-id 7656119... --app-id 440 --local-root .\build\tf2-cloud --dry-run
+& $cauth steam cloud push --steam-id 7656119... --app-id 440 --local-root .\build\tf2-cloud --dry-run
 ```
 
 Common flags:
@@ -56,7 +58,7 @@ enumeration/download is usable.
 When several Steam accounts are saved, inspect the repository and pass the desired SteamID:
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam auth accounts
+& $cauth steam auth accounts
 ```
 
 Use `--backend auto` unless you are debugging a specific path. `--backend cm` forces CM Cloud
@@ -67,7 +69,7 @@ usable web enumerate/download path for Steam Cloud with the auth material availa
 If you want to inspect the store-page view anyway, use the separate diagnostic command:
 
 ```powershell
-.\build\windows-msvc-debug\cauth.exe steam cloud web-page-list --steam-id 7656119... --app-id 2868840 --remote-root savegames
+& $cauth steam cloud web-page-list --steam-id 7656119... --app-id 2868840 --remote-root savegames
 ```
 
 `steam cloud web-page-list` is read-only and best-effort. It is useful for debugging what a

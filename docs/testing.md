@@ -4,17 +4,23 @@ This is the fastest end-to-end validation path for CAuth on desktop and Android.
 
 ## Build once
 
+From the repository root:
+
 ```powershell
-cmake --preset default
-cmake --build --preset default
-ctest --preset default
+mcpp build
+mcpp test
 ```
+
+`mcpp test` builds and runs all 31 test programs. Each `tests/*_tests.cpp` file is one program,
+built by the `tests` workspace member. Run one program by name, for example `mcpp test cli_tests`.
 
 For the rest of this guide, assume:
 
 ```powershell
-$cauth = ".\\build\\windows-msvc-debug\\cauth.exe"
+$cauth = ".\target\x86_64-windows-msvc\<fingerprint>\bin\cli\cauth.exe"
 ```
+
+Replace `<fingerprint>` with the directory name mcpp created.
 
 ## 1. Core and CLI sanity
 

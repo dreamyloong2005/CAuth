@@ -1,0 +1,21 @@
+# Depot discovery, manifest handling, download and verification.
+[package]
+namespace = "cauth"
+name      = "steam-depot"
+
+[targets.cauth_steam_depot]
+kind = "lib"
+linkage = "shared"
+
+[build]
+sources = ["../../src/steam/depot/*.cpp"]
+defines = ["CAUTH_HAS_ZLIB", "CAUTH_HAS_ZSTD"]
+
+[target.'cfg(os = "windows")'.build]
+ldflags = ["-lwinhttp"]
+
+[dependencies]
+cauth.core       = { path = "../core" }
+cauth.steam-auth = { path = "../steam-auth" }
+compat.zlib = "1.3.2"
+compat.zstd = "1.5.7"

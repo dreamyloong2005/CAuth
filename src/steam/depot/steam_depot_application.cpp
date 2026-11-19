@@ -44,7 +44,7 @@ std::string lowercase_ascii(std::string_view value) {
 
 bool contains_ascii_case_insensitive(std::string_view value, std::string_view needle) {
     if (needle.empty()) return true;
-    return lowercase_ascii(value).find(lowercase_ascii(needle)) != std::string::npos;
+    return lowercase_ascii(value).contains(lowercase_ascii(needle));
 }
 
 std::string infer_depot_module_status(DepotDownloadKind kind, std::string_view phase) {
@@ -1418,7 +1418,7 @@ int verify_local_files_against_manifest(const LoadedDepotManifest& loaded_manife
             continue;
         }
 
-        if (verify_result.error_message.find("missing") != std::string::npos) {
+        if (verify_result.error_message.contains("missing")) {
             entry.status = LocalVerifyStatus::MissingLocal;
             entry.actual_size = 0;
             entry.reason = verify_result.error_message;

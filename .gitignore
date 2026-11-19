@@ -5,14 +5,12 @@
 /install/
 /packages/
 
-# CMake in-source build artifacts
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-CTestTestfile.cmake
-Testing/
-_deps/
-CMakeUserPresets.json
+# mcpp build output
+/target/
+/tests/target/
+/mcpp/*/target/
+/android/target/
+/android/*/src/main/cpp/target/
 
 # Visual Studio / IDE state
 /.vs/
@@ -46,8 +44,6 @@ CMakeUserPresets.json
 /android/.kotlin/
 /android/local.properties
 /android/**/build/
-/android/**/.cxx/
-/android/**/.externalNativeBuild/
 *.apk
 *.aab
 
@@ -107,16 +103,3 @@ tmp-cloud-upload-web/
 /logs/
 /captures/
 
-# Vendored dependency archives / local vendor build caches.
-# Do not ignore .deps/zlib-1.3.1 or .deps/zstd-1.5.7 source trees.
-/.deps/*.zip
-/.deps/*.tar
-/.deps/*.tar.gz
-/.deps/*.tgz
-/.deps/**/build/
-/.deps/**/out/
-/.deps/**/cmake-build-*/
-/.deps/zstd-msvc/
-/.deps/zstd-msvc-build/
-/.deps/zstd-msvc-nmake/
-/.deps/zstd-v1.5.7-win64/

@@ -136,16 +136,16 @@ int main() {
         bool saw_login_cookie = false;
         bool saw_session_cookie = false;
         for (const auto& cookie : result.cookies) {
-            if (cookie.find("steamRefresh_steam=refresh-cookie") != std::string::npos &&
-                cookie.find("Domain=login.steampowered.com") != std::string::npos) {
+            if (cookie.contains("steamRefresh_steam=refresh-cookie") &&
+                cookie.contains("Domain=login.steampowered.com")) {
                 saw_refresh_cookie = true;
             }
-            if (cookie.find("steamLoginSecure=login-cookie") != std::string::npos &&
-                cookie.find("Domain=steamcommunity.com") != std::string::npos) {
+            if (cookie.contains("steamLoginSecure=login-cookie") &&
+                cookie.contains("Domain=steamcommunity.com")) {
                 saw_login_cookie = true;
             }
             if (cookie.find("sessionid=") == 0 &&
-                cookie.find("Domain=steamcommunity.com") != std::string::npos) {
+                cookie.contains("Domain=steamcommunity.com")) {
                 saw_session_cookie = true;
             }
         }
@@ -190,9 +190,9 @@ int main() {
         const auto cookie_header =
             cauth::steam::auth::build_cookie_request_header(cookies, "steamcommunity.com");
         if (!refresh_token.has_value() || *refresh_token != "refresh-jwt" ||
-            cookie_header.find("steamLoginSecure=login-cookie") == std::string::npos ||
-            cookie_header.find("tv-cookie") != std::string::npos ||
-            cookie_header.find("sessionid=abc123") == std::string::npos) {
+            !cookie_header.contains("steamLoginSecure=login-cookie") ||
+            cookie_header.contains("tv-cookie") ||
+            !cookie_header.contains("sessionid=abc123")) {
             std::cerr << "web cookie helpers should extract the refresh token and build a domain-aware Cookie header\n";
             return 1;
         }

@@ -1,0 +1,103 @@
+// Builds this module's native libraries with mcpp (the workspace in the CAuth
+// repo root mcpp.toml) for every supported ABI and stages them as jniLibs.
+//
+// A module sets, before applying this script:
+//   extra["cauthMcppPackages"]  = mcpp packages to build, e.g. ["cauth.android-core-jni"]
+//   extra["cauthMcppLibraries"] = .so files this module ships, e.g. ["libcauth_core.so", ...]
+//   extra["cauthMcppCopySharedStl"] = true to also ship the NDK's libc++_shared.so
+
+def cauthRoot = rootProject.layout.projectDirectory.dir("..").asFile
+def mcppWorkspace = cauthRoot
+def jniOutputDirProvider = layout.buildDirectory.dir("generated/cauth-mcpp-jni")
+def mcppPackages = project.ext.cauthMcppPackages.collect { it.toString() }
+def mcppLibraries = project.ext.cauthMcppLibraries.collect { it.toString() }
+def copySharedStl = project.ext.has("cauthMcppCopySharedStl") ? project.ext.cauthMcppCopySharedStl : false
+
+// mcpp's Android rows. armeabi-v7a and x86 have no mcpp target row yet.
+def androidAbis = [
+    "arm64-v8a": "aarch64-linux-android",
+    "x86_64"   : "x86_64-linux-android",
+]
+
+android {
+    sourceSets {
+        main {
+            jniLibs.srcDir(jniOutputDirProvider)
+        }
+    }
+}
+
+def buildCAuthNative = tasks.register("buildCAuthMcppNative") {
+    inputs.files(project.fileTree(cauthRoot) {
+        include("mcpp.toml")
+        include("mcpp/**/mcpp.toml")
+        include("android/jni_desktop_stub.cpp")
+        include("android/*/src/main/cpp/**")
+        include("include/**/*.h")
+        include("include/**/*.hpp")
+        include("src/**/*.c")
+        include("src/**/*.cpp")
+        include("src/**/*.h")
+        include("src/**/*.hpp")
+        include("third_party/**/*.c")
+        include("third_party/**/*.h")
+    })
+    outputs.dir(jniOutputDirProvider)
+
+    doLast {
+        def outputDir = jniOutputDirProvider.get().asFile
+        project.delete(outputDir)
+
+        androidAbis.each { abi, triple ->
+            def args = ["mcpp", "build", "--no-color", "--target", triple]
+            mcppPackages.each { args += ["-p", it] }
+            project.exec {
+                workingDir = mcppWorkspace
+                commandLine(args)
+            }
+
+            // Output lives in target/<triple>/<fingerprint>/bin/; take the newest
+            // copy of each library across fingerprints.
+            def tripleOut = new File(mcppWorkspace, "target/${triple}")
+            def abiDir = new File(outputDir, abi)
+            project.mkdir(abiDir)
+            mcppLibraries.each { libraryName ->
+                def matches = project.fileTree(tripleOut) {
+                    include("*/bin/**/${libraryName}")
+                }.files
+                if (matches.isEmpty()) {
+                    throw new GradleException("mcpp output ${libraryName} for ABI ${abi} was not found under ${tripleOut}")
+                }
+                project.copy {
+                    from(matches.max { it.lastModified() })
+                    into(abiDir)
+                }
+            }
+
+            if (copySharedStl) {
+                // mcpp links libc++ shared but does not stage it; take it from the
+                // newest NDK mcpp installed.
+                def ndkRoot = new File(System.getProperty("user.home"), ".mcpp/registry/data/xpkgs/xim-x-android-ndk")
+                def stl = (ndkRoot.listFiles()?.findAll { it.isDirectory() }?.sort { it.name }?.reverse() ?: [])
+                    .collectMany { ndk ->
+                        project.fileTree(ndk) {
+                            include("toolchains/llvm/prebuilt/*/sysroot/usr/lib/${triple}/libc++_shared.so")
+                        }.files.toList()
+                    }
+                if (stl.isEmpty()) {
+                    throw new GradleException("libc++_shared.so for ${triple} was not found under ${ndkRoot}")
+                }
+                project.copy {
+                    from(stl.first())
+                    into(abiDir)
+                }
+            }
+        }
+    }
+}
+
+tasks.matching {
+    it.name == "preBuild" || (it.name.startsWith("merge") && it.name.endsWith("JniLibFolders"))
+}.configureEach {
+    dependsOn(buildCAuthNative)
+}
